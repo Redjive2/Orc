@@ -776,12 +776,16 @@ export function tasks(state, actions) {
 
 function taskRow(t, showMachine) {
   const s = taskStatus(t.status);
+  // A described task is marked on the board, because "which of these can I pick up
+  // without asking somebody what it means" is a question about the pool.
   return h("a", {
     class: `task row${t.draft ? " draft" : ""}`,
     href: `#/tasks/${encodeURIComponent(t.name)}`,
   },
     h("span", { class: s.cls }, s.glyph),
-    h("span", { class: "name" }, t.name, t.draft ? h("span", { class: "badge" }, "draft") : null),
+    h("span", { class: "name" }, t.name,
+      t.draft ? h("span", { class: "badge" }, "draft") : null,
+      t.described ? h("span", { class: "badge described", title: "has a description" }, "spec") : null),
     h("span", { class: "who" }, t.owner || "—"),
     h("span", { class: "num" }, t.priority),
     h("span", { class: "num" }, t.difficulty),
@@ -808,6 +812,7 @@ export function task(state, name, actions) {
         t.worktree ? ` · worktree ${t.worktree}` : "",
         ` · ${t.machine}`),
       h("div", { class: "body" },
+        ...description(t, actions),
         t.scope && t.scope.length
           ? h("div", { class: "scope" },
               h("div", { class: "muted" }, "scope"),
@@ -818,6 +823,49 @@ export function task(state, name, actions) {
     ...taskControls(t, actions),
     ...taskPending(state, t),
   ];
+}
+
+// description is what the work actually is, rendered.
+//
+// It comes first in the card, above the scope and the steps, because it is the only
+// thing here that says what to *do*: everything else is a fact with a shape. A task
+// with a specification and a reader who has to scroll past its metadata to find it
+// is a task whose specification does not get read.
+//
+// Markdown, through the same renderer the library uses — which builds nodes rather
+// than HTML, so prose somebody else wrote cannot become elements nobody intended.
+//
+// The three states are kept apart on purpose:
+//
+//   - **described, with text** — render it.
+//   - **described, no text** — the mirror could not read it. Saying "no description"
+//     there would invite writing a first one *over* something, so it says what it
+//     actually knows.
+//   - **not described** — say so, and offer to write one.
+function description(t, actions) {
+  const controls = actions
+    ? h("div", { class: "controls" },
+        h("button", { class: "quiet", onclick: () => actions.describeTask(t) },
+          t.described ? "edit…" : "write one…"),
+        t.described
+          ? h("button", { class: "quiet", onclick: () => actions.undescribeTask(t) }, "clear")
+          : null)
+    : null;
+
+  if (!t.described) {
+    return [h("div", { class: "description empty" },
+      h("div", { class: "muted" }, "no description — nothing here says what the work is"),
+      controls)];
+  }
+  if (!t.description) {
+    return [h("div", { class: "description" },
+      h("p", { class: "warn" },
+        "this task has a description, but the last sync could not read it"),
+      controls)];
+  }
+  return [h("div", { class: "description" },
+    h("div", { class: "prose" }, render(t.description)),
+    controls)];
 }
 
 // subtaskList draws the steps, each with the two things that can be done to one.
@@ -985,7 +1033,12 @@ export function tree(state) {
 // It needs a whole-store permission the others do not, which is why it is the one
 // that can say "nothing has synced" on a machine where every other tab works:
 // `mailman admin owner <name>` is what grants it.
-export function store(state) {
+//
+// One filter over every machine, and every row opens to the message itself. The
+// snapshot has always carried the bodies; this screen used to show a subject and
+// stop, which made the answer to "what did bob actually say" a trip to the agent
+// machine for mail the browser was already holding.
+export function store(state, actions) {
   const blocks = state.admin && state.admin.machines ? state.admin.machines : [];
   const out = [];
 
@@ -995,27 +1048,106 @@ export function store(state) {
     return out;
   }
 
+  const query = storeQuery(state);
+  const cards = [];
+  let shown = 0;
+  let held = 0;
+
   for (const block of blocks) {
     const s = block.state;
     if (!s) {
-      out.push(h("article", { class: "card" },
+      cards.push(h("article", { class: "card" },
         h("h2", {}, block.machine),
         h("div", { class: "body" },
           h("p", { class: "muted" }, "this machine syncs without the admin view"))));
       continue;
     }
-    out.push(h("article", { class: "card" },
+    const all = s.messages || [];
+    const kept = all.filter((m) => matches(m, query));
+    shown += kept.length;
+    held += all.length;
+
+    cards.push(h("article", { class: "card" },
       h("h2", {}, block.machine),
       h("div", { class: "meta" },
-        `${(s.users || []).length} users · ${(s.messages || []).length} messages · `,
+        `${(s.users || []).length} users · ${counted(kept.length, all.length, "message")} · `,
         `${(s.receipts || []).length} receipts`,
         s.metadata_only ? h("span", { class: "badge" }, "metadata only") : null),
       h("div", { class: "body" },
         users(s.users || []),
-        traffic(s.messages || [], s.receipts || [])),
+        traffic(kept, s.receipts || [], {
+          state, actions, machine: block.machine, withheld: !!s.metadata_only,
+        })),
     ));
   }
+
+  out.push(filterBox(query, shown, held, actions));
+  out.push(...cards);
   return out;
+}
+
+// --- filtering the store -------------------------------------------------
+
+// The one box, over every machine at once.
+//
+// Whole-store is the point of this screen: an operator asking "who has been
+// talking about the parser" is not asking it of one agent machine, and a filter
+// per card would make them ask it once per machine and add the answers up
+// themselves. So the query lives in one place and every card is drawn through
+// it, with each still saying how much of its own traffic survived.
+export const STORE_FILTER = "store";
+
+export function storeQuery(state) {
+  return (state.filters && state.filters[STORE_FILTER]) || "";
+}
+
+// matches is what the box means: every word typed has to appear somewhere in the
+// message — sender, recipients, subject, or the text itself.
+//
+// Words rather than a phrase, and all of them rather than any: `bob parser`
+// finds what bob wrote about the parser, which is the question people actually
+// arrive with. A phrase search would make that query find nothing and give no
+// hint why. Case is ignored because nobody remembers how they capitalised a
+// subject line six weeks ago.
+export function matches(m, query) {
+  const terms = String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+  const hay = [
+    m.from, (m.to || []).join(" "), (m.cc || []).join(" "),
+    m.subject, m.body, m.mid, `#${m.puid}`,
+  ].join(" ").toLowerCase();
+  return terms.every((t) => hay.includes(t));
+}
+
+// counted says how much of something is on screen, and only mentions the total
+// when the two differ — "12 of 12 messages" is a number that reads as a filter
+// having gone wrong.
+function counted(shown, total, word) {
+  const plural = total === 1 ? word : `${word}s`;
+  return shown === total ? `${total} ${plural}` : `${shown} of ${total} ${plural}`;
+}
+
+function filterBox(query, shown, total, actions) {
+  // A form so a phone keyboard offers a search key rather than a newline, and
+  // one that submits nothing: filtering happens on every keystroke, so pressing
+  // it should do nothing at all rather than reload the page.
+  return h("form", {
+    class: "compose filter",
+    onsubmit: (e) => e.preventDefault(),
+  },
+    h("label", { for: "store-filter" }, "filter"),
+    h("input", {
+      // The name is what carries the cursor across a redraw — see focus.js.
+      // Without it, a sync landing mid-word would move the caret to the end of
+      // what had been typed so far.
+      id: "store-filter", name: "store-filter", type: "search",
+      autocomplete: "off", value: query,
+      placeholder: "words from the sender, the subject, or the body",
+      oninput: (e) => actions && actions.filter(STORE_FILTER, e.target.value),
+    }),
+    h("p", { class: "muted" },
+      query ? `${counted(shown, total, "message")} match` : `${total} message${total === 1 ? "" : "s"}`),
+  );
 }
 
 function users(list) {
@@ -1026,9 +1158,24 @@ function users(list) {
 }
 
 // traffic pairs each message with who has read it — which is the question an
-// admin panel exists to answer.
-function traffic(messages, receipts) {
-  if (messages.length === 0) return h("p", { class: "muted" }, "no messages");
+// admin panel exists to answer — and opens to the message itself.
+//
+// It was a four-column table and could not answer the second question anybody
+// asks. "bob wrote to carol and carol has not read it" is only half of what an
+// operator needs: the other half is what bob actually said, and the whole store
+// is already in this browser's hands. A table that shows a subject and hides the
+// text sends somebody to the agent machine to read mail they had already been
+// sent.
+//
+// So each row folds. Closed, it says exactly what the table said; open, it adds
+// the addressing and the body. Openness is state rather than DOM for the same
+// reason the library's folds are: a sync lands every minute, and a redraw that
+// collapsed what somebody was reading would be a page that fights them.
+function traffic(messages, receipts, ctx) {
+  if (messages.length === 0) {
+    return h("p", { class: "muted" },
+      storeQuery(ctx.state) ? "nothing here matches" : "no messages");
+  }
 
   const byMID = new Map();
   for (const r of receipts) {
@@ -1036,21 +1183,60 @@ function traffic(messages, receipts) {
     byMID.get(r.mid).push(r);
   }
 
-  return h("div", { class: "grid traffic" },
-    h("div", { class: "muted" }, "from"),
-    h("div", { class: "muted" }, "to"),
-    h("div", { class: "muted" }, "subject"),
-    h("div", { class: "muted" }, "read by"),
-    ...messages.flatMap((m) => {
-      const seen = (byMID.get(m.mid) || []).filter((r) => r.read).map((r) => r.recipient);
-      const total = (m.to || []).length + (m.cc || []).length;
-      return [
-        h("div", { class: "who" }, m.from),
-        h("div", {}, ellipsis((m.to || []).join(", "), 18)),
-        h("div", {}, ellipsis(m.subject, 34)),
-        h("div", { class: seen.length === 0 ? "muted" : seen.length >= total ? "ok" : "pending" },
-          seen.length === 0 ? "nobody" : `${seen.length}/${total || seen.length} · ${seen.join(", ")}`),
-      ];
-    }));
+  return h("div", { class: "rows" },
+    ...messages.map((m) => storedMessage(m, byMID.get(m.mid) || [], ctx)));
+}
+
+// readers is the old "read by" column: how many of the people it went to have
+// opened it, and which. It keeps its three colours, because "nobody" and
+// "everybody" are the two answers worth seeing without reading the row.
+function readers(m, got) {
+  const seen = got.filter((r) => r.read).map((r) => r.recipient);
+  const total = (m.to || []).length + (m.cc || []).length;
+  return h("span", {
+    class: `note ${seen.length === 0 ? "muted" : seen.length >= total ? "ok" : "pending"}`,
+  }, seen.length === 0 ? "nobody" : `${seen.length}/${total || seen.length} · ${seen.join(", ")}`);
+}
+
+function storedMessage(m, got, ctx) {
+  const key = `store:${ctx.machine}:${m.mid}`;
+  const open = ctx.state.open ? !!ctx.state.open[key] : false;
+
+  const head = h("button", {
+    class: "fold",
+    "aria-expanded": open ? "true" : "false",
+    onclick: () => ctx.actions && ctx.actions.toggle(key),
+  },
+    h("span", { class: "twist" }, open ? "▾" : "▸"),
+    h("span", { class: "who" }, ellipsis(m.from, 12)),
+    h("span", { class: "subject" }, ellipsis(m.subject, 40)),
+    readers(m, got),
+  );
+
+  if (!open) return head;
+  return h("div", { class: "folded" }, head,
+    h("div", { class: "inner" },
+      h("div", { class: "meta" },
+        `${m.from} → ${(m.to || []).join(", ") || "—"}`,
+        m.cc && m.cc.length ? ` · cc ${m.cc.join(", ")}` : "",
+        ` · ${clock(m.sent)}`,
+        m.archived ? " · archived" : ""),
+      storedBody(m, ctx)));
+}
+
+// storedBody says why there is no text when there is none, because the two
+// reasons are different and only one of them is worth doing anything about.
+//
+// A snapshot taken with --admin-metadata-only carries no bodies at all: the
+// operator on the agent machine decided that, and no amount of clicking here
+// will produce them. An empty body on a snapshot that does carry them is just a
+// message somebody sent with a subject and nothing else.
+function storedBody(m, ctx) {
+  if (ctx.withheld) {
+    return h("p", { class: "muted" },
+      "this machine syncs with --admin-metadata-only, so it sends subjects without bodies");
+  }
+  if (!m.body) return h("p", { class: "muted" }, "no body");
+  return h("div", { class: "body" }, render(m.body));
 }
 

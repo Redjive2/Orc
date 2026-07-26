@@ -155,7 +155,7 @@ func vocabulary() jsonVocabulary {
 	for _, t := range model.Tools() {
 		out.Tools = append(out.Tools, jsonWord{Word: t.Name, Does: t.Does, In: t.In})
 	}
-	out.Innocuous = model.Innocuous()
+	out.Innocuous = model.InnocuousWords()
 	return out
 }
 

@@ -72,6 +72,13 @@ type wireTask struct {
 	Worktree      string   `json:"worktree"`
 	// Subtasks arrive only from `muff info`; the board omits them.
 	Subtasks []wireSubtask `json:"subtasks"`
+	// Described and its two companions come from the board: whether the task has a
+	// description, and who last touched it. Description — the prose itself —
+	// arrives only from `muff info`, for the same reason the subtasks do.
+	Described   bool   `json:"described"`
+	DescribedBy string `json:"described_by"`
+	DescribedAt string `json:"described_at"`
+	Description string `json:"description"`
 }
 
 type wireSubtask struct {
@@ -127,6 +134,9 @@ func (t wireTask) protocol() protocol.Task {
 		Draft:         t.Draft,
 		Scope:         t.Scope,
 		Worktree:      t.Worktree,
+		Described:     t.Described,
+		DescribedBy:   t.DescribedBy,
+		DescribedAt:   t.DescribedAt,
 	}
 }
 

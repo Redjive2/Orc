@@ -58,6 +58,15 @@ func TestApplyRunsTheRightTaskCommand(t *testing.T) {
 		// action always is. The confirmation happened in the browser.
 		protocol.OpTaskDelete: {
 			protocol.Args{Task: "parser"}, []string{"muff", "delete", "parser", "--yes"}},
+		// The prose goes through a file, never argv. `<file>` stands for "one
+		// argument, whatever it is called this run" — the name is a temporary the
+		// test cannot predict, and asserting on it would be asserting on mktemp.
+		protocol.OpTaskDescribe: {
+			protocol.Args{Task: "parser", Text: "# what to do\n"},
+			[]string{"muff", "describe", "parser", "--set", "<file>"}},
+		protocol.OpTaskDescribeClear: {
+			protocol.Args{Task: "parser"},
+			[]string{"muff", "describe", "parser", "--clear"}},
 	}
 
 	for _, op := range protocol.TaskOps {
@@ -78,7 +87,14 @@ func TestApplyRunsTheRightTaskCommand(t *testing.T) {
 			if len(f.calls) != 1 {
 				t.Fatalf("ran %d commands, want 1: %v", len(f.calls), f.calls)
 			}
-			if strings.Join(f.calls[0], "\x00") != strings.Join(tc.want, "\x00") {
+			got, want := f.calls[0], tc.want
+			if len(want) > 0 && want[len(want)-1] == "<file>" && len(got) == len(want) {
+				if got[len(got)-1] == "" {
+					t.Errorf("no file was passed: %v", got)
+				}
+				got, want = got[:len(got)-1], want[:len(want)-1]
+			}
+			if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 				t.Errorf("ran %v, want %v", f.calls[0], tc.want)
 			}
 		})
@@ -114,7 +130,14 @@ func TestApplyCarriesTheOptionalOperands(t *testing.T) {
 			if err := newCLI(f).Apply(t.Context(), action); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
-			if strings.Join(f.calls[0], "\x00") != strings.Join(tc.want, "\x00") {
+			got, want := f.calls[0], tc.want
+			if len(want) > 0 && want[len(want)-1] == "<file>" && len(got) == len(want) {
+				if got[len(got)-1] == "" {
+					t.Errorf("no file was passed: %v", got)
+				}
+				got, want = got[:len(got)-1], want[:len(want)-1]
+			}
+			if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 				t.Errorf("ran %v, want %v", f.calls[0], tc.want)
 			}
 		})

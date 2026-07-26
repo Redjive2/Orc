@@ -67,6 +67,7 @@ func (a App) verify(args []string) error {
 		return err
 	}
 	s.checkIdentity(note)
+	s.checkOperator(note)
 
 	table, err := render.Draw(summary(s.store.Root(), counted, len(problems)), s.paint, a.width())
 	if err != nil {
@@ -226,6 +227,19 @@ func (s session) checkIdentity(note report) {
 	}
 	note("nobody confirmed you are %s: no orc to ask, so every permission here "+
 		"rests on an unchecked claim", s.who)
+}
+
+// checkOperator says when the caller stands in for the owner of an unowned task.
+//
+// A standing that changes what commands do is worth stating where somebody is
+// already looking at what this store will let them do — and it is asked here and
+// nowhere else in `verify`, because `verify` is the one command whose whole
+// purpose is to answer questions nobody thought to ask.
+func (s session) checkOperator(note report) {
+	if !s.operating() {
+		return
+	}
+	note("%s", operatorNote(s.who, true))
 }
 
 // checkTombstones reads the deletion log. A tombstone for a task that is still

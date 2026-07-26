@@ -799,3 +799,135 @@ func TestSudoIsNotACommandNameToMatchOn(t *testing.T) {
 		}
 	}
 }
+
+// TestMailmanNeedsNoPermission is the rule that mail is not a privilege.
+//
+// An agent is told what to do by mail and reports by mail. If reading it took a
+// clause, a newly created identity would be deaf until somebody noticed — and
+// the clause would not be narrowing anything, because mailman authenticates
+// every command against the caller's own key and shows it its own mailbox and
+// no other.
+func TestMailmanNeedsNoPermission(t *testing.T) {
+	r := newRig(t)
+	opts := r.as("ember", nil)
+	ws := r.workspace()
+
+	bash := func(command string) hook.Outcome {
+		return r.call(opts, map[string]any{
+			"hook_event_name": "PreToolUse",
+			"tool_name":       "Bash",
+			"cwd":             ws,
+			"tool_input":      map[string]any{"command": command},
+		})
+	}
+
+	// ember holds no shell clause at all.
+	for _, command := range []string{
+		"mailman inbox",
+		"mailman send rowan --subject hello",
+		"mailman reply 3fa2",
+		"mailman check",
+		"/usr/local/bin/mailman inbox",
+		"cd " + ws + " && mailman inbox",
+		"echo checking && mailman inbox",
+	} {
+		if out := bash(command); out.Code != hook.CodeOK {
+			t.Errorf("%q needed a permission:\n%s", command, out.Stderr)
+		}
+	}
+}
+
+// The one part of mailman that does not authenticate is the one part that needs
+// a clause. `mailman admin` provisions mailboxes and can name the owner who may
+// read the store whole, so an agent that could run it could read the fleet's
+// mail.
+func TestMailmanAdminStillNeedsAPermission(t *testing.T) {
+	r := newRig(t)
+	opts := r.as("ember", nil)
+	ws := r.workspace()
+
+	bash := func(command string) hook.Outcome {
+		return r.call(opts, map[string]any{
+			"hook_event_name": "PreToolUse",
+			"tool_name":       "Bash",
+			"cwd":             ws,
+			"tool_input":      map[string]any{"command": command},
+		})
+	}
+
+	for _, command := range []string{
+		"mailman admin user list",
+		"mailman admin owner ember",
+		"mailman admin mail --json",
+		// The flag-value shape: `--key` takes a separate value, so the subcommand
+		// is not in a fixed position and must not be looked for in one.
+		"mailman --key x admin user add mole",
+		"echo hello && mailman admin mail",
+	} {
+		if out := bash(command); out.Code != hook.CodeBlock {
+			t.Errorf("%q ran with no shell permission:\n%s", command, out.Stderr)
+		}
+	}
+
+	// The refusal must not contradict itself. Saying "you may not run mailman" to
+	// an agent that has used mailman all session reads as a broken gate, and its
+	// next move is to try again rather than to ask.
+	out := bash("mailman admin user list")
+	if strings.Contains(out.Stderr, "you may not run mailman.") {
+		t.Errorf("the refusal denies mailman itself, which is allowed:\n%s", out.Stderr)
+	}
+	for _, want := range []string{"but not mailman admin", "orc new identity", "shell(mailman)"} {
+		if !strings.Contains(out.Stderr, want) {
+			t.Errorf("the refusal is missing %q:\n%s", want, out.Stderr)
+		}
+	}
+
+	// A clause naming the command covers the guarded part too — there is no way
+	// to ask for `mailman admin` separately, and nothing here invents one.
+	wide := newRig(t)
+	wide.permit("run-mailman", "shell(mailman)")
+	if out := wide.call(wide.as("ember", nil), map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": wide.workspace(),
+		"tool_input": map[string]any{"command": "mailman admin user list"},
+	}); out.Code != hook.CodeOK {
+		t.Errorf("shell(mailman) did not cover mailman admin:\n%s", out.Stderr)
+	}
+}
+
+// The default set does not depend on the store, so losing the store must not
+// take it away. An agent whose permissions cannot be read is exactly the agent
+// that needs to say so — by mail.
+func TestTheDefaultSetSurvivesABlindRung(t *testing.T) {
+	r := newRig(t)
+	ws := r.workspace()
+
+	opts := hook.Options{
+		Root:  filepath.Join(t.TempDir(), "gone"),
+		Clock: clock.NewFake(epoch, time.Second),
+		Env: func(key string) (string, bool) {
+			v, ok := map[string]string{"ORC_IDENTITY": "ember"}[key]
+			return v, ok
+		},
+	}
+	bash := func(command string) hook.Outcome {
+		return r.call(opts, map[string]any{
+			"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": ws,
+			"tool_input": map[string]any{"command": command},
+		})
+	}
+
+	for _, command := range []string{"echo hello", "mailman inbox", "mailman send rowan"} {
+		if out := bash(command); out.Code != hook.CodeOK {
+			t.Errorf("%q was blocked with nothing readable, though it needs no clause:\n%s",
+				command, out.Stderr)
+		}
+	}
+
+	// Everything else still stops, including the guarded subcommand and the
+	// shapes that hide what they run. A blind rung opens nothing.
+	for _, command := range []string{"ls", "mailman admin mail", "sh -c ls", "echo $(rm -rf /)"} {
+		if out := bash(command); out.Code != hook.CodeBlock {
+			t.Errorf("%q was allowed with nothing readable", command)
+		}
+	}
+}

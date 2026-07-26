@@ -351,44 +351,48 @@ func (c *CLI) tasks(ctx context.Context) ([]protocol.Task, error) {
 	tasks := make([]protocol.Task, 0, len(wire))
 	for _, t := range wire {
 		task := t.protocol()
-		task.Subtasks = c.subtasks(ctx, t)
+		task.Subtasks, task.Description = c.detail(ctx, t)
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
 }
 
-// subtasks asks Macmuffin for one task's steps.
+// detail asks Macmuffin for the two things one task carries that the board does not:
+// its steps by name, and the prose that says what the work is.
 //
-// A second command per task, and only for the tasks that have any: `muff pool` is
-// a board and deliberately does not carry every step of every task, while `muff
-// info` does. Reading them off the store behind Macmuffin's back would be the
-// other way, and cq does not do that anywhere.
+// A second command per task, and only for the tasks that have either. `muff pool` is
+// a board: it deliberately carries neither every step of every task nor forty
+// descriptions, which is the right shape for a listing and the wrong one for a
+// mirror somebody opens a task in. Reading them off the store behind Macmuffin's
+// back would be the other way, and cq does not do that anywhere.
 //
-// The count comes from the board, so the extra call is skipped entirely for a task
-// with no subtasks — which in a pool of drafts and one-shot jobs is most of them.
+// The board says which tasks have what, so the extra call is skipped entirely for a
+// task with neither — which in a pool of drafts and one-shot jobs is most of them.
 //
-// A task whose `info` fails keeps its counts and loses its step names: the board
-// is what a mirror is for, and one command failing should cost the detail rather
-// than the sync.
-func (c *CLI) subtasks(ctx context.Context, t wireTask) []protocol.Subtask {
-	if t.Total <= 0 {
-		return nil
+// A task whose `info` fails keeps its counts and loses the detail: the board is what
+// a mirror is for, and one command failing should cost the detail rather than the
+// sync. The description then reads as described-but-empty, which is why `Described`
+// travels separately — a browser must not offer to write a first description over
+// the top of one it merely could not read.
+func (c *CLI) detail(ctx context.Context, t wireTask) ([]protocol.Subtask, string) {
+	if t.Total <= 0 && !t.Described {
+		return nil, ""
 	}
 	raw, err := c.run(ctx, c.muff(), "info", t.Name, "--json")
 	if err != nil {
-		c.warn("the steps of %s could not be read, so only their count is in this snapshot: %v", t.Name, err)
-		return nil
+		c.warn("the detail of %s could not be read, so only the board's summary is in this snapshot: %v", t.Name, err)
+		return nil, ""
 	}
 	var full wireTask
 	if err := decodeJSON(raw, &full, c.muff()+" info"); err != nil {
-		c.warn("the steps of %s could not be read: %v", t.Name, err)
-		return nil
+		c.warn("the detail of %s could not be read: %v", t.Name, err)
+		return nil, ""
 	}
 	out := make([]protocol.Subtask, 0, len(full.Subtasks))
 	for _, sub := range full.Subtasks {
 		out = append(out, protocol.Subtask{Name: sub.Name, Done: sub.Done})
 	}
-	return out
+	return out, full.Description
 }
 
 // admin collects the whole-Mailman view.
@@ -534,6 +538,17 @@ func (c *CLI) applyTask(ctx context.Context, action protocol.Action) error {
 		args = []string{"leave", a.Task}
 	case protocol.OpTaskScope:
 		args = append([]string{"scope", a.Task}, a.Paths...)
+	case protocol.OpTaskDescribe:
+		// Through a file rather than argv, for the reason tempMarkdown gives: a
+		// description is up to 32 KiB of somebody's prose, and `ps` is public.
+		path, done, err := tempMarkdown("cq-describe-*.md", a.Text)
+		if err != nil {
+			return err
+		}
+		defer done()
+		args = []string{"describe", a.Task, "--set", path}
+	case protocol.OpTaskDescribeClear:
+		args = []string{"describe", a.Task, "--clear"}
 	case protocol.OpTaskWorktree:
 		args = []string{"worktree", a.Task, a.Path}
 	case protocol.OpTaskStatus:

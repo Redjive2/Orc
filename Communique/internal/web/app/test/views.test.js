@@ -420,6 +420,103 @@ test("a machine with no admin view says so", () => {
   assert.match(out, /syncs without the admin view/);
 });
 
+// --- reading the whole store ----------------------------------------------
+
+// Two machines, four messages, one of them read. Enough to tell a filter that
+// works from one that happens to be looking at a single card.
+const stored = (open = {}, filter = "") => ({
+  ...state,
+  open,
+  filters: { store: filter },
+  admin: {
+    machines: [
+      {
+        machine: "studio",
+        state: {
+          users: [{ name: "bob" }, { name: "redjive" }],
+          messages: [
+            { puid: 1, mid: "m1", sent: "2026-07-25T03:30:09Z", from: "bob",
+              to: ["redjive"], subject: "the parser", body: "it drops the last token" },
+            { puid: 2, mid: "m2", sent: "2026-07-25T04:00:00Z", from: "redjive",
+              to: ["bob"], subject: "lunch", body: "at one" },
+          ],
+          receipts: [{ mid: "m1", recipient: "redjive", read: true }],
+        },
+      },
+      {
+        machine: "loft",
+        state: {
+          users: [{ name: "carol" }],
+          messages: [
+            { puid: 1, mid: "m3", sent: "2026-07-25T05:00:00Z", from: "carol",
+              to: ["bob"], subject: "the roster", body: "the parser is on it too" },
+          ],
+          receipts: [],
+        },
+      },
+    ],
+  },
+});
+
+// The whole point of the change: the store held every body and showed none of
+// them, so reading mail the browser already had meant going to the machine.
+test("an opened message shows its text", () => {
+  const shut = text(views.store(stored()));
+  assert.match(shut, /the parser/, "the subject should be on screen closed");
+  assert.doesNotMatch(shut, /drops the last token/, "a shut row should not show the body");
+
+  const open = text(views.store(stored({ "store:studio:m1": true })));
+  assert.match(open, /drops the last token/);
+  // And what a closed row said is still said: opening adds, it does not replace.
+  assert.match(open, /redjive/);
+});
+
+// A filter that only searched subjects would be a filter that answers the easy
+// question and quietly misses the message that actually mentions the thing.
+test("the filter reaches the bodies, on every machine", () => {
+  const out = text(views.store(stored({}, "parser")));
+  assert.match(out, /the parser/, "matched on its subject");
+  assert.match(out, /the roster/, "matched on its body, on the other machine");
+  assert.doesNotMatch(out, /lunch/);
+});
+
+// Every word, not any: `bob parser` is a question about what bob said, and a
+// filter that answered it with everything either word touches is a filter people
+// stop typing two words into.
+test("the filter takes all the words it is given", () => {
+  assert.equal(views.matches({ from: "bob", subject: "the parser" }, "bob parser"), true);
+  assert.equal(views.matches({ from: "bob", subject: "the parser" }, "carol parser"), false);
+  assert.equal(views.matches({ from: "bob", subject: "the parser" }, "  "), true);
+  assert.equal(views.matches({ from: "bob", subject: "The Parser" }, "parser"), true,
+    "case is not something anybody remembers about a subject line");
+});
+
+// A machine with nothing left to show says so, rather than looking like a
+// machine that has stopped syncing.
+test("a card that filters down to nothing says which it is", () => {
+  const out = text(views.store(stored({}, "zzz")));
+  assert.match(out, /nothing here matches/);
+  assert.doesNotMatch(out, /no messages/);
+});
+
+// The counts follow the filter, and say so — "3 messages" beside one row is a
+// number that reads as a bug.
+test("the counts say how much of the store survived the filter", () => {
+  assert.match(text(views.store(stored({}, "parser"))), /2 of 3 messages match/);
+  assert.match(text(views.store(stored())), /3 messages/);
+  // Per card as well as over the fleet: 1 of 2 on studio, 1 of 1 on loft.
+  assert.match(text(views.store(stored({}, "parser"))), /1 of 2 messages/);
+});
+
+// A metadata-only snapshot has no bodies to show, and that is the operator's
+// decision on the agent machine rather than anything to click here.
+test("a metadata-only machine says why there is no text", () => {
+  const s = stored({ "store:studio:m1": true });
+  s.admin.machines[0].state = { ...s.admin.machines[0].state, metadata_only: true };
+  const out = text(views.store(s));
+  assert.match(out, /--admin-metadata-only/);
+});
+
 // --- replying from the list ----------------------------------------------
 
 function findAll(nodes, ok, out = []) {

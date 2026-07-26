@@ -56,6 +56,8 @@ const (
 	Delete
 	// Worktree binds the task to a git worktree.
 	Worktree
+	// Describe writes the prose that says what the work is.
+	Describe
 	actionCount
 )
 
@@ -66,6 +68,7 @@ var verbs = [actionCount]string{
 	SubDone: "complete a subtask of", SubDelete: "delete a subtask of",
 	Invite: "invite to", Kick: "kick from", Leave: "leave",
 	Complete: "complete", Delete: "delete", Worktree: "bind a worktree to",
+	Describe: "describe",
 }
 
 // String implements fmt.Stringer.
@@ -127,8 +130,13 @@ var rules = [actionCount]rule{
 
 	// The owner's call alone: these change what the task is or who can work on
 	// it, and a collaborator inheriting that would make ownership meaningless.
-	Push:     {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
-	Scope:    {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
+	Push:  {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
+	Scope: {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
+	// The same rule as scope, and for the same reason: both say what the task *is*,
+	// as against how it is going. A collaborator reports status and does the work;
+	// changing the specification under the people doing it is the owner's call, and
+	// the author's while it is still a draft nobody has picked up.
+	Describe: {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
 	Invite:   {minimum: owner, ownerOnly: true},
 	Kick:     {minimum: owner, ownerOnly: true},
 	Complete: {minimum: owner, ownerOnly: true},

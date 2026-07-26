@@ -51,9 +51,14 @@ const (
 	//
 	// A layer is a document and a wake message is a sentence, which is why there
 	// are two numbers rather than one.
-	MaxPromptBytes      = 16 << 10
-	MaxWakeBytes        = 2 << 10
-	MaxDescriptionRunes = 512
+	MaxPromptBytes = 16 << 10
+	MaxWakeBytes   = 2 << 10
+	// A task's description, and it is Macmuffin's bound rather than cq's:
+	// `store.MaxDescription`, repeated here for the same reason the two above are.
+	// A description over it is refused at the browser, where somebody sees the
+	// refusal and shortens it — not after a sync, on a machine nobody is watching.
+	MaxTaskDescriptionBytes = 32 << 10
+	MaxDescriptionRunes     = 512
 	// MaxSpawnLoad matches Orc's model.MaxLoad, which is what the operator's own
 	// budget is set to. A queued budget above it would be refused there.
 	MaxSpawnLoad = 4096
@@ -166,13 +171,20 @@ const (
 	OpTaskSubtask  Op = "task.subtask"  // muff create <task> --sub <name>
 	OpTaskComplete Op = "task.complete" // muff complete <task> [--sub <name>] [--force]
 	OpTaskDelete   Op = "task.delete"   // muff delete <task> [--sub <name>] --yes
+	// The description: what the work is, in markdown. Two operations rather than
+	// one with an empty text, for the same reason the standing instructions have
+	// two — clearing a specification and setting it to nothing are the same outcome
+	// reached by different intents, and a queue whose account of what it is about
+	// depends on whether a field is empty is one nobody can read.
+	OpTaskDescribe      Op = "task.describe"       // muff describe <task> --set -
+	OpTaskDescribeClear Op = "task.describe.clear" // muff describe <task> --clear
 )
 
 // TaskOps are the verbs that go through Macmuffin rather than Mailman.
 var TaskOps = []Op{
 	OpTaskCreate, OpTaskPush, OpTaskClaim, OpTaskAssign, OpTaskInvite, OpTaskKick,
 	OpTaskLeave, OpTaskScope, OpTaskWorktree, OpTaskStatus, OpTaskSubtask,
-	OpTaskComplete, OpTaskDelete,
+	OpTaskComplete, OpTaskDelete, OpTaskDescribe, OpTaskDescribeClear,
 }
 
 // TouchesTasks reports whether an operation changes the task pool.
@@ -214,6 +226,10 @@ func (o Op) Idempotent() bool {
 		return true
 	case OpSend, OpReply:
 		return false
+	case OpTaskDescribe, OpTaskDescribeClear:
+		// A description is a value: writing the same words twice lands in the same
+		// place, and clearing one twice is cleared.
+		return true
 	case OpTaskScope, OpTaskWorktree, OpTaskStatus, OpTaskAssign, OpTaskInvite:
 		// Each sets a value to what was asked for rather than stepping it, so
 		// doing it twice lands in the same place. Macmuffin accepts assigning a
@@ -439,6 +455,21 @@ type Task struct {
 	// rather than only see how many are done. Macmuffin's board omits them and its
 	// `info` carries them, which is why the agent asks twice — see source.tasks.
 	Subtasks []Subtask `json:"subtasks,omitempty"`
+
+	// Description is what the work actually is, in markdown.
+	//
+	// It travels with the mirror rather than being fetched when somebody opens the
+	// task, because the server cannot reach the agent machine: a description not in
+	// the snapshot is one the browser cannot show at all. The same reason the
+	// standing instructions travel with the fleet.
+	Description string `json:"description,omitempty"`
+	// Described is what the board says, and is the reason the text can be absent
+	// without meaning "there is none": a task the agent could not read the
+	// description of is described-but-empty, and a panel that guessed would offer
+	// to write a first one over the top of something.
+	Described   bool   `json:"described,omitempty"`
+	DescribedBy string `json:"described_by,omitempty"`
+	DescribedAt string `json:"described_at,omitempty"`
 }
 
 // Subtask is one step of one task.
@@ -784,17 +815,20 @@ var argRules = map[Op]argRule{
 	OpRemoveDir:  {path: true},
 	OpRemoveTree: {path: true, optPaths: true},
 
-	OpTaskCreate:   {task: true, scales: true},
-	OpTaskPush:     {task: true},
-	OpTaskClaim:    {task: true},
-	OpTaskAssign:   {task: true, user: true},
-	OpTaskInvite:   {task: true, user: true},
-	OpTaskKick:     {task: true, user: true},
-	OpTaskLeave:    {task: true},
-	OpTaskScope:    {task: true, paths: true},
-	OpTaskWorktree: {task: true, path: true},
-	OpTaskStatus:   {task: true, status: true},
-	OpTaskSubtask:  {task: true, sub: true},
+	OpTaskCreate: {task: true, scales: true},
+	// `text` is the markdown. The task is in the path; the prose is the body.
+	OpTaskDescribe:      {task: true, text: true},
+	OpTaskDescribeClear: {task: true},
+	OpTaskPush:          {task: true},
+	OpTaskClaim:         {task: true},
+	OpTaskAssign:        {task: true, user: true},
+	OpTaskInvite:        {task: true, user: true},
+	OpTaskKick:          {task: true, user: true},
+	OpTaskLeave:         {task: true},
+	OpTaskScope:         {task: true, paths: true},
+	OpTaskWorktree:      {task: true, path: true},
+	OpTaskStatus:        {task: true, status: true},
+	OpTaskSubtask:       {task: true, sub: true},
 	// Both take an optional sub: without one they act on the whole task, which is
 	// a different thing rather than a missing operand.
 	OpTaskComplete: {task: true, optSub: true, optForce: true},
@@ -877,6 +911,9 @@ func (a Action) Validate() error {
 	}
 	if rule.text {
 		if err := checkText("Action", "args.text", a.Args.Text, MaxFileBytes, true); err != nil {
+			return err
+		}
+		if err := a.checkDescriptionText(); err != nil {
 			return err
 		}
 	}
@@ -1276,6 +1313,31 @@ func checkNames(typ, field string, values []string) error {
 // characters. Control characters are refused because this text is rendered into
 // a terminal-styled page and read back out of a table: a stray escape sequence
 // in a subject line is a way to forge either.
+// checkDescriptionText holds a task's description to Macmuffin's bound.
+//
+// `checkText` above already refused invalid UTF-8 and control characters, and both
+// of those are Macmuffin's rules too. What it does not know is that a description is
+// bounded far tighter than a library file: 32 KiB against a megabyte. Queuing one in
+// between would produce an action that is valid here and refused there — which is
+// the shape of failure this whole layer exists to prevent.
+//
+// Bytes rather than runes, because what is bounded is what the sync carries.
+func (a Action) checkDescriptionText() error {
+	if a.Op != OpTaskDescribe {
+		return nil
+	}
+	if a.Args.Text == "" {
+		return fault.Field("Action", "args.text",
+			"setting a description to nothing is %s, which says what it means", OpTaskDescribeClear)
+	}
+	if len(a.Args.Text) > MaxTaskDescriptionBytes {
+		return fault.Field("Action", "args.text",
+			"a description is %d bytes and the limit is %d; it would be refused on the agent machine after a sync",
+			len(a.Args.Text), MaxTaskDescriptionBytes)
+	}
+	return nil
+}
+
 func checkText(typ, field, value string, max int, allowEmpty bool) error {
 	if value == "" {
 		if allowEmpty {

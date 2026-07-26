@@ -130,6 +130,12 @@ type Task struct {
 	completed     bool
 	completedAt   time.Time
 	worktree      string
+	// described says a description.md sits beside this task. The text is not held
+	// here: the record is folded on every command and prose is read only when
+	// somebody asks for it.
+	described   bool
+	describedAt time.Time
+	describedBy user.Name
 }
 
 // NewDraft builds a newly created task, before anything has happened to it.
@@ -327,6 +333,15 @@ func (t Task) CompletedAt() time.Time { return t.completedAt }
 
 // Worktree returns the bound git worktree, and whether there is one.
 func (t Task) Worktree() (string, bool) { return t.worktree, t.worktree != "" }
+
+// Described reports whether the task has a description written for it.
+func (t Task) Described() bool { return t.described }
+
+// DescribedAt and DescribedBy are when it last changed and who changed it —
+// including the change that removed it, which is the one somebody looking for a
+// description that used to be there needs.
+func (t Task) DescribedAt() time.Time { return t.describedAt }
+func (t Task) DescribedBy() user.Name { return t.describedBy }
 
 // Active reports whether the task belongs on the board by default: pooled and
 // not yet finished. Completed tasks leave the board and come back under --all.

@@ -205,3 +205,92 @@ test("a mirror with no toolkit block claims nothing", () => {
   const drawn = fleetView.permissionList({ fleet: [f] }, { newPermission() {}, installToolkit() {} });
   assert.doesNotMatch(drawn.map((n) => n.textContent).join("\n"), /not in this fleet/);
 });
+
+// --- an agent's session ----------------------------------------------------
+//
+// `orc view` for each live agent, carried by the snapshot. It is here rather than
+// fetched because there is nowhere to fetch it from: the server can never reach an
+// agent machine.
+
+const withSession = {
+  machine: "studio", operator: "boss",
+  identities: [{ name: "ember", role: "reviewer", authority: 40, employed: true, chain: ["boss", "ember"] }],
+  sessions: [{
+    identity: "ember", role: "reviewer", live: true, waiting: true, turn: 3,
+    prose_available: true,
+    prose: [{ who: "assistant", text: "the parser is done" }],
+    rows: [
+      { at: "2026-07-26T14:00:09.000Z", turn: 3, kind: "action", tool: "Read",
+        detail: "Docs/Orc/Reference.md", verdict: "allow" },
+      { at: "2026-07-26T14:00:12.000Z", turn: 3, kind: "action", tool: "Write",
+        detail: "Orc/internal/cli/cli.go", verdict: "block", blocked: true,
+        reason: "reviewer may not write outside Docs/" },
+    ],
+  }],
+};
+
+test("a session is folded shut, and says enough to decide whether to open it", () => {
+  const nodes = fleetView.tree({ fleet: [withSession], open: {} }, null);
+  const text = textOf(nodes);
+  assert.match(text, /session/, "no session row under the identity");
+  assert.match(text, /waiting/, "the closed row does not say what the agent is doing");
+  assert.match(text, /1 blocked/, "a refusal is not visible without opening the fold");
+  // Shut, so a fleet of eight agents is still a tree.
+  assert.doesNotMatch(text, /Reference\.md/, "the fold is open by default");
+});
+
+test("an opened session shows what was said and what was done", () => {
+  const nodes = fleetView.tree({ fleet: [withSession], open: { "session:studio:ember": true } }, null);
+  const text = textOf(nodes);
+  assert.match(text, /the parser is done/, "what the agent said is missing");
+  assert.match(text, /Docs\/Orc\/Reference\.md/, "what the agent did is missing");
+});
+
+// A refusal without its reason sends the reader to the permissions table to find
+// out what they already needed to know.
+test("a refused tool call carries its reason", () => {
+  const nodes = fleetView.tree({ fleet: [withSession], open: { "session:studio:ember": true } }, null);
+  const text = textOf(nodes);
+  assert.match(text, /reviewer may not write outside Docs\//, "a blocked row lost its reason");
+  // And the word, not only the colour: a reader who cannot tell red from green
+  // would otherwise see an ordinary row.
+  assert.match(text, /blocked/, "the refusal is carried by colour alone");
+});
+
+// An identity with no session must not grow an empty pane — an empty pane reads
+// as an idle agent, and that is the one thing it must not be mistaken for.
+test("an identity with no session carried grows no pane", () => {
+  const bare = { ...withSession, sessions: [] };
+  const text = textOf(fleetView.tree({ fleet: [bare], open: {} }, null));
+  assert.doesNotMatch(text, /session/, "a pane appeared for an agent with nothing to show");
+});
+
+// Told apart from "said nothing": one is an agent that has not spoken, the other
+// is a transcript this build could not read.
+test("a transcript that could not be read says so rather than showing silence", () => {
+  const quiet = {
+    ...withSession,
+    sessions: [{ ...withSession.sessions[0], prose: [], prose_available: false }],
+  };
+  const text = textOf(fleetView.tree({ fleet: [quiet], open: { "session:studio:ember": true } }, null));
+  assert.match(text, /no transcript to read/, text);
+});
+
+// Whatever went wrong reading it is said, because an empty pane is the one thing
+// that must not stand in for "the feed is broken".
+test("a session that could not be read reports why", () => {
+  const broken = {
+    ...withSession,
+    sessions: [{ identity: "ember", live: true, note: "the event feed could not be read: unexpected end of JSON" }],
+  };
+  const text = textOf(fleetView.tree({ fleet: [broken], open: { "session:studio:ember": true } }, null));
+  assert.match(text, /could not be read/, text);
+});
+
+// textOf is everything a rendering says, flattened, so an assertion can ask
+// whether a fact reached the screen without depending on where it landed.
+function textOf(nodes) {
+  return [].concat(nodes).filter(Boolean)
+    .map((n) => (n && n.textContent) || "")
+    .join(" ");
+}

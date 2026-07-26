@@ -42,6 +42,10 @@ let state = {
   // only in the DOM is gone when that happens — the failure the editor avoids
   // by living outside the redraw, which a form in the page flow cannot.
   drafts: {},
+  // What a list is being narrowed by, keyed by which list it is. A filter is not
+  // a draft: it changes what is on screen with every letter, so unlike a draft it
+  // has to redraw, and unlike a draft there is nothing to queue.
+  filters: {},
   detail: null, admin: null, error: null,
 };
 
@@ -175,6 +179,13 @@ const actions = {
   // fold would make the interface feel broken.
   toggle(key) {
     set({ open: { ...state.open, [key]: !state.open[key] } });
+  },
+  // filter narrows a list. It redraws, unlike `draft` — the list *is* the
+  // feedback, and a filter that only took effect on blur would be a box that
+  // looked broken. The caret survives it because the field is named: see
+  // focus.js, which is what makes redrawing on a keystroke affordable at all.
+  filter(key, value) {
+    set({ filters: { ...state.filters, [key]: value } });
   },
   pick(key) {
     set({ picked: key });
@@ -716,6 +727,47 @@ const actions = {
     })) return;
     await run(() => api.kickFromTask(t.machine, t.name, user));
   },
+  // describeTask writes what the work is.
+  //
+  // The editor rather than a one-line box: it is markdown, up to 32 KiB of it, and
+  // the box every other task verb uses would be the wrong tool by an order of
+  // magnitude. It opens on what is already there, since this replaces the whole
+  // document — the same shape as `scope`, and for the same reason.
+  //
+  // A description the mirror could not read opens *empty*, and the note says so,
+  // because queueing a write from an empty editor in that state would replace prose
+  // nobody has seen.
+  async describeTask(t) {
+    const text = await editor.open({
+      title: `what ${t.name} is`,
+      text: t.description || "",
+      note: t.described && !t.description
+        ? "the last sync could not read this task's description; saving replaces it"
+        : "markdown; it queues here and leaves on the next sync",
+    });
+    if (text === null) return;
+
+    const body = text.trim();
+    if (body === (t.description || "").trim()) return;
+    // An emptied editor is a clear, matching Macmuffin: a description that says
+    // nothing and no description at all are the same state, and two spellings of one
+    // state is a state somebody eventually disagrees about.
+    if (body === "") {
+      if (!t.described) return;
+      await run(() => api.undescribeTask(t.machine, t.name));
+      return;
+    }
+    await run(() => api.describeTask(t.machine, t.name, text));
+  },
+  async undescribeTask(t) {
+    if (!await dialog.confirm({
+      title: `clear what ${t.name} is`,
+      body: "the description goes; the task, its scope and its steps stay. " +
+        "nothing else records what this task was for.",
+      submit: "clear it",
+    })) return;
+    await run(() => api.undescribeTask(t.machine, t.name));
+  },
   async scopeTask(t) {
     // Space-separated, as `muff scope` takes them, and a whole replacement rather
     // than an addition — which is also what `muff scope` does, so the current
@@ -897,10 +949,18 @@ async function refresh() {
     ]);
     setCSRF(session.csrf);
 
-    // The admin view can be large, so it is fetched only while it is on
-    // screen. Everything else is small enough to keep current always.
+    // The admin view can be large — it is every message in the store, bodies
+    // included — so it is fetched only while it is on screen. Everything else is
+    // small enough to keep current always.
+    //
+    // The route it is fetched for is `mail › store`, which is the only screen
+    // that reads it. This used to name `/admin`, from before the whole-store view
+    // moved out of that area, and the effect was a tab that said nothing had
+    // synced no matter what had: the four `/admin` screens draw from the fleet,
+    // not from this, so the fetch happened exactly where it was not wanted and
+    // never where it was.
     let admin = state.admin;
-    if (route.startsWith("/admin") && session.admin) {
+    if (route.startsWith("/mail/store") && session.admin) {
       admin = await api.adminState();
     }
 

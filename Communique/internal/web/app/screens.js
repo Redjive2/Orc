@@ -19,7 +19,7 @@ export const SCREENS = {
   "mail/compose": (s, a) => views.compose(s, a),
   "mail/sent": (s, a) => views.mailbox(s, { box: "sent" }, a),
   "mail/archive": (s, a) => views.mailbox(s, { box: "archive" }, a),
-  "mail/store": (s) => views.store(s),
+  "mail/store": (s, a) => views.store(s, a),
 
   "project/code": (s, a) => [
     library.libraryHeader(s, "code"),

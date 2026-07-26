@@ -324,6 +324,8 @@ func (s *Server) routes() {
 	s.route("POST /api/v1/tasks/{name}/kick", needSession, s.kickFromTask)
 	s.route("POST /api/v1/tasks/{name}/leave", needSession, s.leaveTask)
 	s.route("POST /api/v1/tasks/{name}/scope", needSession, s.scopeTask)
+	s.route("PUT /api/v1/tasks/{name}/description", needSession, s.describeTask)
+	s.route("DELETE /api/v1/tasks/{name}/description", needSession, s.undescribeTask)
 	s.route("POST /api/v1/tasks/{name}/worktree", needSession, s.worktreeTask)
 	s.route("POST /api/v1/tasks/{name}/status", needSession, s.statusTask)
 	s.route("POST /api/v1/tasks/{name}/subtasks", needSession, s.addSubtask)

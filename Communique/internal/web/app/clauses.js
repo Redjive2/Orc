@@ -100,7 +100,8 @@ const FALLBACK_WORDS = {
   // lists above, and shown for the opposite one: those say what a clause may
   // name, this says what nobody has to ask for. A permission list without it
   // reads as an agent that can run nothing at all.
-  innocuous: ["basename", "dirname", "echo", "false", "mailman", "printf", "pwd", "true"],
+  innocuous: ["basename", "dirname", "echo", "false", "mailman (not mailman admin)",
+    "printf", "pwd", "true"],
 };
 
 // read splits one clause into its parts and says what is wrong with it.

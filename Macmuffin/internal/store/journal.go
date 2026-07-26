@@ -167,6 +167,10 @@ func decodeEvent(path string, line int, raw []byte) (task.Event, error) {
 			return bad("worktree event has no path")
 		}
 		return wrap(task.BindWorktree(by, at, stored.Path))
+	case task.OpDescribe:
+		return wrap(task.Describe(by, at))
+	case task.OpUndescribe:
+		return wrap(task.Undescribe(by, at))
 	default:
 		return bad("unhandled journal operation %q", stored.Op)
 	}

@@ -40,6 +40,20 @@ type jsonTask struct {
 	Scope         []string      `json:"scope,omitempty"`
 	Worktree      string        `json:"worktree,omitempty"`
 	Subtasks      []jsonSubtask `json:"subtasks,omitempty"`
+
+	// Described says a description.md sits beside the task, with who last changed
+	// it and when. It is on the board as well as in `info`, because "which of
+	// these has a specification" is a question about the pool.
+	Described   bool      `json:"described,omitempty"`
+	DescribedBy string    `json:"described_by,omitempty"`
+	DescribedAt time.Time `json:"described_at,omitzero"`
+	// Description is the prose itself, and travels only with `info`.
+	//
+	// The board is a board: carrying up to 32 KiB of markdown per task would make
+	// a listing of forty tasks something nobody wants to sync. A reader that needs
+	// the text asks for the one task it is about — which is what cq does, and only
+	// for the tasks the board says have one.
+	Description string `json:"description,omitempty"`
 }
 
 // jsonSubtask is one step of one task.
@@ -69,6 +83,11 @@ func taskJSON(t task.Task, subtasks bool) jsonTask {
 		Completed:     t.Completed(),
 		Scope:         t.Scope(),
 		Worktree:      worktree(t),
+		Described:     t.Described(),
+	}
+	if t.Described() {
+		out.DescribedBy = t.DescribedBy().String()
+		out.DescribedAt = t.DescribedAt()
 	}
 	if owner, ok := t.Owner(); ok {
 		out.Owner = owner.String()

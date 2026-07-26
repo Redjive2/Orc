@@ -346,10 +346,37 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 // reads. When no permissions can be read at all, a read passes because a blocked
 // read discloses nothing new. A command is not like that — it could be anything —
 // so an unreadable store stops the shell rather than opening it.
+//
+// Except for the default set, which is checked *before* the store is consulted at
+// all. Those commands need no clause, so an unreadable list of clauses cannot
+// change the answer — and the one that matters is mail: an agent whose store has
+// gone away is exactly the agent that needs to be able to read its instructions
+// and say what happened.
 func decideShell(s *store.Store, who user.Name, command string) (Outcome, bool) {
 	line := strings.TrimSpace(command)
 	if line == "" {
 		return pass, false
+	}
+
+	// An opaque line hides what it runs, so the only clause that can honestly
+	// permit it is one that permits everything. Anything narrower would be
+	// deciding on a name that says nothing about what happens. It is asked first
+	// because a line whose commands cannot be named must not reach the default
+	// set on the strength of the one name it did find.
+	opaque := Opaque(line)
+
+	runs := Runs(line)
+	if !opaque {
+		needed := false
+		for _, r := range runs {
+			if !model.InnocuousRun(r.Name, r.Args) {
+				needed = true
+				break
+			}
+		}
+		if !needed {
+			return pass, false
+		}
 	}
 
 	patterns, source, ok := permissions(s, who)
@@ -357,22 +384,25 @@ func decideShell(s *store.Store, who user.Name, command string) (Outcome, bool) 
 		return Outcome{Code: CodeBlock, Stderr: refuseBlindShell(line)}, true
 	}
 
-	// An opaque line hides what it runs, so the only clause that can honestly
-	// permit it is one that permits everything. Anything narrower would be
-	// deciding on a name that says nothing about what happens.
-	if Opaque(line) {
+	if opaque {
 		if allows(patterns, model.KindShell, "**") {
 			return pass, false
 		}
 		return Outcome{Code: CodeBlock, Stderr: refuseOpaque(line, patterns, source)}, true
 	}
 
-	for _, name := range Commands(line) {
-		if model.InnocuousCommand(name) {
+	for _, r := range runs {
+		if model.InnocuousRun(r.Name, r.Args) {
 			continue
 		}
-		if !allows(patterns, model.KindShell, name) {
-			return Outcome{Code: CodeBlock, Stderr: refuseShell(name, line, patterns, source)}, true
+		if !allows(patterns, model.KindShell, r.Name) {
+			// A name on the default list can only have failed InnocuousRun on its
+			// guarded subcommand, so that is what the refusal is about. A clause
+			// naming the command covers it, which is why this is reached at all.
+			if sub := model.GuardedSubcommand(r.Name); sub != "" {
+				return Outcome{Code: CodeBlock, Stderr: refuseGuarded(r.Name, sub, line, patterns, source)}, true
+			}
+			return Outcome{Code: CodeBlock, Stderr: refuseShell(r.Name, line, patterns, source)}, true
 		}
 	}
 	return pass, false

@@ -176,17 +176,79 @@ func TestTheFallbackInnocuousMatchesOrc(t *testing.T) {
 		t.Skipf("Orc's source is not beside cq's, so the copy was not checked: %v", err)
 	}
 
-	want := orcStrings(t, "Innocuous")
-	got := fallbackInnocuous(t)
-
-	if len(want) == 0 {
+	names := orcStrings(t, "Innocuous")
+	if len(names) == 0 {
 		t.Fatal("read no words out of Innocuous(); the check would pass on anything")
 	}
+
+	// The server sends model.InnocuousWords, not the bare names: some of these
+	// commands are default in one form and not another, and a list that says
+	// `mailman` while `mailman admin` is refused is worse than no list at all. The
+	// fallback has to be what the server would have sent, so the same annotation
+	// is composed here from the same two sources.
+	guarded := orcGuarded(t)
+	want := make([]string, 0, len(names))
+	for _, name := range names {
+		if sub, ok := guarded[name]; ok {
+			want = append(want, name+" (not "+name+" "+sub+")")
+			continue
+		}
+		want = append(want, name)
+	}
+	slices.Sort(want)
+
+	got := fallbackInnocuous(t)
 	if !slices.Equal(want, got) {
 		t.Errorf("what runs with no shell clause differs between the two:\n"+
 			"  orc: %v\n   cq: %v\n"+
 			"Update `innocuous` in FALLBACK_WORDS in app/clauses.js.", want, got)
 	}
+}
+
+// orcGuarded reads the `guarded` map out of Orc's vocabulary: the subcommands a
+// default command does not cover.
+//
+// An empty result is not an error. The map is allowed to be empty — no command
+// has to have an exception — and a test that insisted otherwise would fail the
+// day the last one was removed.
+func orcGuarded(t *testing.T) map[string]string {
+	t.Helper()
+
+	file, err := parser.ParseFile(token.NewFileSet(), orcVocabulary, nil, 0)
+	if err != nil {
+		t.Fatalf("reading orc's vocabulary: %v", err)
+	}
+	out := map[string]string{}
+	for _, decl := range file.Decls {
+		d, ok := decl.(*ast.GenDecl)
+		if !ok || d.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range d.Specs {
+			v, ok := spec.(*ast.ValueSpec)
+			if !ok || len(v.Names) != 1 || v.Names[0].Name != "guarded" {
+				continue
+			}
+			for _, value := range v.Values {
+				lit, ok := value.(*ast.CompositeLit)
+				if !ok {
+					continue
+				}
+				for _, e := range lit.Elts {
+					kv, ok := e.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					key, kok := literal(kv.Key)
+					val, vok := literal(kv.Value)
+					if kok && vok {
+						out[key] = val
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // orcStrings reads a `[]string` a function in Orc's vocabulary returns.

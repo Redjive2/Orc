@@ -134,6 +134,8 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `DELETE fleet/roles/<n>`               | `orc remove role --yes`                  |
 | `PATCH fleet/permissions/<n>`          | `orc edit permission <name> --floor …`   |
 | `DELETE fleet/permissions/<n>`         | `orc remove permission [--from] --yes`   |
+| `PUT tasks/<n>/description`            | `muff describe <task> --set <file>`      |
+| `DELETE tasks/<n>/description`         | `muff describe <task> --clear`           |
 | `POST fleet/tend`                      | `orc tend`                               |
 | `POST fleet/toolkit`                   | `orc bootstrap --as <operator>`†         |
 | `PUT instruct/system`                  | `orc instruct system --set`              |
@@ -183,6 +185,20 @@ The operands are checked before anything is queued — priority and difficulty 1
 status 1 to 4, names that Macmuffin would accept, scope paths that stay inside the
 checkout. A value the pool would refuse never becomes an action that fails hours
 later on a machine nobody is watching.
+
+A task's **description** is the one operand that is prose. It travels in the
+snapshot rather than being fetched when somebody opens a task, because the server
+cannot reach the agent machine — a description not in the mirror is one the
+browser cannot show at all. The board says which tasks have one; the text arrives
+with the same per-task `muff info` call that carries the steps, and only for the
+tasks that have either. Going the other way it is written to a temporary file at
+0600 and passed by path, never in argv: `ps` is public on a machine several agents
+share.
+
+Whether a task *has* a description travels separately from the text, and the two
+must not be confused. A task the agent could not read the description of arrives
+described-but-empty, and the panel says exactly that — offering to write a first
+one over the top of prose nobody has seen is how a specification disappears.
 
 **cq holds no opinion about who may do what.** Every command runs as the mirrored
 account, and Macmuffin's own rules apply exactly as they do at a terminal: setting

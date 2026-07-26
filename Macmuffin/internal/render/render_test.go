@@ -297,13 +297,17 @@ const goldenBoardAll = `┌─────────────────�
 └──────────────────────────────┴───┴───┴──────────────┴─────────────┴───────┴───────┘
 `
 
+// The one line with backticks in it is spliced: a Go raw string cannot contain one,
+// and the card names the command that writes a description the way every other hint
+// in this file does.
 const goldenCard = `╭─ fix-the-parser ──────────────────────────────────────────────────────── P4  D3  ● nominal  5/8 ─╮
-│ owner     bob                                                                                    │
-│ author    alice                                                                                  │
-│ created   2026-07-24 18:31                                                                       │
-│ state     in the pool                                                                            │
-│ with      carol                                                                                  │
-│ worktree  ../orc-parser                                                                          │
+│ owner      bob                                                                                   │
+│ author     alice                                                                                 │
+│ created    2026-07-24 18:31                                                                      │
+│ state      in the pool                                                                           │
+│ with       carol                                                                                 │
+│ worktree   ../orc-parser                                                                         │
+│ described  none yet — ` + "`muff describe fix-the-parser --edit`" + `                                      │
 ├─ scope ──────────────────────────────────────────────────────────────────────────────────────────┤
 │   internal/tree/                                                                                 │
 │   internal/marker/                                                                               │

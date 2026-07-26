@@ -295,10 +295,13 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			if op.Idempotent() {
 				t.Errorf("%q must not be idempotent", op)
 			}
-		case protocol.OpTaskScope, protocol.OpTaskWorktree, protocol.OpTaskStatus,
+		case protocol.OpTaskDescribe, protocol.OpTaskDescribeClear,
+			protocol.OpTaskScope, protocol.OpTaskWorktree, protocol.OpTaskStatus,
 			protocol.OpTaskAssign, protocol.OpTaskInvite:
 			// Each sets a value to what was asked for rather than stepping it, so
-			// applying it twice lands in the same place.
+			// applying it twice lands in the same place — including a description,
+			// which is prose but is still a value: the same words twice are the
+			// same words.
 			if !op.Idempotent() {
 				t.Errorf("%q should be idempotent", op)
 			}

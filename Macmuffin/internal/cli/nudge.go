@@ -13,6 +13,8 @@ var changesThePool = map[string]bool{
 	"claim":    true,
 	"scope":    true,
 	"worktree": true,
+	// A description is a field the board shows.
+	"describe": true,
 	// A rebind rewrites the worktree every affected task is bound to, which is a
 	// field the board shows.
 	"rebind":   true,

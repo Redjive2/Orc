@@ -165,16 +165,50 @@ func refuseShell(name, line string, patterns []model.Pattern, source string) str
 	if len(allowed) == 0 {
 		lines = append(lines,
 			"  you hold no shell permission, so you may run only the commands",
-			fmt.Sprintf("  every identity may:  %s", strings.Join(model.Innocuous(), "  ")))
+			fmt.Sprintf("  every identity may:  %s", defaultSet()))
 	} else {
 		lines = append(lines,
 			fmt.Sprintf("  you may run:  %s", strings.Join(allowed, "  ")),
-			fmt.Sprintf("  and always:   %s", strings.Join(model.Innocuous(), "  ")))
+			fmt.Sprintf("  and always:   %s", defaultSet()))
 	}
 	return join(append(lines,
 		fmt.Sprintf("  (%s)", source),
 		"",
 		"  ask your boss for a permission that covers it:",
+		fmt.Sprintf("    orc new permission <name> <floor> 'shell(%s)'", name),
+	)...)
+}
+
+// defaultSet renders what every identity may run, with the carve-outs shown.
+func defaultSet() string {
+	return strings.Join(model.InnocuousWords(), "  ")
+}
+
+// refuseGuarded explains the one part of a default command that is not default.
+//
+// It is its own message because the ordinary one would be actively misleading.
+// `mailman` needs no permission, the agent has been using it all session, and
+// being told "you may not run mailman" invites it to conclude the gate is
+// broken. What is refused is the subcommand, so that is what the message is
+// about — and it says what the subcommand can do, because "ask for a clause" is
+// not much use to an agent that does not know why this one is different.
+func refuseGuarded(name, sub, line string, patterns []model.Pattern, source string) string {
+	lines := []string{
+		fmt.Sprintf("orc: you may run %s, but not %s %s.", name, name, sub),
+		"",
+		fmt.Sprintf("  the command:  %s", ellipsis(line, 120)),
+		fmt.Sprintf("  %s checks who is calling and shows you your own mailbox, which is why it", name),
+		fmt.Sprintf("  needs no permission. %s %s is the part that does not check: it provisions", name, sub),
+		"  mailboxes and can hand its caller every message in the fleet.",
+	}
+	if allowed := shellTerms(patterns); len(allowed) > 0 {
+		lines = append(lines, fmt.Sprintf("  you may run:  %s", strings.Join(allowed, "  ")))
+	}
+	return join(append(lines,
+		fmt.Sprintf("  (%s)", source),
+		"",
+		"  it is orc that provisions mailboxes — `orc new identity` does it for you.",
+		"  if you genuinely need the raw command, ask your boss:",
 		fmt.Sprintf("    orc new permission <name> <floor> 'shell(%s)'", name),
 	)...)
 }

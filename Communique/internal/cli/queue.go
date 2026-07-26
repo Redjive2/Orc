@@ -316,8 +316,14 @@ func describe(action protocol.Action) string {
 			return fmt.Sprintf("%s — %s", action.Args.Task, action.Args.Sub)
 		}
 		return action.Args.Task
-	case protocol.OpTaskPush, protocol.OpTaskClaim, protocol.OpTaskLeave:
+	case protocol.OpTaskPush, protocol.OpTaskClaim, protocol.OpTaskLeave,
+		protocol.OpTaskDescribeClear:
 		return action.Args.Task
+	case protocol.OpTaskDescribe:
+		// The size rather than the prose: a queue is a list, and the first line of
+		// somebody's specification would wrap it. How big it is answers the question
+		// a queue is read with — whether this is the edit you were expecting.
+		return fmt.Sprintf("%s — a description of %d bytes", action.Args.Task, len(action.Args.Text))
 
 	case protocol.OpOrcNewRole, protocol.OpOrcAssignAuthority:
 		return fmt.Sprintf("%s — authority %d", action.Args.Role, action.Args.Authority)

@@ -23,6 +23,7 @@ muff <command> <args...>
 | `scope <task> <paths...>`               | Limit editing to `<paths...>`                             |
 | `push <task>`                           | Push `<task>` to the task pool                            |
 | `worktree <task> <worktree>`            | Match this task to a git worktree in the main git repo    |
+| `describe <task> [--set <f>\|--edit\|--clear]` | What the work is, in markdown             |
 | `rebind [--dry-run] <old> <new>`        | Follow every binding at or under `<old>` to `<new>`       |
 | `check-scope <paths...>`†               | Exit `0` if every path is in scope, `9` if any is not     |
 | `verify`†                               | Walk the store and report damage, changing nothing        |
@@ -85,12 +86,39 @@ identity — a stale key, a typo, a credential copied from another agent — and
 a determined one. Stopping that needs an authority Macmuffin cannot be denied,
 which today means Orc being the thing that starts the session.
 
+**The fleet's operator stands in for the owner a task does not have.** `scope`,
+`complete`, `invite`, `describe` and `delete` are the owner's, so on a task in the
+pool they refuse and say "claim it first" — the right answer to an agent, because
+taking the work is how it acquires the say over it, and the wrong one to whoever
+runs the fleet. Retiring a stale task, fixing a bad scope, or handing one on are
+things the operator does without wanting the work.
+
+So an identity Orc names as the operator is treated as the owner of any task
+**nobody owns**, and of nothing else. Two limits, and both are the point:
+
+- A task with an owner stays that owner's. This is not a master key; an operator
+  who wants the work claims it in the open, like anybody.
+- A draft stays private (§1.3). An unowned draft somebody else made is still
+  reported as not found.
+
+`muff` says so when it happens — "nobody owns parser; acting as the operator" —
+because a change made with nobody on the task is otherwise a change the next
+reader cannot account for.
+
+The question goes to `orc introspect --only operator` and **fails closed**, which
+is the opposite of the identity check above and deliberate: verification only ever
+refuses, so a missing Orc leaves a claim standing, and this only ever widens, so a
+missing Orc must leave things exactly as narrow as they were. On a machine with no
+fleet nobody is the operator. It is asked only when the answer would change
+something — after the table has refused — so ordinary work runs no `orc` for it.
+
 ## §1.3 Privacy
 
 A task is a **private draft** until it is pushed. A draft is visible to its
 author and to anyone the author deliberately added to it, and to nobody else —
 a task you cannot see is reported as not found rather than as forbidden, since
-saying "you may not" would confirm it exists.
+saying "you may not" would confirm it exists. The fleet's operator is not an
+exception: §1.2.
 
 ## §1.4 Scores
 
@@ -135,6 +163,34 @@ routine.
 
 Writes through `Bash` other than `anno write` are out of reach. That is stated
 rather than implied to be covered.
+
+## §1.6a Descriptions
+
+A task's description is what the work actually *is*. Everything else a task
+carries is a fact with a shape — a score, an owner, a set of paths, a list of
+steps — and none of them says what to do.
+
+It is markdown, in `description.md` inside the task's own directory, so it can be
+edited in an editor and read in a browser, and so deleting the task takes it with
+it. At most 32 KiB, refused rather than truncated: half a specification looks
+like a whole one. Control characters are refused too, since it is printed to a
+terminal by `describe` and named by `info`.
+
+```
+muff describe <task>              print it, and nothing else, so it redirects
+muff describe <task> --set <file> replace it, or `-` for standard input
+muff describe <task> --edit       $EDITOR on the real file
+muff describe <task> --clear      remove it
+```
+
+Writing is the owner's, and the author's while the task is a draft — the same
+rule as `scope`, because both say what the task is rather than how it is going.
+Reading is anyone who can see the task.
+
+The task's journal records `describe` and `describe.clear`: **that** it changed
+and who changed it, never the text. A record folded on every command must not
+carry 32 KiB of prose. So `info` says who last described a task, and `pool` says
+which tasks have one at all.
 
 ## §1.7 Notifications
 
@@ -193,3 +249,9 @@ nothing.
 `pool --json` and `info --json` print the board as JSON, for another program to
 read. It is the contract Communiqué mirrors through, so it is a stable shape,
 not a rendering. Colour is off under `--json`.
+
+The two differ in what they carry, deliberately. `pool` is a board: it reports
+`described`, `described_by` and `described_at`, and no prose. `info` carries the
+`description` itself, along with the subtasks. A listing of forty tasks should
+not be forty specifications, and a reader that needs one asks for the task it is
+about.

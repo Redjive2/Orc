@@ -307,6 +307,8 @@ func TestActionArgumentRules(t *testing.T) {
 		protocol.OpOrcWorkspace:       {Identity: "atlas", Workspace: "/trees/parser", From: "/old/workspace"},
 		protocol.OpOrcInstructSet:     {Prompt: "identity", PromptName: "atlas", Text: "you write the parser"},
 		protocol.OpOrcInstructClear:   {Prompt: "system"},
+		protocol.OpTaskDescribe:       {Task: "fix-the-parser", Text: "# what to do\n"},
+		protocol.OpTaskDescribeClear:  {Task: "fix-the-parser"},
 		protocol.OpOrcTend:            {},
 		protocol.OpOrcToolkit:         {Identity: "boss"},
 		protocol.OpUpgrade:            {},
@@ -657,5 +659,67 @@ func TestOversizedListsAreRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds the limit") {
 		t.Errorf("message %q should name the limit", err)
+	}
+}
+
+// TestADescriptionTooBigIsRefusedBeforeItIsQueued. Macmuffin's bound is 32 KiB and
+// cq's generic text limit is a megabyte, so without this an oversized description
+// would be accepted at the browser and refused hours later on a machine nobody is
+// watching — which is the failure this whole layer exists to prevent.
+func TestOversizedDescriptionIsRefusedAtTheBrowser(t *testing.T) {
+	base := func(text string) protocol.Action {
+		return protocol.Action{
+			ID: protocol.ActionID(strings.Repeat("a", 32)), Seq: 1, Machine: "studio",
+			Op: protocol.OpTaskDescribe, Queued: at,
+			Args: protocol.Args{Task: "fix-the-parser", Text: text},
+		}
+	}
+
+	// At the bound it is fine.
+	if err := base(strings.Repeat("x", protocol.MaxTaskDescriptionBytes)).Validate(); err != nil {
+		t.Errorf("a description at the limit was refused: %v", err)
+	}
+
+	err := base(strings.Repeat("x", protocol.MaxTaskDescriptionBytes+1)).Validate()
+	if err == nil {
+		t.Fatal("an oversized description was queued")
+	}
+	// The refusal gives the arithmetic and says where it would otherwise have gone
+	// wrong, because the fix is to shorten it and the person has to know by how much.
+	for _, want := range []string{"limit", "agent machine"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+}
+
+// Setting a description to nothing is clearing it, and there is an operation that
+// says so. Two spellings of one intent leave the queue unable to report which
+// happened.
+func TestAnEmptyDescriptionIsRefusedInFavourOfClear(t *testing.T) {
+	action := protocol.Action{
+		ID: protocol.ActionID(strings.Repeat("a", 32)), Seq: 1, Machine: "studio",
+		Op: protocol.OpTaskDescribe, Queued: at,
+		Args: protocol.Args{Task: "fix-the-parser", Text: ""},
+	}
+	err := action.Validate()
+	if err == nil {
+		t.Fatal("an empty description was queued as a write")
+	}
+	if !strings.Contains(err.Error(), string(protocol.OpTaskDescribeClear)) {
+		t.Errorf("the refusal does not name the operation that means it: %v", err)
+	}
+}
+
+// A description carrying an escape sequence is refused here as well as in Macmuffin:
+// it is printed to a terminal by `muff describe` at the far end.
+func TestADescriptionWithControlCharactersIsRefused(t *testing.T) {
+	action := protocol.Action{
+		ID: protocol.ActionID(strings.Repeat("a", 32)), Seq: 1, Machine: "studio",
+		Op: protocol.OpTaskDescribe, Queued: at,
+		Args: protocol.Args{Task: "fix-the-parser", Text: "before\x1b[31m after"},
+	}
+	if err := action.Validate(); err == nil {
+		t.Error("an escape sequence was queued into a description")
 	}
 }

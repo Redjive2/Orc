@@ -185,3 +185,54 @@ func TestRoleCannotClaimOperatorAuthority(t *testing.T) {
 		t.Errorf("authority 101 was accepted")
 	}
 }
+
+// Every guarded command must itself be on the default list.
+//
+// The hook reads GuardedSubcommand only after InnocuousRun has already said no,
+// and concludes from a non-empty answer that the subcommand is what was refused.
+// A guarded entry for a command that is *not* on the list would make that
+// conclusion false, and the agent would be told "you may run X, but not X Y"
+// about a command it may not run at all.
+func TestEveryGuardedCommandIsADefaultOne(t *testing.T) {
+	for _, name := range model.Innocuous() {
+		if sub := model.GuardedSubcommand(name); sub != "" && !model.InnocuousRun(name, nil) {
+			t.Errorf("%s is guarded but bare %s is not allowed", name, name)
+		}
+	}
+	// The other direction: nothing is guarded that is not on the list. There is no
+	// way to enumerate the map from outside, so this checks the names a fleet
+	// might plausibly hold and the one that exists.
+	for _, name := range []string{"ls", "rm", "curl", "git", "anno", "orc", "cq"} {
+		if sub := model.GuardedSubcommand(name); sub != "" {
+			t.Errorf("%s is guarded but is not on the default list, so its refusal would lie", name)
+		}
+	}
+}
+
+// InnocuousRun is the whole gate for a default command, arguments included.
+func TestInnocuousRun(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"echo", []string{"hello"}, true},
+		{"echo", []string{"admin"}, true}, // only guarded commands look at arguments
+		{"ls", nil, false},
+		{"mailman", nil, true},
+		{"mailman", []string{"inbox"}, true},
+		{"mailman", []string{"send", "rowan"}, true},
+		{"MAILMAN", []string{"Inbox"}, true}, // names are compared without case
+		{"mailman", []string{"admin", "user", "list"}, false},
+		{"mailman", []string{"ADMIN"}, false},
+		// The subcommand is not in a fixed position: `--key` takes a separate
+		// value, so anything that looked only at the first bare word would let
+		// this through.
+		{"mailman", []string{"--key", "x", "admin", "user", "add", "mole"}, false},
+	}
+	for _, c := range cases {
+		if got := model.InnocuousRun(c.name, c.args); got != c.want {
+			t.Errorf("InnocuousRun(%q, %v) = %v, want %v", c.name, c.args, got, c.want)
+		}
+	}
+}

@@ -117,6 +117,12 @@ export const api = {
   worktreeTask: (machine, name, path) => taskCall("worktree", machine, name, { path }),
   statusTask: (machine, name, status) => taskCall("status", machine, name, { status }),
   addSubtask: (machine, name, sub) => taskCall("subtasks", machine, name, { sub }),
+  // The description. PUT replaces the whole document, DELETE removes it — the two
+  // are different intents and the queue says which happened.
+  describeTask: (machine, name, text) =>
+    request("PUT", `/api/v1/tasks/${encodeURIComponent(name)}/description`, { machine, text }),
+  undescribeTask: (machine, name) =>
+    request("DELETE", `/api/v1/tasks/${encodeURIComponent(name)}/description`, { machine }),
   completeTask: (machine, name, sub, force) =>
     taskCall("complete", machine, name, { sub: sub || undefined, force: force || undefined }),
   // The fleet. Reading is one call because a fleet is one derived thing; the

@@ -288,6 +288,15 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .agent.idle .name { color: var(--muted); }
 .agent.idle { opacity: .72; }
 
+/* A task's description: the prose that says what the work is. It sits above the
+   scope and the steps, so it gets a little air of its own. */
+.description { display: grid; gap: .5rem; padding: .2rem 0 .6rem; }
+.description.empty { color: var(--muted); }
+.description .prose { display: grid; gap: .6rem; overflow-wrap: anywhere; }
+.description .prose pre { overflow-x: auto; }
+/* The board's marker for a task that has one. */
+.badge.described { color: var(--accent); }
+
 /* One standing instruction's opening line: it stands in for a paragraph, so it
    is dimmed and clipped rather than wrapped into a second row. */
 .prompt { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -387,8 +396,28 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .grid { display: grid; gap: .1rem 2ch; align-items: baseline; margin-bottom: 1rem; }
 .grid:last-child { margin-bottom: 0; }
 .grid.users { grid-template-columns: 16ch; }
-.grid.traffic { grid-template-columns: 12ch 20ch 1fr 24ch; }
 .grid > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The store's message rows are folds, so they inherit the library's row rules
+   and need only what a mailbox line adds to them: a sender in the accent colour
+   and a subject that gives up its tail rather than the row's shape. The reader
+   count sits at the right-hand end, which `button.fold .note` already does.
+
+   The sender is fixed-width so the subjects line up into a column somebody can
+   read down. Without it every row starts at a different place, and a list of
+   sixty is a list nobody scans. */
+.rows > button.fold .who,
+.rows > .folded > button.fold .who { color: var(--primary); width: 12ch; flex: none; }
+.rows > button.fold .subject,
+.rows > .folded > button.fold .subject {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* The filter over the whole store. It sits above the cards rather than inside
+   one, because it filters all of them — so it takes the top rule off the compose
+   layout it borrows, which is there to separate a form from the thing above it. */
+form.filter { border-top: none; padding-top: 0; }
+form.filter p { margin: .3rem 0 0; }
 
 .card > .h2 .badge, .meta .badge { margin-left: 1ch; }
 .name .badge { margin-left: 1ch; color: var(--muted); }
@@ -785,11 +814,17 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   /* An account list of one column needs no fixed width. */
   .grid.users { grid-template-columns: 1fr; }
 
-  /* Who has read what is a table, and a table of four columns does not fit a
-     phone at any font size. Dropping a column would be dropping the answer, so
-     it scrolls sideways inside its own box — the same bargain a code block
-     makes. The header scrolls with it, or the columns would lose their names. */
-  .grid.traffic { overflow-x: auto; }
+  /* Who has read what does not fit beside a subject at this width, so it takes
+     the next line rather than being dropped: it is the answer this screen exists
+     to give, and a column that vanishes on a phone is a column somebody trusts
+     and is quietly wrong about. The sender gives up its fixed width here — with
+     two lines per row there is no column left to line up. */
+  .rows > button.fold,
+  .rows > .folded > button.fold { flex-wrap: wrap; }
+  .rows > button.fold .who,
+  .rows > .folded > button.fold .who { width: auto; }
+  .rows > button.fold .note,
+  .rows > .folded > button.fold .note { margin-left: 2ch; width: 100%; }
 
   /* The survey drops its drawn bar on a phone and keeps the number: the bar is
      the comparison and the percentage is the fact, and there is only room for
@@ -809,3 +844,42 @@ html, body { max-width: 100%; overflow-x: hidden; }
    the rule above clipped what stuck out. Everything here wraps; it just has to
    be allowed to. */
 .agent, .agent-head, .clauses, .grants, .grant { min-width: 0; }
+
+/* --- an agent's session ------------------------------------------------- */
+
+/* What `orc view` reported, under the identity it belongs to. The columns line
+   up with the rest of the site's tables rather than being their own shape: this
+   is a terminal, and a terminal has columns. */
+.event {
+  display: grid;
+  grid-template-columns: 9ch 8ch 12ch minmax(20ch, 1fr);
+  gap: 0 1ch;
+  align-items: baseline;
+  padding: .1rem 1ch;
+}
+.event .when { color: var(--muted); }
+.event .verdict { color: var(--success); }
+.event .tool { color: var(--primary); }
+.event .detail { overflow-wrap: anywhere; }
+
+/* A refusal. The word is in the row already — this is what makes it findable
+   while scrolling, not what carries the meaning. */
+.event.blocked .verdict { color: var(--danger); }
+.event.blocked { border-left: 2px solid var(--danger); }
+
+/* The reason sits under the row it explains, across the full width, because it
+   is a sentence and the columns above are not built for one. */
+.event .why { grid-column: 2 / -1; }
+
+/* What was said. Prose, so it wraps and is not gridded. */
+.said { padding: .2rem 1ch .5rem; }
+.said p { margin: 0 0 .3rem; overflow-wrap: anywhere; }
+.said .from-agent { color: var(--text); }
+.said .from-human { color: var(--muted); }
+
+@media (max-width: 40rem) {
+  /* The columns stop being columns: at this width a four-column grid gives the
+     detail six characters, which is not a detail. */
+  .event { grid-template-columns: 9ch 1fr; }
+  .event .tool, .event .detail, .event .why { grid-column: 2 / -1; }
+}

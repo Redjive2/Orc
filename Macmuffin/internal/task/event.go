@@ -45,6 +45,19 @@ const (
 	OpComplete Op = "complete"
 	// OpWorktree binds the task to a git worktree.
 	OpWorktree Op = "worktree"
+	// OpDescribe records that the task's description was written.
+	//
+	// The prose itself is a file beside the task — `description.md` — and not in
+	// this event. A journal is replayed on every command that touches the task, and
+	// a record that carried the whole text would be re-read in full to answer "who
+	// owns this", which is most of what anybody asks. What the journal keeps is what
+	// a journal is for: that it changed, when, and by whom.
+	OpDescribe Op = "describe"
+	// OpUndescribe records that it was removed. Two operations rather than one with
+	// an empty text, because "somebody wrote the spec" and "somebody deleted the
+	// spec" are different things to read in a history — and there is no text here to
+	// tell them apart by.
+	OpUndescribe Op = "describe.clear"
 )
 
 // Ops lists every operation, in the order a help text should show them. It
@@ -53,6 +66,7 @@ func Ops() []Op {
 	return []Op{
 		OpScope, OpPush, OpClaim, OpAssign, OpStatus, OpInvite, OpKick, OpLeave,
 		OpSubAdd, OpSubDone, OpSubDelete, OpComplete, OpWorktree,
+		OpDescribe, OpUndescribe,
 	}
 }
 
@@ -156,6 +170,16 @@ func Complete(by user.Name, at time.Time, forced bool, skipped []Name) (Event, e
 }
 
 // BindWorktree ties the task to a git worktree.
+// Describe records that the description was written. The text is not here.
+func Describe(by user.Name, at time.Time) (Event, error) {
+	return build(Event{op: OpDescribe, by: by, at: at})
+}
+
+// Undescribe records that it was removed.
+func Undescribe(by user.Name, at time.Time) (Event, error) {
+	return build(Event{op: OpUndescribe, by: by, at: at})
+}
+
 func BindWorktree(by user.Name, at time.Time, path string) (Event, error) {
 	return build(Event{op: OpWorktree, by: by, at: at, path: path})
 }
@@ -304,6 +328,16 @@ func (t Task) With(e Event) (Task, error) {
 	switch e.op {
 	case OpScope:
 		out.scope = slices.Clone(e.paths)
+
+	case OpDescribe:
+		out.described = true
+		out.describedAt = e.at
+		out.describedBy = e.by
+
+	case OpUndescribe:
+		out.described = false
+		out.describedAt = e.at
+		out.describedBy = e.by
 
 	case OpPush:
 		if t.Pooled() {

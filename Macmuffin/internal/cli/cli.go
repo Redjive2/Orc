@@ -71,6 +71,11 @@ type App struct {
 	// Identity asks Orc whether the caller is who they claim. Nil uses the
 	// real `orc` binary; a test answers for itself.
 	Identity control.Verifier
+	// Operator asks Orc whether the caller is the fleet's operator, which is
+	// what gives them the say over a task nobody owns. Nil uses the real `orc`
+	// binary; a test answers for itself. It is asked lazily — see permit — so a
+	// command that never meets an unowned task never runs it.
+	Operator control.Operating
 
 	// out and err are the resolved palettes, filled in by defaults(). They are
 	// resolved before anything else runs so that a failure on the way to a
@@ -245,6 +250,8 @@ func (a App) route(command string, rest []string) error {
 		return a.scope(rest)
 	case "worktree":
 		return a.worktree(rest)
+	case "describe":
+		return a.describe(rest)
 	case "rebind":
 		return a.rebind(rest)
 	case "check-scope":
@@ -283,6 +290,10 @@ type session struct {
 	// it, because "these permissions rest on an unchecked claim" is exactly the
 	// sort of thing a health check exists to say out loud.
 	verified bool
+
+	// standing memoises whether the caller is the fleet's operator. A pointer,
+	// because a session is passed by value and the answer costs a subprocess.
+	standing *standing
 }
 
 // verify asks Orc whether the claimed identity is the credential's real one.
@@ -345,7 +356,8 @@ func (a App) begin() (session, error) {
 	if err != nil {
 		return session{}, fault.Usage{Reason: err.Error()}
 	}
-	got := session{app: a, store: s, who: cred.Name(), verified: verified, paint: style.New(cfg.Palette)}
+	got := session{app: a, store: s, who: cred.Name(), verified: verified,
+		standing: &standing{}, paint: style.New(cfg.Palette)}
 	got.drain()
 	return got, nil
 }

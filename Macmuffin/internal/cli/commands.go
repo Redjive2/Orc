@@ -88,7 +88,7 @@ func (a App) push(args []string) error {
 	}
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Push); err != nil {
+		if err := s.permit(current, policy.Push); err != nil {
 			return task.Event{}, err
 		}
 		return task.Push(s.who, s.store.Now())
@@ -121,7 +121,7 @@ func (a App) claim(args []string) error {
 
 	alreadyMine := false
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Claim); err != nil {
+		if err := s.permit(current, policy.Claim); err != nil {
 			return task.Event{}, err
 		}
 		// Claiming a task you already own is a no-op, reported as one rather
@@ -214,7 +214,19 @@ func (a App) info(args []string) error {
 		return err
 	}
 	if asJSON {
-		return a.emitJSON(taskJSON(got, true))
+		shape := taskJSON(got, true)
+		// The prose travels with `info` and not with the board. A description that
+		// cannot be read costs the text and not the answer: the rest of the card is
+		// still what the caller asked for, and `muff describe` is where a broken
+		// one is diagnosed.
+		if got.Described() {
+			if text, found, err := s.store.Description(name); err == nil && found {
+				shape.Description = text
+			} else if err != nil {
+				a.note("the description of %s could not be read: %v", name, err)
+			}
+		}
+		return a.emitJSON(shape)
 	}
 	out, err := render.Card(got, s.palette(), a.width())
 	if err != nil {
@@ -253,7 +265,7 @@ func (a App) scope(args []string) error {
 	entries := s.app.directoriesAsPrefixes(set.Entries())
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Scope); err != nil {
+		if err := s.permit(current, policy.Scope); err != nil {
 			return task.Event{}, err
 		}
 		return task.Scope(s.who, s.store.Now(), entries)
@@ -324,7 +336,7 @@ func (a App) worktree(args []string) error {
 	}
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Worktree); err != nil {
+		if err := s.permit(current, policy.Worktree); err != nil {
 			return task.Event{}, err
 		}
 		return task.BindWorktree(s.who, s.store.Now(), wt.Root())
@@ -452,7 +464,7 @@ func (a App) status(args []string) error {
 
 	var before task.Status
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Status); err != nil {
+		if err := s.permit(current, policy.Status); err != nil {
 			return task.Event{}, err
 		}
 		before = current.Status()
@@ -494,7 +506,7 @@ func (a App) sub(args []string, subName string) error {
 	}
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.SubAdd); err != nil {
+		if err := s.permit(current, policy.SubAdd); err != nil {
 			return task.Event{}, err
 		}
 		return task.AddSub(s.who, s.store.Now(), sub)
@@ -544,7 +556,7 @@ func (a App) complete(args []string) error {
 
 	var skipped []task.Name
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Complete); err != nil {
+		if err := s.permit(current, policy.Complete); err != nil {
 			return task.Event{}, err
 		}
 		skipped = nil
@@ -588,7 +600,7 @@ func (s session) completeSub(name task.Name, subName string) error {
 	}
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.SubDone); err != nil {
+		if err := s.permit(current, policy.SubDone); err != nil {
 			return task.Event{}, err
 		}
 		return task.DoneSub(s.who, s.store.Now(), sub)
@@ -645,7 +657,7 @@ func (a App) deleteTask(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := policy.Allows(s.who, current, policy.Delete); err != nil {
+	if err := s.permit(current, policy.Delete); err != nil {
 		return err
 	}
 
@@ -699,7 +711,7 @@ func (s session) deleteSub(name task.Name, subName string) error {
 	}
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.SubDelete); err != nil {
+		if err := s.permit(current, policy.SubDelete); err != nil {
 			return task.Event{}, err
 		}
 		return task.DeleteSub(s.who, s.store.Now(), sub)
@@ -769,7 +781,7 @@ func (a App) assign(args []string) error {
 	}
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Assign); err != nil {
+		if err := s.permit(current, policy.Assign); err != nil {
 			return task.Event{}, err
 		}
 		return task.Assign(s.who, s.store.Now(), who)
@@ -828,7 +840,7 @@ func (a App) membership(rawTask, rawAgent string, action policy.Action) error {
 	}
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, action); err != nil {
+		if err := s.permit(current, action); err != nil {
 			return task.Event{}, err
 		}
 		if action == policy.Invite {
@@ -896,7 +908,7 @@ func (a App) leave(args []string) error {
 	}
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Leave); err != nil {
+		if err := s.permit(current, policy.Leave); err != nil {
 			return task.Event{}, err
 		}
 		return task.Leave(s.who, s.store.Now())

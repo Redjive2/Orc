@@ -79,6 +79,7 @@ func usage(p style.Palette) string {
 	verb("orc employ <identity> [--model m] [--effort e]", "put it on the work list and start it")
 	verb("orc fire <identity> [--yes]", "take it off; --yes if a session is live")
 	verb("orc tend [--watch <dur>]", "reconcile the work list with what is running")
+	verb("orc view <identity>", "what it has been doing, without joining it")
 	verb("orc attach <identity>", "orc's own live view of the session")
 	verb("orc attach <identity> --direct", "hand your terminal over; ^\\ d detaches")
 	verb("orc poke <identity> [message]", "type into it without attaching")
@@ -146,7 +147,7 @@ func usage(p style.Palette) string {
 	line("  %s %s", p.Setting("tools:    "), p.Muted(strings.Join(model.ToolNames(), " ")))
 	// The one kind that refuses by default, so the one whose absence has to be
 	// printed: every other list here says what a clause could add.
-	line("  %s %s", p.Setting("no clause:"), p.Muted(strings.Join(model.Innocuous(), " ")))
+	line("  %s %s", p.Setting("no clause:"), p.Muted(strings.Join(model.InnocuousWords(), " ")))
 	line("  %s runs nothing but those. a line that hides what it runs —", p.Value("shell"))
 	line("  %s, %s, %s — needs %s.",
 		p.Value("$(…)"), p.Value("sh -c"), p.Value("xargs"), p.Value("shell(**)"))
@@ -265,7 +266,7 @@ func brief(p style.Palette) string {
 	line("")
 	group("the fleet", "bootstrap", "new", "remove")
 	group("who may what", "assign", "grant", "revoke", "move")
-	group("running them", "employ", "fire", "tend", "budget", "attach", "poke", "refresh")
+	group("running them", "employ", "fire", "tend", "budget", "view", "attach", "poke", "refresh")
 	group("reading it", "status", "list", "introspect", "check-control", "check-permission",
 		"env", "verify", "doctor")
 	group("yours", "owner")
@@ -282,7 +283,7 @@ func verbs() []string {
 	return []string{
 		"bootstrap", "new", "assign", "remove", "grant", "revoke", "move",
 		"status", "list", "budget", "model", "introspect", "check-control", "check-permission", "env", "verify",
-		"doctor", "owner", "employ", "fire", "tend", "attach", "poke", "wake", "refresh",
+		"doctor", "owner", "employ", "fire", "tend", "view", "attach", "poke", "wake", "refresh",
 		"workspace", "instruct", "help",
 	}
 }
@@ -518,6 +519,20 @@ var topics = map[string]topic{
 			"--direct hands your terminal to the real Claude session. Both leave it\n" +
 			"running when you go.",
 		examples: []string{"orc attach ember", "orc attach ember --direct"},
+	},
+	"view": {
+		forms: []string{"orc view <identity>", "orc view <identity> --lines 50 --json"},
+		does:  "what it has been doing, without joining it",
+		detail: "The same two sources `attach` draws — orc's event journal and Claude's\n" +
+			"transcript — printed once and done with. Nothing is opened, nothing is\n" +
+			"written, and no terminal is taken over, so it is safe to run against an\n" +
+			"agent mid-turn and it works down a pipe.\n\n" +
+			"Use it to check on several agents in turn, or to find out why one went\n" +
+			"quiet. `attach` is the one to sit down with; this is the one to glance at.\n\n" +
+			"--lines changes how much of each source is shown. --json is the same\n" +
+			"thing for another program, and is what cq reads to show a session in the\n" +
+			"browser.",
+		examples: []string{"orc view ember", "orc view ember --lines 50"},
 	},
 	"poke": {
 		forms: []string{"orc poke <identity> [message]"},

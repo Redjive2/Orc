@@ -37,7 +37,9 @@ type taskBody struct {
 	// so does this.
 	Paths []string `json:"paths,omitempty"`
 	// Path is the worktree.
-	Path       string `json:"path,omitempty"`
+	Path string `json:"path,omitempty"`
+	// Text is a description: the whole new markdown, replacing whatever was there.
+	Text       string `json:"text,omitempty"`
 	Priority   int    `json:"priority,omitempty"`
 	Difficulty int    `json:"difficulty,omitempty"`
 	Status     int    `json:"status,omitempty"`
@@ -114,6 +116,19 @@ func (s *Server) kickFromTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) scopeTask(w http.ResponseWriter, r *http.Request) {
 	s.taskAction(w, r, protocol.OpTaskScope, func(b taskBody, a *protocol.Args) { a.Paths = b.Paths })
+}
+
+// describeTask replaces the prose that says what the work is.
+//
+// PUT rather than POST: it replaces a whole document, and the same body twice lands
+// in the same place. DELETE clears it — a description removed is not a description
+// set to nothing, and the queue has to be able to say which happened.
+func (s *Server) describeTask(w http.ResponseWriter, r *http.Request) {
+	s.taskAction(w, r, protocol.OpTaskDescribe, func(b taskBody, a *protocol.Args) { a.Text = b.Text })
+}
+
+func (s *Server) undescribeTask(w http.ResponseWriter, r *http.Request) {
+	s.taskAction(w, r, protocol.OpTaskDescribeClear, nil)
 }
 
 func (s *Server) worktreeTask(w http.ResponseWriter, r *http.Request) {

@@ -150,6 +150,14 @@ func Meter(t task.Task) string {
 // Card renders one task in full: metadata in a titled box, scope as an aligned
 // list, and subtasks as a checklist — so the state of the work is visible
 // without reading it.
+// describedLabel says whether the task has a description, and where to read it.
+func describedLabel(t task.Task) string {
+	if !t.Described() {
+		return "none yet — `muff describe " + t.Name().String() + " --edit`"
+	}
+	return "by " + t.DescribedBy().String() + " — `muff describe " + t.Name().String() + "` reads it"
+}
+
 func Card(t task.Task, palette style.Palette, width int) (string, error) {
 	if t.Name().Zero() {
 		return "", fault.Internal{Where: "render.Card", Detail: "no task given"}
@@ -183,6 +191,11 @@ func Card(t task.Task, palette style.Palette, width int) (string, error) {
 	if wt, bound := t.Worktree(); bound {
 		fields = append(fields, [2]string{"worktree", wt})
 	}
+	// The description is a field rather than a section: the card is a summary, and
+	// the prose can be pages. What belongs here is that there *is* one and how to
+	// read it — a card that quietly omitted a task's specification would be a card
+	// somebody reads instead of the spec.
+	fields = append(fields, [2]string{"described", describedLabel(t)})
 
 	label := 0
 	for _, f := range fields {

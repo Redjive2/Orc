@@ -36,6 +36,7 @@ type rig struct {
 	mail     *mailbox
 	control  control.Check
 	identity control.Verifier
+	operator control.Operating
 }
 
 // mailbox stands in for the mailman binary. No test execs anything.
@@ -104,6 +105,11 @@ func newRig(t *testing.T) *rig {
 		identity: func(user.Name) error {
 			return control.Unverifiable{Reason: "no authority was configured for this test"}
 		},
+		// And no fleet, so nobody is the operator. A test about that standing
+		// answers for itself; every test that predates it sees what it always saw.
+		operator: func(user.Name) (bool, error) {
+			return false, control.Unasked{Reason: "no fleet was configured for this test"}
+		},
 	}
 }
 
@@ -137,6 +143,7 @@ func (r *rig) run(who string, args ...string) result {
 		Notify:   r.mail.run,
 		Control:  r.control,
 		Identity: r.identity,
+		Operator: r.operator,
 	}, args)
 
 	return result{code: code, stdout: out.String(), stderr: errOut.String()}

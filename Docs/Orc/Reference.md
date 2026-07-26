@@ -254,14 +254,38 @@ the reverse: with no `shell` clause an identity may run only these, and nothing
 else at all.
 
 ```
-basename  dirname  echo  false  printf  pwd  true
+basename  dirname  echo  false  mailman (not mailman admin)  printf  pwd  true
 ```
 
-They are the commands that cannot change anything and cannot tell an agent
-something it does not already have. `ls` is deliberately not among them — it
-discloses what is on a disk the agent may not be allowed to read — and neither
-are `cat`, `head` or `tail`, which read files and would be a second path around
-the `read(…)` clause that is supposed to decide that.
+A command earns a place there one of two ways.
+
+Most of them **cannot do anything**: `echo` and `printf` write to a stream the
+agent already owns, `pwd`, `basename` and `dirname` are string arithmetic on a
+path it already knows, and `true` and `false` are control flow. None takes a
+path, so none can be turned into a file read by choosing a clever argument. `ls`
+is deliberately not among them — it discloses what is on a disk the agent may not
+be allowed to read — and neither are `cat`, `head` or `tail`, which read files
+and would be a second path around the `read(…)` clause that is supposed to decide
+that.
+
+`mailman` is there for the other reason: it **decides for itself, against the
+same identity**. Every command it takes is authenticated against the caller's own
+key, and shows that caller its own mailbox and no other, so a `shell(mailman)`
+clause would not narrow anything that mailman has not already decided. It also
+has to be free, because mail is how an agent is told what to do and how it says
+it is done: a fleet where reading that took a grant is a fleet where a new
+identity is deaf until somebody notices.
+
+The exception is `mailman admin`, which is the one part that does *not*
+authenticate — it has to be able to bootstrap a store that has no identities in
+it yet — and which can name the owner who reads the store whole. It needs a
+clause like anything else, and `shell(mailman)` covers it. In an orc fleet you
+should not need it: `orc new identity` provisions the mailbox for you.
+
+Because the default set does not depend on the store, it survives losing it. An
+agent whose permissions cannot be read at all may still run these commands — and
+that is deliberate, because such an agent is exactly the one that needs to report
+what happened. Everything else still stops.
 
 A clause names commands as they are typed. Matching is on the base name of what a
 line actually runs, so `shell(rm)` covers `/bin/rm`, and `cd x && rm y` is a `rm`.

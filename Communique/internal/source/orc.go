@@ -163,7 +163,58 @@ func (o *Orc) Fleet(ctx context.Context) protocol.Fleet {
 			fleet.Prompts = prompts
 		}
 	}
+
+	fleet.Sessions = o.sessions(ctx, fleet.Identities)
 	return fleet
+}
+
+// SessionLines is how much of each agent's session travels.
+//
+// Smaller than `orc view`'s own default, and for a different reason: at a terminal
+// the limit is a screenful, and here it is a snapshot that goes over the network
+// every five minutes for every machine in the fleet. Twelve is enough to see what
+// an agent is doing and to read why something was refused, which is what the panel
+// is consulted for.
+const SessionLines = 12
+
+// sessions asks `orc view` about each employed identity.
+//
+// One call per agent rather than one for the fleet, because that is the command
+// that exists and adding a bulk form to orc for cq's convenience would put a
+// second, subtly different collector in the tool that owns the data.
+//
+// Only the employed. An identity with no session has nothing to show, and asking
+// about all of them would spend a subprocess each per sync to learn that — on a
+// fleet of thirty, most of them idle, that is the difference between a sync and a
+// stall.
+//
+// Every failure here is silent and costs one agent's pane. The fleet is already
+// collected at this point; refusing to publish it because one session's feed would
+// not read would trade the whole panel for a corner of it.
+func (o *Orc) sessions(ctx context.Context, ids []protocol.FleetID) []protocol.FleetSession {
+	var out []protocol.FleetSession
+	for _, id := range ids {
+		if !id.Employed {
+			continue
+		}
+		body, err := o.run(ctx, "view", id.Name, "--json", "--lines", strconv.Itoa(SessionLines))
+		if err != nil {
+			continue
+		}
+		var got protocol.FleetSession
+		if err := decodeJSON(body, &got, o.command()+" view"); err != nil {
+			continue
+		}
+		// Checked before it is kept, not only when the whole snapshot is validated
+		// on the way out. A session that decodes but says nothing — no identity —
+		// would otherwise make the entire mirror unpublishable, which is a whole
+		// machine's mail lost to one agent's pane.
+		if err := got.Validate(); err != nil {
+			continue
+		}
+		out = append(out, got)
+	}
+	return out
 }
 
 func (o *Orc) environment() []string {
@@ -283,7 +334,7 @@ func (o *Orc) Apply(ctx context.Context, action protocol.Action) error {
 		// A file rather than stdin because the injected runner has no stdin, and
 		// widening that interface for one operation would change every fake in
 		// every test that uses it.
-		path, done, err := tempPrompt(a.Text)
+		path, done, err := tempMarkdown("cq-instruct-*.md", a.Text)
 		if err != nil {
 			return err
 		}
@@ -319,15 +370,19 @@ func instructTarget(a protocol.Args) []string {
 	return args
 }
 
-// tempPrompt writes prompt text where `orc instruct --set` can read it, and returns
-// how to remove it.
+// tempMarkdown writes prose where a `--set` flag can read it, and returns how to
+// remove it.
 //
-// 0600 and in the process's own temporary directory: it is somebody's standing
-// instructions, and it exists for the length of one exec.
-func tempPrompt(text string) (string, func(), error) {
-	f, err := os.CreateTemp("", "cq-instruct-*.md")
+// Every tool cq drives takes its prose from a file rather than from an argument, and
+// so does cq: a command line is size-limited and visible in `ps` to everyone on the
+// machine. A standing instruction and a task's description are both somebody's
+// words, and neither should be readable by whoever happens to be logged in.
+//
+// 0600 and in the process's own temporary directory, for the length of one exec.
+func tempMarkdown(pattern, text string) (string, func(), error) {
+	f, err := os.CreateTemp("", pattern)
 	if err != nil {
-		return "", func() {}, fault.IO{Op: "create", Subject: "a temporary file for the prompt", Err: err}
+		return "", func() {}, fault.IO{Op: "create", Subject: "a temporary file for the text", Err: err}
 	}
 	done := func() { _ = os.Remove(f.Name()) }
 

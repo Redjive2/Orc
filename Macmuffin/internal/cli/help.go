@@ -39,6 +39,7 @@ var commands = []entry{
 	{"info", "<task>", "one task in full"},
 	{"scope", "<task> <paths...>", "limit editing to these paths"},
 	{"worktree", "<task> <path>", "bind the task to a git worktree"},
+	{"describe", "<task> [--set <f>|--edit|--clear]", "what the work is, in markdown"},
 	{"rebind", "<old> <new>", "follow worktrees that moved"},
 	{"check-scope", "<paths...>", "exit 0 in scope, 9 outside"},
 	{"create", "<task> --sub <name>", "add a subtask"},
@@ -87,7 +88,12 @@ var topics = map[string]topic{
 	"claim": {
 		detail: "Takes an unowned task as your own. It is a compare-and-set: two agents\n" +
 			"scanning the same pool will claim within milliseconds of each other, and\n" +
-			"the second is told who won rather than quietly sharing it.",
+			"the second is told who won rather than quietly sharing it.\n\n" +
+			"The fleet's operator does not have to. A task nobody owns answers to the\n" +
+			"operator as though they held it — scope it, complete it, throw it away —\n" +
+			"so retiring somebody's stale task does not mean first putting your name\n" +
+			"on work you are not doing. A task that *is* owned stays its owner's, and\n" +
+			"a draft stays private. With no orc to ask, nobody is the operator.",
 		examples: []string{"muff claim fix-the-parser"},
 	},
 	"pool": {
@@ -122,6 +128,29 @@ var topics = map[string]topic{
 			"A worktree already bound to another live task is refused — an ambiguous\n" +
 			"lookup would silently enforce the wrong scope.",
 		examples: []string{"muff worktree fix-the-parser .", "muff worktree fix-the-parser ../parser-tree"},
+	},
+	"describe": {
+		detail: "What the work actually is, in prose. Everything else a task carries\n" +
+			"is a fact with a shape — a score, an owner, a set of paths, a list of\n" +
+			"steps — and none of them says what to do.\n" +
+			"\n" +
+			"It is markdown in a file beside the task, `description.md`, so it can be\n" +
+			"edited in an editor and read in a browser. The task's journal records\n" +
+			"that it changed and who changed it; the text itself never goes in there.\n" +
+			"\n" +
+			"With no flag it prints the description and nothing else, so it\n" +
+			"redirects. --set takes a file, or `-` for standard input. --edit opens\n" +
+			"$EDITOR on the real file. --clear removes it.\n" +
+			"\n" +
+			"Writing one is the owner's, and the author's while it is still a draft:\n" +
+			"the same rule as `scope`, because both say what the task *is* rather\n" +
+			"than how it is going.",
+		examples: []string{
+			"muff describe fix-the-parser",
+			"muff describe fix-the-parser --edit",
+			"muff describe fix-the-parser --set spec.md",
+			"muff describe fix-the-parser > spec.md",
+		},
 	},
 	"rebind": {
 		detail: "Follows a directory that moved. Every binding at or under <old> is\n" +
@@ -435,7 +464,7 @@ var groups = []struct {
 	name  string
 	verbs []string
 }{
-	{"making", []string{"create", "push", "scope", "worktree", "rebind"}},
+	{"making", []string{"create", "push", "scope", "describe", "worktree", "rebind"}},
 	{"the board", []string{"pool", "info", "status", "complete", "delete"}},
 	{"who has it", []string{"claim", "assign", "invite", "kick", "leave"}},
 	{"checking", []string{"check-scope", "verify"}},

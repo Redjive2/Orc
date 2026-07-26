@@ -52,30 +52,59 @@ var interpreters = map[string]bool{
 	"sh": true, "source": true, "sudo": true, "xargs": true, "zsh": true,
 }
 
-// Commands returns every command name a line would run, in the order they appear.
+// Invocation is one command a line would run: the name being gated, and what it
+// was handed.
+//
+// The arguments are carried because a couple of commands are not one privilege.
+// `mailman` reads the caller's own mail and needs no clause; `mailman admin`
+// provisions mailboxes and does — see model.InnocuousRun. Nothing else looks at
+// them, and in particular no path clause is decided here.
+type Invocation struct {
+	Name string
+	Args []string
+}
+
+// Runs returns every command a line would run, in the order they appear.
 //
 // Names are lowercased base names, so `/usr/bin/ls` and `ls` are one word. A line
-// this cannot read returns whatever it did find plus `opaque` — see Opaque.
-func Commands(line string) []string {
-	var out []string
+// this cannot read is handled by Opaque rather than here.
+func Runs(line string) []Invocation {
+	var out []Invocation
 	for _, segment := range splitCommands(line) {
-		if name := commandOf(segment); name != "" {
-			out = append(out, name)
+		if run, ok := runOf(segment); ok {
+			out = append(out, run)
 		}
 	}
 	return out
 }
 
-// commandOf finds the name one command segment runs.
-//
-// A segment that only changes directory runs nothing, and says so with the empty
-// string. `cd x && ls` is two segments and one command.
+// Commands returns just the names, for callers that gate on nothing else.
+func Commands(line string) []string {
+	runs := Runs(line)
+	out := make([]string, 0, len(runs))
+	for _, r := range runs {
+		out = append(out, r.Name)
+	}
+	return out
+}
+
+// commandOf finds the name one command segment runs, or the empty string.
 func commandOf(segment string) string {
-	for i, field := range strings.Fields(segment) {
+	run, _ := runOf(segment)
+	return run.Name
+}
+
+// runOf finds what one command segment runs, and what it hands it.
+//
+// A segment that only changes directory runs nothing, and says so with false.
+// `cd x && ls` is two segments and one command.
+func runOf(segment string) (Invocation, bool) {
+	fields := strings.Fields(segment)
+	for i, field := range fields {
 		word := unquote(field)
 
 		if i == 0 && strings.ToLower(filepath.Base(word)) == "cd" {
-			return ""
+			return Invocation{}, false
 		}
 
 		// `FOO=bar cmd` — an assignment prefixes a command rather than being one.
@@ -90,9 +119,14 @@ func commandOf(segment string) string {
 		if wrappers[name] {
 			continue
 		}
-		return name
+
+		args := make([]string, 0, len(fields)-i-1)
+		for _, rest := range fields[i+1:] {
+			args = append(args, unquote(rest))
+		}
+		return Invocation{Name: name, Args: args}, true
 	}
-	return ""
+	return Invocation{}, false
 }
 
 // Opaque reports whether a line hides what it runs.

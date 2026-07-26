@@ -250,6 +250,8 @@ func (a App) dispatch(args []string) error {
 		return a.tend(rest)
 	case "attach":
 		return a.attach(rest)
+	case "view":
+		return a.view(rest)
 	case "wake":
 		return a.wake(rest)
 	case "poke":

@@ -164,7 +164,7 @@ func (a App) rebindOne(s session, m rebound) error {
 	// Same authority as making the binding in the first place: rebinding is that
 	// operation, aimed at where the directory went.
 	if _, err := s.store.Apply(m.binding.Task, func(current task.Task) (task.Event, error) {
-		if err := policy.Allows(s.who, current, policy.Worktree); err != nil {
+		if err := s.permit(current, policy.Worktree); err != nil {
 			return task.Event{}, err
 		}
 		return task.BindWorktree(s.who, s.store.Now(), wt.Root())

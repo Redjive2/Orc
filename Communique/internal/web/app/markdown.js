@@ -33,6 +33,21 @@ export function render(markdown) {
       continue;
     }
 
+    // A heading. Six levels, and the hashes have to be followed by a space —
+    // `#hashtag` is a word somebody wrote, not a heading they meant.
+    //
+    // It renders as an <h2> and below rather than an <h1>: this prose is *inside* a
+    // page that already has a heading, and a document that started at h1 would put
+    // two of them on one screen and read as two documents to anything that navigates
+    // by structure.
+    const heading = /^(#{1,6}) +(.*)$/.exec(line);
+    if (heading) {
+      const level = Math.min(heading[1].length + 1, 6);
+      out.append(h(`h${level}`, {}, ...inline(heading[2].trim())));
+      i++;
+      continue;
+    }
+
     if (/^[-*+] /.test(line)) {
       const items = [];
       while (i < lines.length && /^[-*+] /.test(lines[i])) {
@@ -46,7 +61,7 @@ export function render(markdown) {
     // A paragraph runs to the next blank line.
     const para = [];
     while (i < lines.length && lines[i].trim() !== "" && !lines[i].startsWith("```")
-           && !/^[-*+] /.test(lines[i])) {
+           && !/^#{1,6} /.test(lines[i]) && !/^[-*+] /.test(lines[i])) {
       para.push(lines[i++]);
     }
     out.append(h("p", {}, ...inline(para.join(" "))));

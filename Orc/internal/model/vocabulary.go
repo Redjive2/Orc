@@ -115,14 +115,27 @@ func KnownTool(word string) bool {
 // Innocuous is what an agent may run with no `shell(...)` clause at all.
 //
 // `shell` is deny by default, so this list is the whole of what an unprivileged
-// agent can do at a prompt. It is short on purpose, and one test decides
-// membership: **could this command, with any arguments, change anything or tell
-// the agent something it does not already have?** If the answer is anything but
-// a flat no, it is not on the list.
+// agent can do at a prompt. It is short on purpose, and a command earns a place
+// on it one of two ways.
 //
-// So `echo` and `printf` are here — they write to a stream the agent already
-// owns. `pwd`, `basename`, `dirname` are string arithmetic on a path the agent
-// already knows. `true` and `false` are control flow.
+// **It cannot do anything.** `echo` and `printf` write to a stream the agent
+// already owns. `pwd`, `basename`, `dirname` are string arithmetic on a path it
+// already knows. `true` and `false` are control flow. None of them takes a path,
+// so none can be turned into a file read by choosing a clever argument.
+//
+// **It decides for itself, against the same identity.** `mailman` authenticates
+// every command against the caller's own key and shows it its own mailbox and no
+// other. A `shell(mailman)` clause would not be narrowing anything — mailman has
+// already asked who is calling and answered accordingly — so requiring one would
+// only mean an agent could be provisioned with a mailbox it was not allowed to
+// open. Mail is how an agent is told what to do and how it says it is done; a
+// fleet where that needs a grant is a fleet where a new identity is deaf until
+// somebody notices.
+//
+// The exception is `mailman admin`, which is the one part that does *not*
+// authenticate — it has to be able to bootstrap a store with no identities in it
+// — and which can hand its caller the whole fleet's mail. It is guarded below, so
+// running it needs a clause like anything else.
 //
 // And the near misses, because the reasons are the interesting part:
 //
@@ -134,16 +147,79 @@ func KnownTool(word string) bool {
 //   - `which` and `env` map the machine, which is reconnaissance.
 //   - `sleep` cannot change anything and is still absent: it spends the one
 //     resource a budget is denominated in.
-//
-// Nothing here takes a path, so nothing here can be turned into a file read by
-// choosing a clever argument.
 func Innocuous() []string {
-	return []string{"basename", "dirname", "echo", "false", "printf", "pwd", "true"}
+	return []string{"basename", "dirname", "echo", "false", "mailman", "printf", "pwd", "true"}
 }
 
-// InnocuousCommand reports whether a command name needs no clause at all.
-func InnocuousCommand(name string) bool {
-	return slices.Contains(Innocuous(), strings.ToLower(strings.TrimSpace(name)))
+// guarded names the subcommand of a default command that the default does not
+// reach, keyed by command.
+//
+// One entry, and a map rather than an `if` because the shape recurs: a tool earns
+// its place on the list by checking its own caller, and the part of it that
+// provisions the tool cannot check anything. Whatever is added next will have the
+// same seam in the same place.
+var guarded = map[string]string{"mailman": "admin"}
+
+// GuardedSubcommand returns the subcommand a default command does not cover, or
+// the empty string. It is here so a refusal and cq's permission editor can say
+// which form of a default command still needs a clause, rather than each keeping
+// its own copy of a fact that decides access.
+func GuardedSubcommand(name string) string {
+	return guarded[strings.ToLower(strings.TrimSpace(name))]
+}
+
+// InnocuousWords is the default set as it should be shown to a person, with the
+// carve-outs spelled out.
+//
+// Every place that prints the list uses this rather than Innocuous, because a
+// list that says `mailman` while `mailman admin` is refused is worse than no
+// list: the reader concludes the gate is broken and runs it again. There are
+// three such places — `orc help permissions`, the hook's refusal, and the
+// vocabulary `orc status --json` hands cq — and they must not each decide how to
+// say it.
+func InnocuousWords() []string {
+	out := make([]string, 0, len(Innocuous()))
+	for _, name := range Innocuous() {
+		if sub := GuardedSubcommand(name); sub != "" {
+			out = append(out, name+" (not "+name+" "+sub+")")
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+// InnocuousRun reports whether an invocation needs no clause at all.
+//
+// It takes the arguments, not just the name, because `mailman` and `mailman
+// admin` are not the same privilege. There is deliberately no name-only version
+// exported: a caller holding one would have to remember to check the subcommand
+// separately, and the failure mode of forgetting is that `mailman admin` runs
+// unpermitted.
+func InnocuousRun(name string, args []string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if !slices.Contains(Innocuous(), name) {
+		return false
+	}
+	sub, ok := guarded[name]
+	if !ok {
+		return true
+	}
+	// The word anywhere in the arguments is enough, rather than the word in the
+	// subcommand's position. Finding the position would mean knowing which global
+	// flags take a separate value — `mailman --key x admin` puts `x` where the
+	// subcommand goes — and a gate that has to track another tool's flags is a
+	// gate that opens the day that tool gains one.
+	//
+	// So it over-matches: `mailman send --to admin` needs a clause it does not
+	// really need. That is the right way round. A false positive costs somebody a
+	// rephrase; a false negative hands out the whole fleet's mail.
+	for _, arg := range args {
+		if strings.EqualFold(strings.TrimSpace(arg), sub) {
+			return false
+		}
+	}
+	return true
 }
 
 // Vocabulary is the lists together, for a caller that has to hand them on —

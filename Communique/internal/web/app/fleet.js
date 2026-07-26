@@ -282,6 +282,9 @@ function identities(f, state, actions) {
     ),
     clauses(id, f.vocabulary),
     grants(id, f, actions),
+    // What it has been doing, when there is a live session to say. Folded, so the
+    // tree stays a tree.
+    session(f, id, state, actions),
     // Structural only. Employing and firing live in `manage › fleet`, because
     // starting an agent is a thing you do to a running fleet, and giving it a
     // role is a thing you do to the shape of one.
@@ -407,4 +410,96 @@ function permissions(f, actions) {
       ) : null,
     );
   });
+}
+
+// --- what an agent has been doing ------------------------------------------
+//
+// `orc view` for each live agent, carried by the snapshot. It is here rather than
+// behind a button because there is nowhere to fetch it from: the server can never
+// reach an agent machine, so this is as live as the last sync and no fresher. The
+// panel says so rather than implying otherwise — a pane that looked live and was
+// twenty minutes old would be worse than one that admits its age.
+
+// sessionOf finds the carried session for an identity.
+export function sessionOf(f, name) {
+  return (f.sessions || []).find((s) => s.identity === name) || null;
+}
+
+// session is the pane under an identity: what it said, then what it did.
+//
+// Folded shut by default. A fleet of eight agents each showing a dozen rows is a
+// page nobody can find an identity in, and the question this panel usually answers
+// — who exists, under whom — is not the one the pane answers.
+export function session(f, id, state, actions) {
+  const got = sessionOf(f, id.name);
+  if (!got) return null;
+
+  const key = `session:${f.machine || ""}:${id.name}`;
+  const open = state && state.open ? Boolean(state.open[key]) : false;
+
+  const summary = h("button", {
+    class: open ? "fold picked" : "fold",
+    "aria-expanded": open ? "true" : "false",
+    onclick: () => actions && actions.toggle(key),
+  },
+    h("span", { class: "twist" }, open ? "▾" : "▸"),
+    h("span", { class: "sect" }, "session"),
+    h("span", { class: "muted note" }, sessionSummary(got)));
+
+  if (!open) return summary;
+  return h("div", { class: "folded" }, summary,
+    h("div", { class: "inner" }, ...sessionBody(got)));
+}
+
+// sessionSummary is the one line worth reading without opening anything: what it
+// is doing, and how much there is to look at.
+function sessionSummary(s) {
+  const bits = [];
+  if (!s.live) bits.push("no session");
+  else bits.push(s.waiting ? "waiting" : "working");
+  if (s.turn) bits.push(`turn ${s.turn}`);
+  if (s.rows && s.rows.length) bits.push(plural(s.rows.length, "event"));
+  // A refusal is the thing somebody scanning this column is looking for, so it is
+  // on the closed row rather than inside the fold.
+  const blocked = (s.rows || []).filter((r) => r.blocked).length;
+  if (blocked > 0) bits.push(`${blocked} blocked`);
+  return bits.join(" · ");
+}
+
+function sessionBody(s) {
+  const out = [];
+  if (s.note) out.push(h("p", { class: "warn" }, s.note));
+
+  if (s.prose && s.prose.length > 0) {
+    out.push(h("p", { class: "muted" }, "said"));
+    out.push(h("div", { class: "said" },
+      ...s.prose.map((p) => h("p", { class: p.who === "assistant" ? "from-agent" : "from-human" },
+        h("span", { class: "muted" }, p.who === "assistant" ? "» " : "· "), p.text))));
+  } else if (!s.prose_available && s.live) {
+    // Told apart from "said nothing": one is an agent that has not spoken, the
+    // other is a transcript that could not be read, and they send somebody to
+    // different places.
+    out.push(h("p", { class: "muted" }, "no transcript to read — `orc attach --direct` shows the session itself"));
+  }
+
+  if (s.rows && s.rows.length > 0) {
+    out.push(h("p", { class: "muted" }, "did"));
+    out.push(h("div", { class: "rows" }, ...s.rows.map(sessionRow)));
+  }
+  if (out.length === 0) out.push(h("p", { class: "muted" }, "nothing recorded yet"));
+  return out;
+}
+
+function sessionRow(r) {
+  return h("div", { class: r.blocked ? "event blocked" : "event" },
+    h("span", { class: "when" }, (r.at || "").slice(11, 19)),
+    // The verdict as a word, never only as a colour: this is the column that says
+    // an agent was refused, and a reader who cannot tell red from green would
+    // otherwise see an ordinary row.
+    h("span", { class: "verdict" }, r.blocked ? "blocked" : (r.verdict || "")),
+    h("span", { class: "tool" }, r.tool || r.kind || ""),
+    h("span", { class: "detail" }, r.detail || ""),
+    // On its own line under what it explains: "blocked" without the reason sends
+    // the reader to the permissions table to find out what they already needed.
+    r.reason ? h("span", { class: "muted why" }, r.reason) : null);
 }

@@ -29,6 +29,68 @@ import (
 // `wake` on any of them is the message sent to an agent that has gone quiet, and the
 // most specific of those wins outright. The browser has to keep them apart because
 // they are edited in the same place and mean opposite things.
+// FleetSession is what an agent has been doing, as `orc view --json` reports it.
+//
+// It travels with the snapshot rather than being fetched, because it has to: the
+// server can never reach an agent machine, so the browser can only ever show what
+// the last sync carried. That is the same bargain as the rest of this file, and it
+// means a session on the website is as stale as the mirror says it is — which the
+// panel states rather than hides.
+//
+// Only *live* sessions are carried, and only their tail. A fleet of twelve agents
+// with a full transcript each would be a snapshot measured in megabytes, sent every
+// five minutes, to show a panel somebody looks at occasionally.
+type FleetSession struct {
+	Identity string `json:"identity"`
+	Role     string `json:"role,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+	Live     bool   `json:"live"`
+	// Waiting is the fact the panel is mostly consulted for: an agent that has
+	// stopped and is waiting to be spoken to looks exactly like one that is
+	// thinking, and only one of them needs a poke.
+	Waiting bool   `json:"waiting"`
+	Turn    int    `json:"turn"`
+	Started string `json:"started,omitempty"`
+
+	Prose          []SessionLine `json:"prose,omitempty"`
+	ProseAvailable bool          `json:"prose_available"`
+	Rows           []SessionRow  `json:"rows,omitempty"`
+	// Note is why this is thinner than it should be, when it is: a feed that would
+	// not parse, a transcript that could not be read. An empty panel reads as an
+	// idle agent, which is the one thing it must not be mistaken for.
+	Note string `json:"note,omitempty"`
+}
+
+// SessionLine is one thing somebody said.
+type SessionLine struct {
+	Who  string `json:"who"`
+	Text string `json:"text"`
+}
+
+// SessionRow is one event from orc's own journal.
+type SessionRow struct {
+	At      string `json:"at"`
+	Turn    int    `json:"turn"`
+	Kind    string `json:"kind"`
+	Tool    string `json:"tool,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+	Verdict string `json:"verdict,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Blocked bool   `json:"blocked,omitempty"`
+}
+
+// Validate checks a session is addressable and bounded.
+func (s FleetSession) Validate() error {
+	if err := checkName("FleetSession", "identity", s.Identity); err != nil {
+		return err
+	}
+	if s.Turn < 0 {
+		return fault.Field("FleetSession", "turn", "turn %d is negative", s.Turn)
+	}
+	return nil
+}
+
 type FleetPrompt struct {
 	Kind string `json:"kind"`
 	// Name is the role or identity it belongs to, empty for the fleet's own.
@@ -64,8 +126,11 @@ type Fleet struct {
 	// them because the tab is an editor rather than a listing, and one that had to
 	// fetch a layer separately could open a prompt somebody changed since the
 	// snapshot.
-	Prompts  []FleetPrompt `json:"prompts,omitempty"`
-	Problems []string      `json:"problems,omitempty"`
+	Prompts []FleetPrompt `json:"prompts,omitempty"`
+	// Sessions are what the live agents have been doing — `orc view` for each,
+	// carried so the browser can show one without reaching the machine.
+	Sessions []FleetSession `json:"sessions,omitempty"`
+	Problems []string       `json:"problems,omitempty"`
 	// Unreachable says why there is no fleet here, when there is a reason worth
 	// telling apart from "this machine runs no agents". An orc that is not
 	// installed and an orc that refused are different problems with different
@@ -217,6 +282,15 @@ func (f Fleet) Validate() error {
 		// an identity with no role yet rather than an error.
 		if err := inRange("FleetID", "authority", id.Authority, 0, 100); err != nil {
 			return err
+		}
+	}
+	if len(f.Sessions) > MaxListItems {
+		return fault.Field("Fleet", "sessions", "%d sessions exceeds the limit of %d",
+			len(f.Sessions), MaxListItems)
+	}
+	for i, sess := range f.Sessions {
+		if err := sess.Validate(); err != nil {
+			return fault.Field("Fleet", "sessions", "[%d]: %v", i, err)
 		}
 	}
 	for i, r := range f.Roles {
