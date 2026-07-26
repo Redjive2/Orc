@@ -8,6 +8,14 @@ import { survey } from "./survey.js";
 import * as routes from "./routes.js";
 import * as check from "./check.js";
 
+// worst picks the entry a reader should be told about when several concern the
+// same thing, in the order the queue tab uses: a refusal outranks anything still
+// on its way. Undefined when there is nothing pending at all.
+function worst(entries) {
+  const rank = (e) => STATES.findIndex((s) => s.state === e.state);
+  return entries.slice().sort((a, b) => rank(a) - rank(b))[0];
+}
+
 // pendingFor finds the queue entries that concern one message, so a reply the
 // user just sent appears beside the thread it belongs to — marked queued.
 export function pendingFor(queue, puid, machine) {
@@ -47,15 +55,22 @@ export function mailbox(state, { box }, actions) {
 // The button sits beside the row rather than inside it, because the row is a
 // link, and a button inside a link is a target nobody can hit reliably.
 function messageLine(m, showMachine, outgoing, state, actions) {
-  const waiting = pendingFor(state.queue, m.puid, m.machine)
-    .some((e) => e.action.op === "reply");
+  // The most alarming one, where there is more than one: a refusal beside a row
+  // that also has a fresh reply waiting is the half worth reading first, and it is
+  // the half the old marker hid. `pendingFor` carries refusals, and every one of
+  // them used to render as "replied" — which is the opposite of what happened.
+  const reply = worst(pendingFor(state.queue, m.puid, m.machine)
+    .filter((e) => e.action.op === "reply"));
 
   return h("div", { class: "line" },
     messageRow(m, showMachine, outgoing),
-    waiting
+    reply
       // Said where the reply was written, rather than only in the status bar: a
       // queued answer that leaves no mark reads as an answer that did not send.
-      ? h("span", { class: "muted replied" }, "replied")
+      // Which of the unfinished states it is in belongs here too — "waiting" is
+      // this browser's turn and "with the agent" is not, and somebody deciding
+      // whether to write it again needs to know whose turn it is.
+      ? h("span", { class: "muted replied" }, `reply ${words(reply.state).title}`)
       : h("button", {
         class: "quiet reply",
         // The subject is in the label because a screen reader hears a column of
@@ -169,15 +184,29 @@ function card(m) {
 
 // A queued action is drawn as what it is: something that has not happened yet.
 // The word carries the meaning, not only the colour.
+//
+// Which word: waiting to be collected and waiting to be reported on are different
+// facts, and this used to call both of them "queued". They are different in the way
+// that matters to somebody deciding whether to worry — the first is cq's turn and a
+// sync fixes it, the second is the agent machine's turn and nothing here will. The
+// queue tab has always told them apart; every other screen said "queued" until a
+// result arrived, so an action stuck with an agent was indistinguishable from one
+// that had not left.
+//
+// The words come from the queue tab's own table, so the two screens cannot drift
+// into calling the same state different things.
 function queuedCard(entry) {
-  const failed = entry.state === "failed";
-  return h("article", { class: `card ${failed ? "failed" : "pending"}` },
+  const said = words(entry.state);
+  const wrong = entry.state === "failed" || entry.state === "in_doubt";
+  return h("article", { class: `card ${wrong ? "failed" : "pending"}` },
     h("h2", {}, verb(entry.action.op)),
     h("div", { class: "meta" },
-      h("span", { class: "badge" }, failed ? "failed" : "queued"),
-      failed
+      h("span", { class: "badge" }, said.title),
+      // A refusal carries its own reason, which is worth more than the general
+      // note about what a refusal is.
+      entry.state === "failed"
         ? ` ${entry.error || "the agent refused it"}`
-        : " will leave on the next sync"),
+        : ` ${said.note}`),
     entry.action.args && entry.action.args.body
       ? h("div", { class: "body" }, render(entry.action.args.body))
       : null,
@@ -383,23 +412,45 @@ export function compose(state, actions) {
     // Nothing leaves the browser until the agent machine next syncs, so the
     // form says so rather than letting "queued" look like "sent".
     h("p", { class: "muted" }, "queued here; it leaves on the next sync"),
+    // "not gone yet" rather than "waiting", now that waiting is one of the two
+    // states a card underneath can be in and the other is not it.
     ...(waiting.length > 0
-      ? [h("h2", {}, "waiting"), ...waiting.map((e) => queuedCard(e))]
+      ? [h("h2", {}, "not gone yet"), ...waiting.map((e) => queuedCard(e))]
       : []),
   ];
 }
 
 // --- the queue -----------------------------------------------------------
 
+// STATE_WORDS is what each state is called, and it is the only place any screen
+// gets that from.
+//
+// It mirrors store.State, whose distinctions are the ones worth showing: `queued`
+// and `sent` are both "not finished", but one is waiting on a sync from here and
+// the other is with the agent, and `failed` and `in_doubt` demand opposite
+// responses — one can simply be retried and one cannot.
+//
+// `sent` is deliberately not called "sent". In a mailbox that word means delivered
+// to a person, and this means collected by a machine.
+const STATE_WORDS = {
+  failed: { title: "refused", note: "nothing happened, so it can be tried again" },
+  in_doubt: { title: "in doubt", note: "started, and its outcome was never reported" },
+  queued: { title: "waiting", note: "leaves on the next sync" },
+  sent: { title: "with the agent", note: "collected, and not yet reported on" },
+  done: { title: "done", note: "" },
+};
+
+// words is the fallback for a state this build has never heard of — a newer server
+// with a state added since. Naming it is better than drawing a card with a blank
+// badge, and far better than throwing inside a render.
+function words(state) {
+  return STATE_WORDS[state] || { title: String(state || "unknown"), note: "" };
+}
+
 // STATES orders the queue by what the reader can do about each row: the things
 // needing a decision first, then what is on its way, then history.
-const STATES = [
-  { state: "failed", title: "refused", note: "nothing happened, so it can be tried again" },
-  { state: "in_doubt", title: "in doubt", note: "started, and its outcome was never reported" },
-  { state: "queued", title: "waiting", note: "leaves on the next sync" },
-  { state: "sent", title: "with the agent", note: "collected, and not yet reported on" },
-  { state: "done", title: "done", note: "" },
-];
+const STATES = ["failed", "in_doubt", "queued", "sent", "done"].map(
+  (state) => ({ state, ...STATE_WORDS[state] }));
 
 // Sending twice is a second message to a real person. cq cannot tell whether an
 // interrupted send arrived, so it does not offer to repeat one — the same rule
@@ -425,9 +476,21 @@ export function queue(state, actions) {
     return [h("p", { class: "muted" }, "nothing queued")];
   }
 
+  // Every group this build knows, and then one for anything it does not.
+  //
+  // Without the last one a row in a state added since this browser was built is
+  // filtered out by every group and drawn by none — the tab says "nothing queued"
+  // over a queue with something in it, which is the one thing this screen exists
+  // not to do. It is listed last because an unrecognised state is not a call to
+  // action; it is a note that this page is older than the server.
+  const unknown = entries.filter((e) => !STATE_WORDS[e.state]);
+  const groups = unknown.length === 0 ? STATES
+    : [...STATES, { state: null, title: "not recognised",
+      note: "queued in a state this page does not know — it was built before the server was" }];
+
   const out = [];
-  for (const group of STATES) {
-    const rows = entries.filter((e) => e.state === group.state);
+  for (const group of groups) {
+    const rows = group.state === null ? unknown : entries.filter((e) => e.state === group.state);
     if (rows.length === 0) continue;
 
     out.push(h("div", { class: "row-actions" },

@@ -220,6 +220,14 @@ have happened. Marking mail read twice is harmless, so those can be retried;
 a send cannot, because it may already be in somebody's inbox. cq refuses that one
 and says to check my sent mail instead.
 
+An unfinished action is in one of two states, and the site tells them apart
+everywhere it mentions one — beside the message it was written from as well as on
+the queue page. **waiting** means no sync has collected it yet, which a sync from
+the agent machine fixes; **with the agent** means a sync took it and has not
+reported back, which nothing on this side will change. It is never called *sent*:
+in a mailbox that word means a person received it, and this means a machine picked
+it up.
+
 The project is stored at `Orc/Communique/go.mod`.
 
 ## Reading the repository

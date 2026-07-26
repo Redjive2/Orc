@@ -69,6 +69,85 @@ test("an unrecognised box falls back to the inbox rather than throwing", () => {
   assert.match(text(views.mailbox(state, { box: "nonsense" })), /no mail/);
 });
 
+// --- whose turn an unfinished action is on ------------------------------
+
+// Waiting for a sync to collect it and waiting for the agent to report on it are
+// different facts, and every screen but the queue tab used to call both "queued".
+// They differ in the only way a reader cares about: one is fixed by a sync from
+// here, and the other is somebody else's machine taking its time.
+
+const reply = (state) => ({
+  action: { id: "a".repeat(32), op: "reply", machine: "studio", args: { puid: 0, body: "sure" } },
+  state,
+});
+
+const withQueue = (...entries) => ({ ...state, queue: entries });
+const detail = (m) => ({ message: m, thread: [] });
+const inboxItem = state.inbox[0];
+
+test("a reply waiting to be collected and one with the agent read differently", () => {
+  const here = text(views.message(withQueue(reply("queued")), detail(inboxItem), {}));
+  const there = text(views.message(withQueue(reply("sent")), detail(inboxItem), {}));
+
+  assert.match(here, /waiting/);
+  assert.match(here, /leaves on the next sync/);
+
+  assert.match(there, /with the agent/);
+  assert.match(there, /not yet reported on/);
+  assert.doesNotMatch(there, /leaves on the next sync/,
+    "an action the agent already has is not waiting on a sync from here");
+});
+
+// The word for `sent` matters more than the others. In a mailbox "sent" means it
+// reached a person; here it means a machine picked it up, and the two are a long
+// way apart when somebody is deciding whether to write the message again.
+test("an action the agent holds is never called sent", () => {
+  const out = text(views.message(withQueue(reply("sent")), detail(inboxItem), {}));
+  assert.doesNotMatch(out, /\bsent\b/);
+});
+
+// The marker beside a mailbox row said "replied" for every pending state — which
+// for a refusal is the opposite of what happened.
+test("the row says which state the reply is in", () => {
+  for (const [entry, want] of [
+    [reply("queued"), /reply waiting/],
+    [reply("sent"), /reply with the agent/],
+    [{ ...reply("failed"), error: "no such mailbox" }, /reply refused/],
+  ]) {
+    assert.match(text(views.mailbox(withQueue(entry), { box: "inbox" }, {})), want);
+  }
+});
+
+test("a refusal outranks a reply still on its way", () => {
+  const out = text(views.mailbox(
+    withQueue(reply("queued"), { ...reply("failed"), error: "no such mailbox" }),
+    { box: "inbox" }, {}));
+  assert.match(out, /reply refused/, "the refusal was hidden behind a later reply");
+});
+
+// Both screens take their words from one table, so neither can start calling a
+// state something the other does not.
+test("the queue tab and the cards agree on what a state is called", () => {
+  for (const state of ["queued", "sent", "failed"]) {
+    const onCard = text(views.message(withQueue(reply(state)), detail(inboxItem), {}));
+    const inTab = text(views.queue({ queue: [reply(state)] }, {}));
+    const word = { queued: "waiting", sent: "with the agent", failed: "refused" }[state];
+    assert.match(onCard, new RegExp(word));
+    assert.match(inTab, new RegExp(word));
+  }
+});
+
+// A state this build has never heard of is a newer server, not a reason to draw a
+// blank badge — and certainly not to throw inside a render.
+test("an unknown state is named rather than drawn blank", () => {
+  const out = text(views.queue({ queue: [reply("tomorrows_state")] }, {}));
+  // The row is drawn, under a group that says why it cannot be described. Before
+  // this, every group filtered it out and the tab read "nothing queued".
+  assert.match(out, /tomorrows state/);
+  assert.match(out, /not recognised/);
+  assert.doesNotMatch(out, /nothing queued/);
+});
+
 // --- compose -----------------------------------------------------------
 
 // recipients is where a typo is caught. It is checked here rather than only on
@@ -396,7 +475,9 @@ test("a row with a reply already queued says so instead of offering another", ()
   };
   const nodes = views.mailbox(queued, { box: "inbox" }, noop);
   assert.equal(replyButtons(nodes).length, 0, "a second reply was offered");
-  assert.match(text(nodes), /replied/);
+  // "reply waiting" rather than "replied": the mark is there for the same reason
+  // it always was, and now says which unfinished state it is in.
+  assert.match(text(nodes), /reply waiting/);
 
   // Only the row it belongs to. A queued reply to one message must not silence
   // the others.
