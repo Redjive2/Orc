@@ -27,13 +27,24 @@ body {
 #chrome { padding: 1.5rem 1.5rem 0; }
 .frame { color: var(--frame); white-space: pre; overflow: hidden; }
 
-#nav {
+/* Two rows: what kind of thing, then which one. The second only appears for the
+   open area, so the row of seventeen this replaced is never on screen at once. */
+#nav { display: grid; gap: .2rem; padding: 0 1ch; }
+#nav .majors, #nav .subs {
   display: flex;
   flex-wrap: wrap;
   gap: 0 2ch;
   align-items: baseline;
-  padding: 0 1ch;
 }
+
+/* The sub row is set in from its parent and reads quieter, so the eye lands on
+   the areas first and the current area's contents second. Indented by a
+   character rather than boxed: this is a terminal, and a terminal indents. */
+/* The indent and the smaller size are what say "these belong to the one above".
+   Colour is not doing that job: a row set in --frame reads as disabled, and
+   these are the links somebody is about to use. */
+#nav .subs { padding-left: 2ch; font-size: .92em; }
+#nav .subs a[aria-current="page"] { color: var(--primary); font-weight: 600; }
 
 #nav a {
   color: var(--muted);
@@ -270,6 +281,26 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .agent { border-top: 1px solid var(--frame); padding: .5rem 0; display: grid; gap: .3rem; }
 .agent:first-of-type { border-top: none; }
 
+/* An idle agent is present but receding. `manage › fleet` lists everybody, not
+   only the employed — an agent that is *not* working is as often the thing
+   somebody came to fix — and dimming is what makes the list read as "three of
+   eight busy" rather than as a list of three. */
+.agent.idle .name { color: var(--muted); }
+.agent.idle { opacity: .72; }
+
+/* One standing instruction's opening line: it stands in for a paragraph, so it
+   is dimmed and clipped rather than wrapped into a second row. */
+.prompt { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A document to read inside a sheet. It keeps its own line breaks and wraps
+   rather than scrolling sideways, because it is prose. */
+.reading {
+  white-space: pre-wrap; overflow-wrap: anywhere; margin: 0;
+  max-height: 60vh; overflow-y: auto;
+  padding: .6rem .8rem; border: 1px solid var(--frame); border-radius: 4px;
+  background: var(--panel); color: var(--text);
+}
+
 .agent-head { display: flex; flex-wrap: wrap; gap: 0 2ch; align-items: baseline; }
 .agent-head .name { color: var(--title); }
 /* The indent is significant whitespace — it is the boss chain — so it must not
@@ -288,6 +319,11 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
      keeps the spaces somebody typed; the button spaces itself. */
   display: inline-block;
   white-space: pre;
+  /* The spaces are load-bearing, so this cannot wrap. It scrolls instead —
+     `read(Anno/** Dock/** Docs/**)` is wider than a phone, and clipping it
+     would hide the part of a permission somebody is checking. */
+  max-width: 100%;
+  overflow-x: auto;
 }
 .clause button { border: none; padding: 0; margin-left: 1ch; color: var(--muted); }
 .clause button:hover { background: transparent; color: var(--danger); }
@@ -301,6 +337,7 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .cl-write { color: var(--warning); }
 .cl-spawn { color: var(--secondary); }
 .cl-orc { color: var(--primary); }
+.cl-shell { color: var(--danger); }
 .cl-tool { color: var(--tertiary); }
 .cl-arg { color: var(--text); }
 .cl-paren { color: var(--subtle); }
@@ -351,7 +388,6 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .grid:last-child { margin-bottom: 0; }
 .grid.users { grid-template-columns: 16ch; }
 .grid.traffic { grid-template-columns: 12ch 20ch 1fr 24ch; }
-.grid.queue { grid-template-columns: 8ch 16ch 12ch 1fr; }
 .grid > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .card > .h2 .badge, .meta .badge { margin-left: 1ch; }
@@ -404,12 +440,31 @@ pre.code {
 button.fold.picked { background: var(--panel); color: var(--text); }
 button.fold.picked .twist { color: var(--primary); }
 
-/* Controls hanging off a row, rather than sitting under a card. Small, because
-   they interrupt a tree that is being read: one row's worth at a time is the
-   whole point, and at card size they still shout. The narrow-screen layer puts
-   the height back — a thumb needs the target a mouse does not. */
+/* Controls sitting on their row, at the right-hand end.
+   The fold takes the space and the controls take what they need, so a name of any
+   length keeps its line and the buttons stay where the eye already expects them —
+   the same edge, whichever row is picked. */
+.fold-row { display: flex; align-items: center; }
+.fold-row > button.fold { flex: 1; min-width: 0; }
+.fold-row > .controls { flex: none; padding: 0 1ch 0 .5ch; }
+
+/* The picked row is banded end to end, buttons included. A row is only wrapped
+   like this when it has controls, and it only has controls when it is the picked
+   one — so this needs no second marker to know which row it is. Without it the
+   highlight stops where the fold stops and the buttons hang off the end of the
+   thing they belong to, which reads as two rows rather than one. */
+.fold-row { background: var(--panel); }
+
+/* Small, because they interrupt a tree that is being read: one row's worth at a
+   time is the whole point, and at card size they still shout. Smaller again now
+   they share a line with the name they act on — a control beside its subject only
+   has to be findable, where one on its own line had to announce itself. The
+   narrow-screen layer puts the height back: a thumb needs the target a mouse
+   does not. */
 .controls.row { gap: 1ch; padding: .15rem 0 .35rem; }
 .controls.row button { padding: .05rem 1ch; font-size: .85em; }
+.fold-row > .controls.row { gap: .5ch; }
+.fold-row > .controls.row button { padding: 0 .75ch; font-size: .75em; }
 
 /* Prose inside a fold is set off from the rule that marks its depth. Without
    this the first letter of every line touches the border, and a document reads
@@ -574,7 +629,9 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
      satisfies both; it is set as a height rather than guessed at with padding,
      because padding that happens to add up is padding that stops adding up the
      next time the font changes. */
-  #nav { gap: 0 1.5ch; padding: 0; }
+  #nav { padding: 0; }
+  #nav .majors, #nav .subs { gap: 0 1.5ch; }
+  #nav .subs { padding-left: 1ch; }
   #nav a {
     display: inline-flex;
     align-items: center;
@@ -584,8 +641,17 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   #nav .spacer { display: none; }
 
   /* A row's controls are compact on a desk and not on a phone: the reason they
-     are small is that a mouse is precise, and a thumb is not. */
-  .controls.row button { font-size: 1em; padding: .3rem 1ch; }
+     are small is that a mouse is precise, and a thumb is not.
+     They also come off the row here and go back under it. Four buttons beside a
+     filename fit a desk and not a phone, where the choice would be between a
+     truncated name and a wrapped line of targets too small to hit anyway. The
+     selectors match the desktop ones rather than sitting below them, because a
+     more specific rule further up the file would otherwise win. */
+  .fold-row { display: block; }
+  .fold-row > .controls { padding: 0; }
+  .controls.row button,
+  .fold-row > .controls.row button { font-size: 1em; padding: .3rem 1ch; }
+  .fold-row > .controls.row { gap: 1ch; }
 
   button, button.quiet, button.fold {
     min-height: 44px;
@@ -602,6 +668,16 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   #editor { padding: 0; }
   #editor .sheet { height: 100%; border: none; }
   #editor textarea { font-size: 16px; min-height: 0; }
+
+  /* And every field in a sheet, for the same reason. The rule above covers the
+     mail form, which was the only form on the site when it was written; the
+     dialogs came later and every one of them — new file, hire, new role, a quick
+     reply — put a 14px field on screen, so tapping any of them zoomed the page
+     and left the reader scrolled sideways in a layout that had been fitting. */
+  #dialog input, #dialog select, #dialog textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
   /* A row is a link too, and the whole block is the target. */
   .row { min-height: 44px; align-content: center; }
 
@@ -649,6 +725,11 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   /* The header row is the legend for the two bare scores, and hiding it would
      leave "4 3" meaning nothing. So the labels move onto the numbers
      themselves — the same information, in the space a phone has. */
+  /* The name wraps rather than ellipsises, exactly as a subject does above.
+     The `draft` badge lives inside this cell, so cutting the cell short cut off
+     the one word that says the task is not real yet. */
+  .task .name { white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+
   .task.head { display: none; }
   .task > :nth-child(4)::before,
   .task > :nth-child(5)::before {
@@ -684,6 +765,12 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   /* An account list of one column needs no fixed width. */
   .grid.users { grid-template-columns: 1fr; }
 
+  /* Who has read what is a table, and a table of four columns does not fit a
+     phone at any font size. Dropping a column would be dropping the answer, so
+     it scrolls sideways inside its own box — the same bargain a code block
+     makes. The header scrolls with it, or the columns would lose their names. */
+  .grid.traffic { overflow-x: auto; }
+
   /* The survey drops its drawn bar on a phone and keeps the number: the bar is
      the comparison and the percentage is the fact, and there is only room for
      one of them beside a name. */
@@ -695,3 +782,10 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
  * subject, or a wide code block scrolls inside its own box instead. */
 html, body { max-width: 100%; overflow-x: hidden; }
 .row, .task, .card, .body { min-width: 0; }
+.path { min-width: 0; overflow-wrap: anywhere; }
+/* The same for the fleet's boxes. A grid item's `min-width` is `auto`, which
+   means it refuses to shrink below its widest content — so a row of facts that
+   would happily wrap onto two lines instead grew past the card holding it, and
+   the rule above clipped what stuck out. Everything here wraps; it just has to
+   be allowed to. */
+.agent, .agent-head, .clauses, .grants, .grant { min-width: 0; }

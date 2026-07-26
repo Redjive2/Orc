@@ -304,6 +304,9 @@ func TestActionArgumentRules(t *testing.T) {
 		protocol.OpOrcBudget:          {Role: "engineer", Load: 24},
 		protocol.OpOrcPoke:            {Identity: "atlas"},
 		protocol.OpOrcRefresh:         {Identity: "atlas"},
+		protocol.OpOrcWorkspace:       {Identity: "atlas", Workspace: "/trees/parser", From: "/old/workspace"},
+		protocol.OpOrcInstructSet:     {Prompt: "identity", PromptName: "atlas", Text: "you write the parser"},
+		protocol.OpOrcInstructClear:   {Prompt: "system"},
 		protocol.OpOrcTend:            {},
 		protocol.OpUpgrade:            {},
 	}

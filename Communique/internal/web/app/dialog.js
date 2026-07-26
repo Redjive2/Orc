@@ -256,6 +256,27 @@ export function confirm({ title, body, submit = "do it", danger = true }) {
   }).then((got) => got === true);
 }
 
+// show is a sheet with nothing to decide: a document to read and a way out.
+//
+// Separate from confirm because confirm asks a question, and a sheet with a
+// "do it" button on a thing that does nothing is how somebody learns not to trust
+// the buttons. The text keeps its own line breaks — what it shows is prose that
+// was written in paragraphs.
+export function show({ title, text, note }) {
+  return sheet((done) => {
+    const close = h("button", { onclick: () => done(true) }, "close");
+    return {
+      elements: [
+        h("h2", {}, title),
+        note ? h("p", { class: "muted" }, note) : null,
+        h("pre", { class: "reading" }, String(text ?? "")),
+        h("div", { class: "controls" }, close, h("span", { class: "muted" }, "esc closes")),
+      ],
+      focus: close,
+    };
+  }).then(() => undefined);
+}
+
 // isOpen reports whether a dialog is up, so a redraw can leave it alone.
 export function isOpen() {
   return Boolean(panel && panel.isConnected && !panel.hidden);

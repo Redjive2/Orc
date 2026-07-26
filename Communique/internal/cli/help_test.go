@@ -81,6 +81,7 @@ func TestEveryFlagIsDocumented(t *testing.T) {
 		{"sync", []string{"--server", "--machine", "--user", "--home", "--watch", "--nudge", "--dry-run", "--admin", "--admin-bodies", "--library"}},
 		{"status", []string{"--home"}},
 		{"queue", []string{"--state", "--json"}},
+		{"workspace", []string{"--adopt", "--from", "--state", "--machine"}},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
 			detail, ok := cli.Detail(style.Plain(), tc.command)

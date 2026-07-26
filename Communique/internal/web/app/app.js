@@ -8,6 +8,8 @@ import { api, setCSRF, ApiError } from "./api.js";
 import { mount, h } from "./dom.js";
 import * as focus from "./focus.js";
 import * as views from "./views.js";
+import * as routes from "./routes.js";
+import * as screens from "./screens.js";
 import * as library from "./library.js";
 import { digest } from "./digest.js";
 import { endingOf, toLF, fromLF, LF } from "./eol.js";
@@ -59,6 +61,31 @@ function stash(patch) {
   state = Object.freeze({ ...state, ...patch });
 }
 
+// current is the route being shown, with the flat ones this replaced sent on to
+// where they went.
+//
+// The hash is rewritten rather than merely mapped, so the address bar agrees
+// with the screen and a bookmark taken from it is a bookmark of the new shape.
+function current() {
+  const raw = location.hash.slice(1) || routes.HOME;
+  const [path, query] = raw.split("?");
+  if (routes.isDetail(path)) return raw;
+
+  // Where it went, or home if it is nothing this site has ever had. Both are
+  // rewritten rather than merely mapped, so the address bar agrees with the
+  // screen — a page showing the inbox under a hash that says something else is
+  // the disagreement this is here to stop.
+  const moved = routes.MOVED[path] || (routes.resolve(path) ? null : routes.HOME);
+  if (moved) {
+    const next = moved + (query ? `?${query}` : "");
+    // replace, not assign: the route somebody typed should not be a place the
+    // back button returns them to, or leaving is two presses.
+    location.replace(`#${next}`);
+    return next;
+  }
+  return raw;
+}
+
 // draw renders the route.
 //
 // Focus and the caret are carried across the re-mount. Restoring a draft's text
@@ -68,36 +95,25 @@ function stash(patch) {
 // view, so the reader lands back where they were.
 function draw() {
   const place = focus.remember(typeof document !== "undefined" ? document.activeElement : null);
-  const route = location.hash.slice(1) || "/inbox";
+  const route = current();
   mount(nav, views.nav(state, route));
   mount(statusBar, views.status(state));
 
   if (state.error) { mount(view, views.error(state.error)); return; }
 
+  // A detail view is reached from a list rather than from the navigation, and
+  // its links are already out there — so those keep the shape they had.
   if (route.startsWith("/message/")) {
     mount(view, views.message(state, state.detail, actions));
-  } else if (route.startsWith("/archive")) {
-    mount(view, views.mailbox(state, { box: "archive" }, actions));
-  } else if (route.startsWith("/sent")) {
-    mount(view, views.mailbox(state, { box: "sent" }, actions));
-  } else if (route.startsWith("/compose")) {
-    mount(view, views.compose(state, actions));
-  } else if (route.startsWith("/queue")) {
-    mount(view, views.queue(state, actions));
-  } else if (route.startsWith("/docs")) {
-    mount(view, [library.libraryHeader(state, "docs"), ...library.library(state, actions, { kind: "docs" })]);
-  } else if (route.startsWith("/code")) {
-    mount(view, [library.libraryHeader(state, "code"), ...library.library(state, actions, { kind: "code" })]);
   } else if (route.startsWith("/tasks/")) {
     mount(view, views.task(state, decodeURIComponent(route.slice("/tasks/".length)), actions));
-  } else if (route.startsWith("/tasks")) {
-    mount(view, views.tasks(state, actions));
-  } else if (route.startsWith("/tree")) {
-    mount(view, views.tree(state));
-  } else if (route.startsWith("/admin")) {
-    mount(view, views.admin(state, actions));
   } else {
-    mount(view, views.mailbox(state, { box: "inbox" }, actions));
+    const here = routes.resolve(route);
+    const drawn = here && screens.render(here.major, here.sub, state, actions);
+    // Nothing matched, and the redirect in `route()` has already had its turn —
+    // so this is a hash nobody wrote on purpose. Home, rather than a blank page
+    // that looks like a broken site.
+    mount(view, drawn || screens.render("mail", "inbox", state, actions));
   }
 
   focus.restore(view, place);
@@ -405,6 +421,110 @@ const actions = {
     })) return;
     await run(() => api.refreshAgent(f.machine, id.name));
   },
+  // moveWorkspace changes where an agent works.
+  //
+  // The form carries `from` — the path this browser was showing — because the
+  // agent machine refuses a move made against a stale view. That is the same
+  // protection the library's writes get from a digest, and it matters here for the
+  // same reason: what the operator is looking at is minutes old, and the old
+  // directory still exists on disk afterwards, so a silent overwrite would look
+  // exactly like success.
+  async moveWorkspace(f, id) {
+    const got = await dialog.ask({
+      title: `move ${id.name}`,
+      note: id.employed
+        ? "its running session keeps the old directory until it is refreshed."
+        : "it will start there the next time it is employed.",
+      submit: "queue the move",
+      fields: [
+        { name: "workspace", label: "new directory", value: id.workspace || "" },
+        // Two operations rather than a toggle, because that is what they are: one
+        // copies an agent's files to a new path, the other leaves a checkout
+        // exactly as it is and points the agent at it. A checkbox would make the
+        // more destructive of the two the unlabelled default.
+        {
+          name: "how", label: "and", kind: "choice",
+          value: "adopt",
+          options: [
+            { value: "adopt", label: "work in what is already there" },
+            { value: "move", label: "move its files to the new directory" },
+          ],
+        },
+      ],
+    });
+    if (got === null) return;
+
+    const workspace = (got.workspace || "").trim();
+    if (!workspace || workspace === id.workspace) return;
+
+    await run(() => api.moveWorkspace(f.machine, id.name, {
+      workspace,
+      from: id.workspace || "",
+      adopt: got.how !== "move",
+    }));
+  },
+  // editInstruct writes one layer.
+  //
+  // Two things it has to say, because neither is visible from the screen: a prompt
+  // persuades where a permission enforces, and an edit changes nothing about the
+  // sessions already running — they keep the instructions they started with until
+  // somebody refreshes them. The note names those agents rather than describing
+  // them, since "some sessions" is not something an operator can act on.
+  async editInstruct(f, p) {
+    const text = await editor.open({
+      title: `${p.wake ? "wake message" : "instructions"} — ${label(p)}`,
+      text: p.text || "",
+      note: p.wake
+        ? "sent to an agent that has gone quiet. the most specific one wins; the others are not sent."
+        : `added to what ${affects(f, p)} already gets. ${stale(f, p)}`,
+    });
+    if (text === null) return;
+
+    const body = text.trim();
+    if (body === (p.text || "").trim()) return;
+    // An emptied editor is a clear rather than an empty file: a layer that says
+    // nothing and no layer at all compose identically, and two spellings of one
+    // state is a state somebody eventually disagrees about.
+    if (body === "") {
+      await run(() => api.clearInstruct(f.machine, p));
+      return;
+    }
+    await run(() => api.setInstruct(f.machine, p, text));
+  },
+
+  async clearInstruct(f, p) {
+    if (!await dialog.confirm({
+      title: `clear the ${p.wake ? "wake message" : "instructions"} for ${label(p)}`,
+      body: p.wake
+        ? "the next wake falls through to the role's, then the fleet's, then “continue”."
+        : `${affects(f, p)} stops getting this layer. ${stale(f, p)}`,
+      submit: "clear it",
+    })) return;
+    await run(() => api.clearInstruct(f.machine, p));
+  },
+
+  // showInstruct is the composition, laid out in the order it composes.
+  //
+  // It is assembled here from the layers the mirror already carries rather than
+  // fetched: the server cannot reach the agent machine, so a round trip would
+  // return this same data with a delay on it. `orc instruct show <agent>` on the
+  // machine is the authority; this is what the mirror says it will be.
+  async showInstruct(f, p) {
+    const role = roleOf(f, p.name);
+    const layers = [
+      ["the fleet", pick(f, "system", "")],
+      role ? [`the ${role} role`, pick(f, "role", role)] : null,
+      [p.name, pick(f, "identity", p.name)],
+    ].filter((l) => l && l[1]);
+
+    await dialog.show({
+      title: `what ${p.name} is told`,
+      note: "as the mirror last saw it; `orc instruct show` on the machine is the authority",
+      text: layers.length === 0
+        ? `${p.name} runs on claude's own instructions; nothing is set for it.`
+        : layers.map(([heading, text]) => `# ${heading}\n\n${text}`).join("\n\n"),
+    });
+  },
   async grant(f, id) {
     const got = await dialog.ask({
       title: `grant to ${id.name}`,
@@ -672,6 +792,49 @@ function outgoing(file, text) {
 // is an absolute path — which the agent refuses, correctly and unhelpfully.
 function under(dir, name) {
   return dir ? `${dir}/${name}` : name;
+}
+
+// --- the standing instructions ------------------------------------------
+
+// label names a layer in a sentence: the fleet's has no name of its own.
+function label(p) {
+  if (p.kind === "system") return "the fleet";
+  return p.kind === "role" ? `the ${p.name} role` : p.name;
+}
+
+// affects is who a layer reaches, in words, because the blast radius of the
+// fleet's layer is every agent there is and the row it sits on does not say so.
+function affects(f, p) {
+  if (p.kind === "system") return "every agent on this machine";
+  if (p.kind === "role") return `every agent holding ${p.name}`;
+  return p.name;
+}
+
+// stale is the sentence about when it applies, naming the sessions that will not
+// see it until they restart.
+function stale(f, p) {
+  const running = (f.identities || [])
+    .filter((id) => id.employed && reached(f, p, id))
+    .map((id) => id.name);
+  if (running.length === 0) return "nothing is running, so the next session started uses it.";
+  return `${running.join(", ")} ${running.length === 1 ? "keeps the instructions it" : "keep the instructions they"} started with until refreshed.`;
+}
+
+function reached(f, p, id) {
+  if (p.kind === "system") return true;
+  if (p.kind === "role") return id.role === p.name;
+  return id.name === p.name;
+}
+
+function roleOf(f, name) {
+  const id = (f.identities || []).find((i) => i.name === name);
+  return id ? id.role || "" : "";
+}
+
+function pick(f, kind, name) {
+  const got = (f.prompts || []).find((p) =>
+    p.kind === kind && (p.name || "") === (name || "") && !p.wake);
+  return got ? got.text : "";
 }
 
 // ask puts the text in front of the reader to change.

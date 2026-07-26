@@ -53,10 +53,27 @@ const (
 	// FloorAgents is directing other agents — hiring, employing, firing. It costs
 	// money and it spends the fleet's budget.
 	FloorAgents = 60
+	// FloorInstruct is writing what an agent is told at the start of every
+	// session. It is not authority — a prompt asks and a permission enforces —
+	// but it decides how an agent thinks, so it sits above directing one.
+	FloorInstruct = 70
 	// FloorPolicy is handing out authority, which is how authority leaks.
 	FloorPolicy = 85
 	// FloorUpgrade replaces every binary on every machine in the fleet.
 	FloorUpgrade = 90
+
+	// FloorShellRead is running commands that look but do not touch — `ls`, `git
+	// status`, `wc`. Low, because an agent that cannot run them is an agent that
+	// works blind in a tree it is allowed to read anyway.
+	FloorShellRead = 10
+	// FloorShellBuild is the toolchain: compilers, formatters, test runners. They
+	// write, and what they write is build output rather than somebody's work.
+	FloorShellBuild = 40
+	// FloorShellAll is a shell with nothing taken out of it, which is every
+	// capability the machine has. It sits beside FloorWriteAll because it is
+	// strictly more than writing everything: a command can also reach the
+	// network, and the network is how a workspace stops being contained.
+	FloorShellAll = 75
 )
 
 // UpgradeFloor is kept as the name cq's documentation refers to.
@@ -119,11 +136,37 @@ var toolkit = []struct {
 		"orc(assign edit grant revoke remove)",
 	}, "hand out roles, permissions, and authority"},
 
+	// The shell. Unlike every other kind, `shell` refuses by default — an agent
+	// with none of these may run only model.Innocuous — so these are what make a
+	// fresh fleet able to do anything at a prompt at all.
+	//
+	// They are named for what somebody is *for* rather than for the commands in
+	// them, because the list is long and the reason is short. A fleet that wants
+	// a different set writes one; that is what `orc new permission` is.
+	{"shell-read", FloorShellRead, []string{
+		"shell(ls find grep rg cat head tail wc file stat du df git which)",
+	}, "run the commands that look at a tree without changing it"},
+	{"shell-build", FloorShellBuild, []string{
+		"shell(go gofmt make cargo npm pnpm yarn node python python3 pytest sh bash)",
+	}, "run the toolchain: compile, format, and test"},
+	{"shell-all", FloorShellAll, []string{"shell(**)"},
+		"run any command at all, including ones nothing can read in advance"},
+
 	// Capabilities that live in another tool. `tool(...)` rather than a path
 	// glob so that no broad permission confers one by containment — see the note
 	// at the top of this file.
 	{"upgrade", FloorUpgrade, []string{"tool(upgrade)"},
 		"rebuild and restart every Orc tool, on every machine in the fleet"},
+	// Standing instructions. `tool(...)` for the same containment reason: a role
+	// with `write(**)` must not acquire the ability to rewrite what every agent is
+	// told by being broad.
+	//
+	// Floor 70 rather than 85, because instructing an agent you already control is
+	// closer to directing it than to handing out authority. The layer that reaches
+	// *everybody* — the fleet's own — is fenced off separately by being the
+	// operator's alone, and no permission grants it.
+	{"instruct", FloorInstruct, []string{"tool(instruct)"},
+		"write the standing instructions agents run under"},
 }
 
 // Toolkit returns the set, parsed.

@@ -183,3 +183,122 @@ test("a field that is gone after the redraw is left alone", () => {
   const holder = { childNodes: nodes.filter(Boolean) };
   assert.equal(findByName(holder, "not-a-field"), null);
 });
+
+// --- the next field somebody adds ------------------------------------------
+
+// The tests above pin the fields that exist. This one pins the *class*, because
+// the loss is silent and the fix is easy to forget: a field added without a draft
+// looks right, works right, and is emptied by whichever sync lands first.
+//
+// It is structural rather than behavioural on purpose. Asserting "the value comes
+// back" for an arbitrary field would need a DOM that models what a `<select>` does
+// with its options, and the stub does not — so the test would be checking the
+// stub. What it checks instead is the two things a field needs to be carried at
+// all: a **name**, which is how findByName gets focus back to it, and an **input
+// or change handler**, which is how what it holds reaches state. A field with
+// neither is DOM-only, and DOM-only is exactly what the redraw destroys.
+
+// A fleet with two machines, because the machine pickers only appear when there is
+// a real choice to make — and a picker that does not render is a picker untested.
+const fleet = (drafts = {}) => ({
+  ...world(drafts),
+  machines: [
+    { machine: "studio", last_sync: "2026-07-25T03:30:00Z" },
+    { machine: "laptop", last_sync: "2026-07-25T03:29:00Z" },
+  ],
+});
+
+const ENTRY = ["INPUT", "TEXTAREA", "SELECT"];
+
+// every collects the fields in a rendered view, however deeply nested. Buttons and
+// hidden inputs are not places anybody types, and carrying them would mean asking
+// for handlers on fields that have nothing to keep.
+function every(nodes) {
+  const out = [];
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (ENTRY.includes(node.tagName)) {
+      const type = node.getAttribute && node.getAttribute("type");
+      if (type !== "hidden" && type !== "submit" && type !== "button") out.push(node);
+    }
+    for (const child of node.childNodes || []) visit(child);
+  };
+  for (const node of [].concat(nodes).filter(Boolean)) visit(node);
+  return out;
+}
+
+const nameOf = (el) => (el.getAttribute ? el.getAttribute("name") : null);
+
+const records = (el) => {
+  const on = el.listeners || {};
+  return (on.input || []).length > 0 || (on.change || []).length > 0;
+};
+
+// The views that carry fields, rendered as the application renders them, so a
+// field added to any of them is caught here without this list changing.
+const screens = (actions) => [
+  ["compose", views.compose(fleet(), actions)],
+  ["a message", views.message(fleet(), detail, actions)],
+  ["the task board", views.tasks(fleet(), actions)],
+];
+
+test("every field is named, so a redraw can find it again", () => {
+  for (const [where, rendered] of screens(recorder())) {
+    for (const el of every(rendered)) {
+      assert.ok(nameOf(el),
+        `${where}: a <${el.tagName.toLowerCase()}> with no name. findByName is how ` +
+        `focus gets back to a field after the redraw, and it looks it up by name — ` +
+        `so this one loses the cursor on every sync.`);
+    }
+  }
+});
+
+test("every field records what is entered into it", () => {
+  for (const [where, rendered] of screens(recorder())) {
+    for (const el of every(rendered)) {
+      assert.ok(records(el),
+        `${where}: <${el.tagName.toLowerCase()} name="${nameOf(el)}"> has no input or ` +
+        `change handler, so what is entered lives only in the DOM — and the redraw ` +
+        `on the next sync throws it away. Draft it, as the other fields here do.`);
+    }
+  }
+});
+
+// The two the structural test caught: text was drafted when drafts were added and
+// the selects were not, which is quieter and worse. An emptied textarea is obvious.
+// A machine picker snapped back to the first option still submits — to a machine
+// nobody chose.
+test("a machine picker keeps the machine that was picked", () => {
+  const actions = recorder();
+
+  const picker = every(views.compose(fleet(), actions)).find((el) => nameOf(el) === "machine");
+  assert.ok(picker, "compose offers no machine picker even with two machines");
+  assert.equal(picker.tagName, "SELECT");
+
+  // Choosing drafts, rather than leaving the choice in the DOM.
+  for (const fn of picker.listeners.change) fn({ target: { value: "laptop" } });
+  assert.deepEqual(actions.calls[0],
+    { key: views.draftKey("compose"), field: "machine", value: "laptop" });
+
+  // And the redraw a sync causes puts it back.
+  const after = every(views.compose(fleet({
+    [views.draftKey("compose")]: { machine: "laptop" },
+  }), actions)).find((el) => nameOf(el) === "machine");
+  assert.equal(after.value, "laptop", "the redraw reset the machine to the first one");
+});
+
+test("the task board keeps its machine too", () => {
+  const actions = recorder();
+
+  const picker = every(views.tasks(fleet(), actions)).find((el) => nameOf(el) === "machine");
+  assert.ok(picker, "the task board offers no machine picker even with two machines");
+
+  for (const fn of picker.listeners.change) fn({ target: { value: "laptop" } });
+  const key = actions.calls[0].key;
+  assert.notEqual(key, views.draftKey("compose"),
+    "the board drafts under compose's key, so choosing on one changes the other");
+
+  const after = every(views.tasks(fleet({ [key]: { machine: "laptop" } }), actions))
+    .find((el) => nameOf(el) === "machine");
+  assert.equal(after.value, "laptop", "the redraw reset the machine to the first one");
+});

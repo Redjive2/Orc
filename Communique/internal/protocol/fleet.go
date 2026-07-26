@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"path"
 	"slices"
 
 	"orc/cq/internal/fault"
@@ -21,6 +22,27 @@ import (
 // about who may do what, and the wrong one would be the one on screen.
 
 // Fleet is the whole of one machine's Orc store, as of the snapshot.
+// FleetPrompt is one standing instruction, mirrored.
+//
+// Four kinds and two mechanisms: `system`, `role`, and `identity` are prompt layers
+// that compose additively into what an agent is told at the start of a session;
+// `wake` on any of them is the message sent to an agent that has gone quiet, and the
+// most specific of those wins outright. The browser has to keep them apart because
+// they are edited in the same place and mean opposite things.
+type FleetPrompt struct {
+	Kind string `json:"kind"`
+	// Name is the role or identity it belongs to, empty for the fleet's own.
+	Name string `json:"name,omitempty"`
+	Wake bool   `json:"wake,omitempty"`
+	Text string `json:"text"`
+	Size int    `json:"size"`
+	// Changed, By, and Digest are orc's last word about this layer. Digest is what
+	// makes an edit from a stale snapshot refusable, the way Base does for a file.
+	Changed string `json:"changed,omitempty"`
+	By      string `json:"by,omitempty"`
+	Digest  string `json:"digest,omitempty"`
+}
+
 type Fleet struct {
 	Root        string          `json:"root"`
 	Operator    string          `json:"operator"`
@@ -28,7 +50,13 @@ type Fleet struct {
 	Roles       []FleetRole     `json:"roles,omitempty"`
 	Permissions []FleetPerm     `json:"permissions,omitempty"`
 	Vocabulary  FleetVocabulary `json:"vocabulary,omitzero"`
-	Problems    []string        `json:"problems,omitempty"`
+	// Prompts are the standing instructions agents run under: the fleet's layer,
+	// each role's, each identity's, and every wake message. The text travels with
+	// them because the tab is an editor rather than a listing, and one that had to
+	// fetch a layer separately could open a prompt somebody changed since the
+	// snapshot.
+	Prompts  []FleetPrompt `json:"prompts,omitempty"`
+	Problems []string      `json:"problems,omitempty"`
 	// Unreachable says why there is no fleet here, when there is a reason worth
 	// telling apart from "this machine runs no agents". An orc that is not
 	// installed and an orc that refused are different problems with different
@@ -116,7 +144,7 @@ type FleetWord struct {
 	In string `json:"in,omitempty"`
 }
 
-// FleetVocabulary is what `orc(…)` and `tool(…)` may be written with.
+// FleetVocabulary is what a clause may be written with.
 //
 // It rides along with the fleet so that the browser's clause editor can offer the
 // words rather than keep its own copy. A copy of a privilege list goes stale
@@ -127,6 +155,13 @@ type FleetWord struct {
 type FleetVocabulary struct {
 	Verbs []FleetWord `json:"verbs,omitempty"`
 	Tools []FleetWord `json:"tools,omitempty"`
+	// Innocuous is what `shell(…)` allows with no clause at all.
+	//
+	// The opposite of the two above: those are words a clause may use, this is
+	// what an identity already has without one. It travels because a permission
+	// list that omits it reads as more restrictive than the fleet is — the
+	// commands nobody had to ask for being exactly the ones nothing mentions.
+	Innocuous []string `json:"innocuous,omitempty"`
 }
 
 // Validate checks the fleet is one cq can draw.
@@ -211,7 +246,23 @@ const (
 	OpOrcBudget          Op = "orc.budget"            // orc budget <role> <load>
 	OpOrcPoke            Op = "orc.poke"              // orc poke <identity> [message]
 	OpOrcRefresh         Op = "orc.refresh"           // orc refresh <identity>
-	OpOrcTend            Op = "orc.tend"              // orc tend
+	// OpOrcWorkspace changes where an identity works: `orc workspace <identity>
+	// <path> [--adopt]`.
+	//
+	// It carries `From` — where the operator saw the identity working — for the
+	// same reason the library verbs carry `Base`. A snapshot is minutes old by the
+	// time somebody acts on it, and a workspace is the one fleet value whose old
+	// location still exists on disk afterwards: without the check, moving an agent
+	// from the browser could quietly overturn a move somebody made on the machine
+	// while it was in flight.
+	OpOrcWorkspace Op = "orc.workspace" // orc workspace <identity> <path> [--adopt]
+	// The standing instructions. Two operations rather than one with an empty
+	// text, because clearing a layer and setting it to nothing are the same
+	// outcome reached by different intents — and a queue whose report of what it
+	// is about depends on whether a field is empty is one nobody can read.
+	OpOrcInstructSet   Op = "orc.instruct.set"   // orc instruct <target> --set -
+	OpOrcInstructClear Op = "orc.instruct.clear" // orc instruct <target> --clear
+	OpOrcTend          Op = "orc.tend"           // orc tend
 )
 
 // OpUpgrade rebuilds and restarts every Orc tool on the machine it reaches.
@@ -233,7 +284,8 @@ var FleetOps = []Op{
 	OpOrcRemoveIdentity, OpOrcRemoveRole, OpOrcRemovePerm,
 	OpOrcGrant, OpOrcRevoke, OpOrcMove,
 	OpOrcEmploy, OpOrcFire, OpOrcBudget,
-	OpOrcPoke, OpOrcRefresh, OpOrcTend,
+	OpOrcPoke, OpOrcRefresh, OpOrcTend, OpOrcWorkspace,
+	OpOrcInstructSet, OpOrcInstructClear,
 }
 
 // TouchesFleet reports whether an operation changes the Orc store.
@@ -265,6 +317,14 @@ var fleetRules = map[Op]argRule{
 	OpOrcPoke:       {identity: true, optMessage: true},
 	OpOrcRefresh:    {identity: true},
 	OpOrcTend:       {},
+	// `from` is required, not optional: a client that cannot say what it was
+	// looking at is a client that cannot be protected from acting on a stale view.
+	OpOrcWorkspace: {identity: true, workspace: true, from: true, optAdopt: true},
+	// `prompt` carries which layer — the kind, and the name where there is one —
+	// and `text` is what it becomes. The name is optional because the fleet's own
+	// layer belongs to nobody.
+	OpOrcInstructSet:   {prompt: true, text: true},
+	OpOrcInstructClear: {prompt: true},
 }
 
 // validateFleetArgs checks the Orc operands.
@@ -379,6 +439,107 @@ func (a Action) validateFleetArgs(rule argRule) error {
 	// role with no description is a role nobody can tell apart from another.
 	if rule.description && a.Args.Description == "" {
 		return fault.Field("Action", "args.description", "%s requires description", a.Op)
+	}
+	if err := a.checkWorkspaceArgs(rule); err != nil {
+		return err
+	}
+	return a.checkInstructArgs(rule)
+}
+
+// checkInstructArgs validates a standing instruction on its way into the queue.
+//
+// §6's bounds are enforced *here* as well as in Orc, and that is the point: an
+// oversized prompt refused at the browser is a mistake somebody sees and fixes,
+// while the same prompt refused after a sync is a failure sitting in a queue on a
+// machine nobody is watching.
+func (a Action) checkInstructArgs(rule argRule) error {
+	if !rule.prompt {
+		if a.Args.Prompt != "" || a.Args.PromptName != "" || a.Args.Wake {
+			return unexpected(a.Op, "prompt")
+		}
+		if !rule.text && a.Args.Text != "" {
+			return unexpected(a.Op, "text")
+		}
+		return nil
+	}
+
+	switch a.Args.Prompt {
+	case "system":
+		if a.Args.PromptName != "" {
+			return fault.Field("Action", "args.prompt_name", "the fleet's own layer belongs to nobody")
+		}
+	case "role", "identity":
+		if a.Args.PromptName == "" {
+			return fault.Field("Action", "args.prompt_name", "%s needs a name", a.Args.Prompt)
+		}
+		if err := checkName("Action", "args.prompt_name", a.Args.PromptName); err != nil {
+			return err
+		}
+	default:
+		return fault.Field("Action", "args.prompt", "%q is not a layer: it is system, role, or identity",
+			a.Args.Prompt)
+	}
+
+	if !rule.text {
+		if a.Args.Text != "" {
+			return unexpected(a.Op, "text")
+		}
+		return nil
+	}
+	if a.Args.Text == "" {
+		return fault.Field("Action", "args.text",
+			"setting a layer to nothing is %s, which says what it means", OpOrcInstructClear)
+	}
+
+	// A wake message is a sentence and a layer is a document, so they are bounded
+	// differently — the same two numbers Orc uses, checked before this is queued.
+	limit := MaxPromptBytes
+	what := "a prompt"
+	if a.Args.Wake {
+		limit, what = MaxWakeBytes, "a wake message"
+	}
+	if len(a.Args.Text) > limit {
+		return fault.Field("Action", "args.text",
+			"%s is %d bytes and the limit is %d; it would be refused on the agent machine after a sync",
+			what, len(a.Args.Text), limit)
+	}
+	return nil
+}
+
+// checkWorkspaceArgs validates `orc workspace`'s three operands.
+//
+// Both paths are required and both must be absolute. A relative one would mean a
+// different directory depending on where the agent's sync happened to run, which is
+// the one thing a queued action cannot be allowed to depend on — the machine that
+// applies it is not the machine that wrote it.
+func (a Action) checkWorkspaceArgs(rule argRule) error {
+	for _, c := range []struct {
+		want  bool
+		field string
+		value string
+	}{
+		{rule.workspace, "workspace", a.Args.Workspace},
+		{rule.from, "from", a.Args.From},
+	} {
+		if !c.want {
+			if c.value != "" {
+				return unexpected(a.Op, c.field)
+			}
+			continue
+		}
+		if c.value == "" {
+			return fault.Field("Action", "args."+c.field, "%s requires %s", a.Op, c.field)
+		}
+		if err := checkText("Action", "args."+c.field, c.value, MaxPatternRunes, false); err != nil {
+			return err
+		}
+		if !path.IsAbs(c.value) {
+			return fault.Field("Action", "args."+c.field,
+				"%s must be an absolute path; the machine that applies this is not the one that wrote it", c.field)
+		}
+	}
+	if !rule.optAdopt && a.Args.Adopt {
+		return unexpected(a.Op, "adopt")
 	}
 	return nil
 }

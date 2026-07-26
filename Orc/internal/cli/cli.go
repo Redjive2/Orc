@@ -236,6 +236,10 @@ func (a App) dispatch(args []string) error {
 	case "owner":
 		return a.owner(rest)
 
+	case "instruct":
+		return a.instructVerb(rest)
+	case "workspace":
+		return a.workspace(rest)
 	case "model":
 		return a.tune(rest)
 	case "employ":

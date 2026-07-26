@@ -23,6 +23,7 @@ muff <command> <args...>
 | `scope <task> <paths...>`               | Limit editing to `<paths...>`                             |
 | `push <task>`                           | Push `<task>` to the task pool                            |
 | `worktree <task> <worktree>`            | Match this task to a git worktree in the main git repo    |
+| `rebind [--dry-run] <old> <new>`        | Follow every binding at or under `<old>` to `<new>`       |
 | `check-scope <paths...>`†               | Exit `0` if every path is in scope, `9` if any is not     |
 | `verify`†                               | Walk the store and report damage, changing nothing        |
 | `help`                                  | The command list, scores, status values, and environment  |

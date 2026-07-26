@@ -37,6 +37,7 @@ type storedEvent struct {
 	Boss        string   `json:"boss,omitempty"`
 	Model       string   `json:"model,omitempty"`
 	Effort      string   `json:"effort,omitempty"`
+	Workspace   string   `json:"workspace,omitempty"`
 	Patterns    []string `json:"patterns,omitempty"`
 
 	// Grant fields. Session and Until are mutually exclusive, which
@@ -187,6 +188,8 @@ func encodeIdentityEvent(e model.IdentityEvent) ([]byte, error) {
 	case model.OpEmploy, model.OpModel:
 		stored.Model = e.Model().String()
 		stored.Effort = e.Effort().String()
+	case model.OpWorkspace:
+		stored.Workspace = e.Workspace()
 	case model.OpFire:
 		// Nothing but who and when: what it was employed at is already in the
 		// journal, and repeating it here would be two places to disagree.
@@ -273,6 +276,12 @@ func decodeIdentityEvent(path string, stored storedEvent) (model.IdentityEvent, 
 			return wrapIdentity(model.Retune(by, at, m, effort))
 		}
 		return wrapIdentity(model.Employ(by, at, m, effort))
+
+	case model.OpWorkspace:
+		if stored.Workspace == "" {
+			return bad("workspace event names no path")
+		}
+		return wrapIdentity(model.SetWorkspace(by, at, stored.Workspace))
 
 	case model.OpFire:
 		return wrapIdentity(model.Fire(by, at))

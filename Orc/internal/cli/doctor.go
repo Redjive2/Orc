@@ -210,6 +210,7 @@ func (a App) guards(s caller) []check {
 	out = append(out, a.keyringMode(s))
 	out = append(out, a.compiledSettings(s))
 	out = append(out, a.strayClaudes(s))
+	out = append(out, a.workspaceDrift(s))
 	return out
 }
 
@@ -373,6 +374,49 @@ func denies(rules []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// workspaceDrift reports sessions working somewhere their identity no longer says.
+//
+// A workspace moved while a session runs leaves the agent writing to a directory
+// Orc does not consider its workspace — and whose paths its compiled permissions
+// were written against. `orc workspace <identity>` says so for one agent; nobody
+// runs that for every agent, and this is the check that is run when something is
+// already suspected.
+//
+// A session that predates the workspace being recorded says nothing: "cannot say"
+// is not a disagreement, and reporting it as one would make doctor cry wolf on
+// every fleet that upgraded.
+func (a App) workspaceDrift(s caller) check {
+	const guard = "workspace drift"
+
+	identities, err := s.store.Identities()
+	if err != nil {
+		return check{guard: guard, state: unchecked, detail: err.Error()}
+	}
+
+	var drifted []string
+	for _, i := range identities {
+		state, live, err := s.store.Session(i.Name())
+		if err != nil || !live || state.Workspace == "" {
+			continue
+		}
+		want := s.store.WorkspaceDir(i.Name())
+		if filepath.Clean(state.Workspace) == filepath.Clean(want) {
+			continue
+		}
+		drifted = append(drifted, fmt.Sprintf("%s is working in %s, not %s", i.Name(), state.Workspace, want))
+	}
+
+	if len(drifted) == 0 {
+		return check{guard: guard, state: inForce,
+			detail: "every running session is in the directory its identity names"}
+	}
+	// partial rather than absent: the guard exists and is doing its job — it is
+	// what it found that is wrong. The fix is named because it is one command and
+	// the alternative is an operator guessing at `orc workspace` variants.
+	return check{guard: guard, state: partial,
+		detail: strings.Join(drifted, "; ") + " — `orc refresh <identity>` starts a session in the right place"}
 }
 
 // strayClaudes looks for thinking Orc did not start.

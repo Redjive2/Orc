@@ -313,20 +313,33 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			}
 		case protocol.OpOrcAssignRole, protocol.OpOrcAssignAuthority, protocol.OpOrcAssignPerm,
 			protocol.OpOrcMove, protocol.OpOrcBudget, protocol.OpOrcTend,
-			protocol.OpOrcFire, protocol.OpOrcRevoke, protocol.OpOrcEditPermission:
+			protocol.OpOrcFire, protocol.OpOrcRevoke, protocol.OpOrcEditPermission,
+			protocol.OpOrcInstructSet, protocol.OpOrcInstructClear:
 			// Each sets a state to what was asked for, so a repeat lands in the
 			// same place. `tend` most of all: reconciling twice reconciles. An edit
 			// carries the whole permission, so applying it twice writes the same
 			// floor and the same clauses — and orc says "already that" rather than
 			// journaling a second amendment.
+			//
+			// A prompt is a value too: setting a layer to what it already says
+			// lands in the same place, and clearing one twice is cleared.
 			if !op.Idempotent() {
 				t.Errorf("%q should be idempotent", op)
 			}
 		case protocol.OpOrcNewIdentity, protocol.OpOrcNewRole, protocol.OpOrcNewPermission,
 			protocol.OpOrcRemoveIdentity, protocol.OpOrcRemoveRole, protocol.OpOrcRemovePerm,
-			protocol.OpOrcGrant, protocol.OpOrcEmploy, protocol.OpOrcPoke, protocol.OpOrcRefresh:
+			protocol.OpOrcGrant, protocol.OpOrcEmploy, protocol.OpOrcPoke, protocol.OpOrcRefresh,
+			protocol.OpOrcWorkspace:
 			// Creating twice conflicts, employing twice spends a budget twice, and
 			// refreshing twice discards the conversation the first refresh started.
+			//
+			// A workspace move is two operations behind one verb: adopting a
+			// directory lands in the same place however often it is applied, but
+			// relocating copies files and the second application finds the source
+			// where it left it. It is classified by the half that is not
+			// idempotent, and guarded like the library's writes are — `from` is its
+			// digest, so a retry against a moved-on world is refused rather than
+			// repeated.
 			if op.Idempotent() {
 				t.Errorf("%q must not be idempotent", op)
 			}

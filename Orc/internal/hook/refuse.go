@@ -146,3 +146,99 @@ func refuseClause(target, rel string, kind model.Kind, patterns []model.Pattern,
 }
 
 func join(lines ...string) string { return strings.Join(lines, "\n") }
+
+// --- the shell ------------------------------------------------------------
+
+// refuseShell explains a command no clause covers.
+//
+// It names the command rather than the whole line, because the line is usually
+// long and exactly one word of it is the problem — and it prints the clause that
+// would fix it, ready to be asked for.
+func refuseShell(name, line string, patterns []model.Pattern, source string) string {
+	allowed := shellTerms(patterns)
+
+	lines := []string{
+		fmt.Sprintf("orc: you may not run %s.", name),
+		"",
+		fmt.Sprintf("  the command:  %s", ellipsis(line, 120)),
+	}
+	if len(allowed) == 0 {
+		lines = append(lines,
+			"  you hold no shell permission, so you may run only the commands",
+			fmt.Sprintf("  every identity may:  %s", strings.Join(model.Innocuous(), "  ")))
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("  you may run:  %s", strings.Join(allowed, "  ")),
+			fmt.Sprintf("  and always:   %s", strings.Join(model.Innocuous(), "  ")))
+	}
+	return join(append(lines,
+		fmt.Sprintf("  (%s)", source),
+		"",
+		"  ask your boss for a permission that covers it:",
+		fmt.Sprintf("    orc new permission <name> <floor> 'shell(%s)'", name),
+	)...)
+}
+
+// refuseOpaque explains a line whose commands cannot be read.
+//
+// The distinction matters to whoever reads it: this is not "you may not run
+// that", it is "nobody can tell what that runs". An agent told the first will
+// ask for a permission naming a command; told the second, it will rephrase.
+func refuseOpaque(line string, patterns []model.Pattern, source string) string {
+	allowed := shellTerms(patterns)
+	lines := []string{
+		"orc: that command line hides what it runs.",
+		"",
+		fmt.Sprintf("  the command:  %s", ellipsis(line, 120)),
+		"  substitutions — $(…), `…`, ${…} — and interpreters like sh -c, eval and",
+		"  xargs take a program as data, so the name in front of them says nothing",
+		"  about what would happen.",
+	}
+	if len(allowed) > 0 {
+		lines = append(lines, fmt.Sprintf("  you may run:  %s", strings.Join(allowed, "  ")))
+	}
+	return join(append(lines,
+		fmt.Sprintf("  (%s)", source),
+		"",
+		"  write it as commands whose names are visible, or ask for shell(**),",
+		"  which is the only clause that can cover a line nobody can read.",
+	)...)
+}
+
+// refuseBlindShell is the third rung for a command.
+//
+// A read passes when no permission can be read, because a blocked read discloses
+// nothing the agent does not already have. A command is not like that — it could
+// be anything — so the shell stops instead.
+func refuseBlindShell(line string) string {
+	return join(
+		"orc: your permissions cannot be read, so the shell is closed.",
+		"",
+		fmt.Sprintf("  the command:  %s", ellipsis(line, 120)),
+		"  a read would still pass here; a command could be anything, so it does not.",
+		"",
+		"  check the store is reachable:",
+		"    orc doctor",
+	)
+}
+
+// shellTerms is what the identity's shell clauses allow, as words.
+func shellTerms(patterns []model.Pattern) []string {
+	out := []string{}
+	for _, p := range patterns {
+		if p.Kind() == model.KindShell {
+			out = append(out, p.Arg())
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ellipsis keeps a refusal to one screen. A command line can be a paragraph, and
+// the part that matters is the beginning.
+func ellipsis(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
+}

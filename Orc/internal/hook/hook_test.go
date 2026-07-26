@@ -85,6 +85,25 @@ func newRig(t *testing.T) *rig {
 // workspace is what a clause is relative to, and what a test writes its files under.
 func (r *rig) workspace() string { return r.store.WorkspaceDir(r.who) }
 
+// permit gives ember another permission, so a test can say what changes when a
+// clause is held rather than only what happens without one.
+func (r *rig) permit(name string, clauses ...string) {
+	r.t.Helper()
+	patterns, err := model.ParsePatterns(clauses)
+	if err != nil {
+		r.t.Fatalf("patterns: %v", err)
+	}
+	if _, err := r.store.CreatePermission(mustName(r.t, name), mustAuthority(r.t, 40), patterns); err != nil {
+		r.t.Fatalf("permission: %v", err)
+	}
+	boss := mustUser(r.t, "boss")
+	if _, err := r.store.ApplyRole(mustName(r.t, "engineer"), func(model.Role) (model.RoleEvent, error) {
+		return model.Permit(boss, epoch, mustName(r.t, name))
+	}); err != nil {
+		r.t.Fatalf("permit: %v", err)
+	}
+}
+
 // as builds options for one identity, with an optional extra environment.
 func (r *rig) as(name string, extra map[string]string) hook.Options {
 	env := map[string]string{"ORC_IDENTITY": name, "ORC_SESSION": "0f9a1a6a-0000-4000-8000-000000000000"}
@@ -319,11 +338,52 @@ func TestKeyringIsAnEscape(t *testing.T) {
 	}
 }
 
-// TestBashIsMostlyOutOfReach: `anno write` is recognised because Anno reaches the
-// filesystem that way, and everything else passes. Saying so plainly beats implying a
-// guarantee that does not hold.
-func TestBashIsMostlyOutOfReach(t *testing.T) {
+// TestTheShellIsShutByDefault is the rule `shell(...)` exists for.
+//
+// It used to be the other way round: every command passed except the two shapes
+// the hook could read, and a test here said so — precisely because it was a hole
+// somebody would have to change the documentation to close. This is that change.
+func TestTheShellIsShutByDefault(t *testing.T) {
 	r := newRig(t)
+	opts := r.as("ember", nil)
+	ws := r.workspace()
+
+	bash := func(command string) hook.Outcome {
+		return r.call(opts, map[string]any{
+			"hook_event_name": "PreToolUse",
+			"tool_name":       "Bash",
+			"cwd":             ws,
+			"tool_input":      map[string]any{"command": command},
+		})
+	}
+
+	// ember holds no shell clause, so it has the innocuous set and nothing else.
+	if out := bash("echo hello"); out.Code != hook.CodeOK {
+		t.Errorf("an innocuous command was blocked:\n%s", out.Stderr)
+	}
+	for _, command := range []string{
+		"ls",
+		"anno write Anno/internal/tree.go",
+		"sed -i s/a/b/ " + ws + "/Common/user/user.go",
+		"curl https://example.com",
+	} {
+		if out := bash(command); out.Code != hook.CodeBlock {
+			t.Errorf("%q ran with no shell permission:\n%s", command, out.Stderr)
+		}
+	}
+
+	// The refusal names the command rather than the line, and says what to ask for.
+	out := bash("ls -la")
+	if !strings.Contains(out.Stderr, "you may not run ls") ||
+		!strings.Contains(out.Stderr, "shell(ls)") {
+		t.Errorf("the refusal should name the command and the clause:\n%s", out.Stderr)
+	}
+}
+
+// A clause opens exactly what it names, and nothing it does not.
+func TestAShellClauseOpensWhatItNames(t *testing.T) {
+	r := newRig(t)
+	r.permit("run-anno", "shell(anno ls)")
 	opts := r.as("ember", nil)
 	ws := r.workspace()
 
@@ -339,13 +399,89 @@ func TestBashIsMostlyOutOfReach(t *testing.T) {
 	if out := bash("anno write Anno/internal/tree.go"); out.Code != hook.CodeOK {
 		t.Errorf("an in-scope anno write was blocked:\n%s", out.Stderr)
 	}
-	if out := bash("cd " + ws + " && anno write Common/user/user.go"); out.Code != hook.CodeBlock {
-		t.Errorf("an out-of-scope anno write was allowed")
+	if out := bash("ls -la"); out.Code != hook.CodeOK {
+		t.Errorf("a named command was blocked:\n%s", out.Stderr)
 	}
-	// Undecidable, and passes. This is the hole, and it is a test so that somebody
-	// changing it has to change the documentation too.
-	if out := bash("sed -i '' s/a/b/ " + ws + "/Common/user/user.go"); out.Code != hook.CodeOK {
-		t.Errorf("a shell write orc cannot decide was blocked; §7.5 says it passes:\n%s", out.Stderr)
+	if out := bash("rm -rf /"); out.Code != hook.CodeBlock {
+		t.Error("a command the clause does not name was allowed")
+	}
+
+	// The shell gate says which commands may run; it does not decide what they
+	// touch. `anno write` is still checked against the write clauses, and that is
+	// what stops this one.
+	if out := bash("cd " + ws + " && anno write Common/user/user.go"); out.Code != hook.CodeBlock {
+		t.Error("an out-of-scope anno write was allowed")
+	}
+
+	// Every command in a line is checked, not only the first.
+	if out := bash("ls && rm -rf /"); out.Code != hook.CodeBlock {
+		t.Error("only the first command in the line was checked")
+	}
+}
+
+// A line that hides what it runs needs the one clause that covers everything,
+// because every narrower clause would be deciding on a name that says nothing
+// about what happens.
+func TestAHiddenCommandNeedsEverything(t *testing.T) {
+	r := newRig(t)
+	r.permit("run-echo", "shell(echo sh)")
+	opts := r.as("ember", nil)
+	ws := r.workspace()
+
+	bash := func(command string) hook.Outcome {
+		return r.call(opts, map[string]any{
+			"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": ws,
+			"tool_input": map[string]any{"command": command},
+		})
+	}
+
+	for _, command := range []string{"echo $(rm -rf /)", "sh -c rm", "echo `whoami`"} {
+		out := bash(command)
+		if out.Code != hook.CodeBlock {
+			t.Errorf("%q was allowed by a narrow clause", command)
+			continue
+		}
+		if !strings.Contains(out.Stderr, "hides what it runs") {
+			t.Errorf("%q should be refused as unreadable, not as unnamed:\n%s", command, out.Stderr)
+		}
+	}
+
+	// shell(**) is the one clause that can honestly cover it.
+	wide := newRig(t)
+	wide.permit("run-anything", "shell(**)")
+	if out := wide.call(wide.as("ember", nil), map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": wide.workspace(),
+		"tool_input": map[string]any{"command": "sh -c echo"},
+	}); out.Code != hook.CodeOK {
+		t.Errorf("shell(**) did not cover an opaque line:\n%s", out.Stderr)
+	}
+}
+
+// `except` is the grammar every other kind already has: it takes back out of a
+// wide clause, rather than needing a list of everything else.
+func TestShellExcept(t *testing.T) {
+	r := newRig(t)
+	r.permit("almost-everything", "shell(** except rm curl)")
+	opts := r.as("ember", nil)
+
+	bash := func(command string) hook.Outcome {
+		return r.call(opts, map[string]any{
+			"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": r.workspace(),
+			"tool_input": map[string]any{"command": command},
+		})
+	}
+
+	if out := bash("git status"); out.Code != hook.CodeOK {
+		t.Errorf("a command inside ** was blocked:\n%s", out.Stderr)
+	}
+	for _, command := range []string{"rm -rf /", "curl https://example.com"} {
+		if out := bash(command); out.Code != hook.CodeBlock {
+			t.Errorf("%q was allowed by a clause that excepts it", command)
+		}
+	}
+	// The exception holds however the command is reached.
+	if out := bash("cd /tmp && /bin/rm x"); out.Code != hook.CodeBlock {
+		t.Error("an excepted command reached by its full path was allowed")
 	}
 }
 
@@ -631,4 +767,35 @@ func fingerprint(t *testing.T, root, skip string) string {
 	}
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+// Running as somebody else is not what a clause described.
+//
+// `shell(ls)` named `ls`, not `ls` as root — and `sudo`'s flags take values, so
+// reading past them named a person: `sudo -u bob ls` came out as running `bob`,
+// which is a refusal nobody could act on.
+func TestSudoIsNotACommandNameToMatchOn(t *testing.T) {
+	r := newRig(t)
+	r.permit("run-ls", "shell(ls)")
+	opts := r.as("ember", nil)
+	bash := func(command string) hook.Outcome {
+		return r.call(opts, map[string]any{
+			"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": r.workspace(),
+			"tool_input": map[string]any{"command": command},
+		})
+	}
+
+	if out := bash("ls -la"); out.Code != hook.CodeOK {
+		t.Errorf("the named command was blocked:\n%s", out.Stderr)
+	}
+	for _, command := range []string{"sudo ls", "sudo -u bob ls", "doas ls"} {
+		out := bash(command)
+		if out.Code != hook.CodeBlock {
+			t.Errorf("%q was covered by shell(ls)", command)
+			continue
+		}
+		if strings.Contains(out.Stderr, "run bob") {
+			t.Errorf("%q named a person as the command:\n%s", command, out.Stderr)
+		}
+	}
 }

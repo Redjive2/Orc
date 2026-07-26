@@ -27,6 +27,9 @@ Orc exposes the following commands:
 | `refresh <identity>`                        | Create a new Code session to replace the old one for the identity          |
 | `move <identity> <boss>`                    | Move the identity to be under the boss; lower authority/perms as needed    |
 | `model <identity> [<model>] [--effort <e>]`† | Show, or change, what an identity thinks with; `--now` replaces the running session |
+| `workspace <identity> [<path>] [--adopt]`†  | Show, or change, where an identity works; `--now` replaces the running session |
+| `instruct [<target>] [--set <f>|--edit|--clear]`† | The standing instructions agents run under: `system`, `role <n>`, `identity <n>`, `wake` |
+| `instruct show <identity> [--diff]`†        | The composed prompt, exactly as the agent gets it                          |
 | `employ <identity> [--model <m>] [--effort <e>]` | Add the identity to the work list; populate it as needed automatically |
 | `fire <identity>`                           | Remove the identity from the work list; do not repopulate it               |
 | `introspect [--only <field name>]`          | Shows information on the active agent in this leaf session. Can show one only one field with no formatting for remote authorization and other purposes. |
@@ -78,16 +81,16 @@ Terms:
 | `--model <m>`  | `employ`                  | Which model the session runs; defaults to `sonnet`          |
 | `--effort <e>` | `employ`                  | How hard it thinks; defaults to `medium`                    |
 | `--direct`     | `attach`                  | Hand the terminal to the real Claude session, not Orc's view |
-| `--worktree`   | `new identity`            | Make the workspace a git worktree of the main repo          |
 | `--watch <dur>`| `tend`                    | Keep reconciling on an interval, as a backstop              |
 | `--every <dur>` | `wake`                    | Run the wake cycle on an interval instead of once            |
 | `--after <dur>` | `wake`                    | How long a waiting session may stay waiting (default 10m)    |
 | `--message <t>` | `wake`                    | What to say instead of `continue`                            |
 | `--dry-run`     | `wake`                    | Report what would be woken, and poke nothing                 |
 | `--effort <e>`  | `model`, `employ`         | The effort half of the load: low, medium, high, xhigh, max  |
-| `--now`         | `model`                   | Replace the running session so the change takes effect now  |
+| `--now`         | `model`, `workspace`      | Replace the running session so the change takes effect now  |
+| `--adopt`       | `workspace`               | Work in a directory that already exists, rather than making one |
 | `--only <f>`   | `introspect`              | Print one field, raw, with no formatting                    |
-| `--json`       | `status`, `introspect`, `list`, `budget` | Print the stable JSON shape instead of the screen |
+| `--json`       | `status`, `introspect`, `list`, `budget`, `instruct` | Print the stable JSON shape instead of the screen |
 | `--yes`        | `remove`, `fire`, `owner rename`, `owner reset` | Required when stdin is not a terminal, which for an agent is always |
 | `--no-color`   | any                       | Never emit colour                                           |
 | `--color`      | any                       | Emit colour even when stdout is not a terminal              |
@@ -156,6 +159,9 @@ each time, so two fleets could not be discussed in the same words.
 | `orc-read`   | 1     | `orc(introspect)`                | confine to reading — see below              |
 | `orc-agents` | 60    | `orc(new)` `orc(move)` `orc(employ)` `orc(fire)` `orc(attach)` `orc(poke)` `orc(refresh)` | hire agents and direct them |
 | `orc-policy` | 85    | `orc(assign)` `orc(grant)` `orc(revoke)` `orc(remove)` | hand out roles, permissions, authority |
+| `shell-read` | 10    | `shell(ls find grep …)`          | run the commands that look without changing |
+| `shell-build`| 40    | `shell(go make npm …)`           | run the toolchain: compile, format, test    |
+| `shell-all`  | 75    | `shell(**)`                      | run any command at all                      |
 | `upgrade`    | 90    | `tool(upgrade)`                  | rebuild and restart every tool, every machine |
 
 They are **ordinary permissions**. Assignable, grantable, listed by
@@ -210,9 +216,10 @@ identity holds exactly one role.
 
 A clause is `kind(argument)`. The kinds are `read` and `write` over path globs
 where `**` crosses directories, `spawn` over a load budget, `orc` over Orc's own
-verbs, and `tool` over a named capability in another Orc tool. `Auth_Perm_Role.md`
-names the first three; `orc` and `tool` are this build's reading of "any number of
-specific commands or command patterns".
+verbs, `shell` over the commands an agent may run at a prompt, and `tool` over a
+named capability in another Orc tool. `Auth_Perm_Role.md` names the first three;
+`orc`, `shell` and `tool` are this build's reading of "any number of specific
+commands or command patterns".
 
 The argument is a list, and it may take things back out:
 
@@ -223,12 +230,51 @@ The argument is a list, and it may take things back out:
 | `write(** except Docs/**)`          | everything but these                           |
 | `orc(new assign)`                   | two verbs                                      |
 | `orc(** except remove)`             | every verb but one                             |
+| `shell(ls cat echo)`                | three commands                                 |
+| `shell(** except rm curl)`          | every command but these                        |
 | `tool(**)`                          | every named capability                         |
 | `spawn(24)`                         | a budget, which is none of the above           |
 
 Every kind but `spawn` takes both halves, and every term of every kind is a glob:
 `orc(re*)` is a pattern over verbs exactly as `read(Anno/*)` is one over paths. A
 budget is a number, so `spawn(24 48)` is refused rather than resolved.
+
+### `shell` is the one that refuses by default
+
+Every other kind narrows something an agent could otherwise do freely. `shell` is
+the reverse: with no `shell` clause an identity may run only these, and nothing
+else at all.
+
+```
+basename  dirname  echo  false  printf  pwd  true
+```
+
+They are the commands that cannot change anything and cannot tell an agent
+something it does not already have. `ls` is deliberately not among them — it
+discloses what is on a disk the agent may not be allowed to read — and neither
+are `cat`, `head` or `tail`, which read files and would be a second path around
+the `read(…)` clause that is supposed to decide that.
+
+A clause names commands as they are typed. Matching is on the base name of what a
+line actually runs, so `shell(rm)` covers `/bin/rm`, and `cd x && rm y` is a `rm`.
+Every command in a line is checked, not just the first.
+
+**A line that hides what it runs needs `shell(**)`.** Substitutions — `$(…)`,
+backticks, `${…}` — and interpreters that take a program as data — `sh -c`,
+`eval`, `xargs`, `python -c` — are refused by any narrower clause, because the
+name in front of them says nothing about what would happen. That is a shape
+match on an undecidable thing, and it is eager on purpose: a false positive costs
+a rephrase, and a false negative costs the gate.
+
+**It gates which commands run, not what they touch.** `shell(rm)` lets `rm` run;
+the `write(…)` clauses still decide which files it may be pointed at, as far as
+the hook can tell — which for an arbitrary command is not far. The two are
+different questions and both are asked.
+
+Three toolkit permissions cover the usual cases: `shell-read` at floor 10 for the
+commands that look without touching, `shell-build` at 40 for the toolchain, and
+`shell-all` at 75 for a shell with nothing taken out. A fleet that wants a
+different set writes one.
 
 An exception always wins over a term, whatever order they are written in. Terms are
 sorted and de-duplicated on the way in, so two people who typed the same set in

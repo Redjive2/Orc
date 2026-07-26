@@ -47,6 +47,13 @@ func TestEveryFleetVerbQueues(t *testing.T) {
 		protocol.OpOrcRemoveRole: {"DELETE", "/api/v1/fleet/roles/engineer", `{` + m + `}`},
 		protocol.OpOrcRemovePerm: {"DELETE", "/api/v1/fleet/permissions/edit", `{` + m + `}`},
 		protocol.OpOrcTend:       {"POST", "/api/v1/fleet/tend", `{` + m + `}`},
+		// `from` is part of the request rather than optional: the route refuses a
+		// move that cannot say what the browser was looking at.
+		protocol.OpOrcInstructSet: {"PUT", "/api/v1/instruct/identities/atlas",
+			`{` + m + `,"text":"you write the parser"}`},
+		protocol.OpOrcInstructClear: {"DELETE", "/api/v1/instruct/system", `{` + m + `}`},
+		protocol.OpOrcWorkspace: {"POST", "/api/v1/fleet/identities/atlas/workspace",
+			`{` + m + `,"workspace":"/trees/parser","from":"/old/workspace","adopt":true}`},
 	}
 
 	seen := map[protocol.Op]bool{}

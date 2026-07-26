@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"orc/common/watch"
 	"orc/cq/internal/agent"
 	"orc/cq/internal/auth"
 	"orc/cq/internal/fault"
@@ -114,6 +115,8 @@ func (a App) dispatch(args []string) error {
 		return a.status(args[1:])
 	case "queue":
 		return a.queue(args[1:])
+	case "workspace":
+		return a.workspace(args[1:])
 	case "admin":
 		return a.admin(args[1:])
 	case "upgrade":
@@ -199,10 +202,22 @@ func (a App) serve(args []string) error {
 	supervise := fs.Bool("supervise", true, "run under a supervisor so the server can restart itself")
 	source := fs.String("source", a.look("CQ_SOURCE", ""), "checkout to build from on upgrade")
 	binDir := fs.String("bin", a.look("CQ_BIN", ""), "where upgrade installs binaries")
+	install := fs.Bool("install-service", false, "write a startup service for this machine and exit")
+	force := fs.Bool("force", false, "with --install-service, replace one that is already there")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	_ = metaOnly // the agent decides what to send; this is recorded for symmetry
+
+	// Writing the service is a use of `serve`'s own flags rather than a command of
+	// its own, and deliberately: the unit has to record the exact address, store,
+	// and certificates this server runs with, and those are these. `cq serve --addr
+	// :443 --state /srv/cq --install-service` writes a unit for precisely the
+	// server that command line describes, which is the only way to be sure the
+	// service and the thing somebody tested are the same server.
+	if *install {
+		return a.installService(*addr, *stateDir, *certFile, *keyFile, *noAdmin, *source, *binDir, *force)
+	}
 
 	// Become the supervisor, unless this process already is one's child or the
 	// caller asked for a plain process. A supervisor that forked a supervisor
@@ -368,7 +383,8 @@ func (a App) sync(args []string) error {
 	machine := fs.String("machine", a.look("CQ_MACHINE", hostname()), "this machine's name")
 	user := fs.String("user", a.look("CQ_USER", ""), "the mailbox to mirror")
 	home := fs.String("home", a.look("CQ_HOME", defaultAgentDir()), "agent state directory")
-	watch := fs.Duration("watch", 0, "repeat at this interval")
+	interval := fs.Duration("watch", 0, "repeat at this interval")
+	ttl := fs.Duration("for", 0, "stop watching after this long; default is until stopped")
 	nudge := fs.Bool("nudge", false, "coalescing form, called after every mailman action")
 	dryRun := fs.Bool("dry-run", false, "collect and print, but send nothing")
 	admin := fs.Bool("admin", true, "include the whole-Mailman view")
@@ -446,6 +462,13 @@ func (a App) sync(args []string) error {
 		return nil
 	}
 
+	// Set here rather than in sourceFor because only this command knows the agent
+	// home and the flags a watch would run with. An upgrade arriving down the queue
+	// applies inside this adapter, and this is what it calls afterwards.
+	src.EnsureWatch = a.ensureWatch(watchPlan{
+		Home: *home, Server: *serverURL, Machine: *machine, User: *user, Library: *library,
+	})
+
 	ag, err := agent.New(agent.Options{
 		Source: src, Server: *serverURL, Token: a.look("CQ_TOKEN", ""),
 		Machine: protocol.MachineID(*machine), State: *home,
@@ -466,18 +489,73 @@ func (a App) sync(args []string) error {
 		return a.report(report)
 	}
 
-	if *watch <= 0 {
+	if *interval <= 0 {
 		report, err := ag.Sync(context.Background())
 		if err != nil {
 			return err
 		}
 		return a.report(report)
 	}
+	return a.watchSync(ag, *home, *interval, *ttl)
+}
 
-	// The loop is here rather than inside the agent, so the process stays
-	// restartable and one failed round does not end the watch.
-	ticker := time.NewTicker(*watch)
+// watchSync is the mirror's heartbeat: sync, wait, sync again, until stopped.
+//
+// The loop is here rather than inside the agent, so the process stays restartable
+// and one failed round does not end the watch.
+//
+// Two things happen between rounds and never during one. The watcher checks
+// whether its own binary has been replaced — an upgrade this very loop applied
+// will have done exactly that — and restarts into the new build if so. And it
+// checks whether it has outlived the time it was given. Both are between rounds
+// because a round that is half-applied when the process image changes underneath
+// it is the one outcome worse than running an old build for another five minutes.
+func (a App) watchSync(ag *agent.Agent, home string, every, ttl time.Duration) error {
+	// Asked for once, at the top, so that what is compared against is the build
+	// this watcher started with rather than whatever was on disk a moment ago.
+	exe, stamp, err := watch.Own()
+	if err != nil {
+		return err
+	}
+
+	started := time.Now()
+	stopAt := watch.Until(started, ttl)
+	// A watcher that cannot say it is running is still a watcher, so a registry
+	// that will not write is complained about and carried past: refusing to sync
+	// because a bookkeeping file failed would take the mirror down over the very
+	// thing meant to keep it up. The cost is that an upgrade may start a second
+	// watcher beside this one, which is noise rather than damage.
+	announce := func() func() {
+		release, err := watch.Registry{Dir: watchers(home)}.Register(watch.Record{
+			Kind: watch.Sync, Exe: exe, Args: selfArgs(),
+			Period: watch.Duration(every), Started: started, Expires: stopAt,
+		})
+		if err != nil {
+			a.complain(err)
+			return func() {}
+		}
+		return release
+	}
+
+	release := announce()
+	defer func() { release() }()
+
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
+
+	// The lifetime is a timer rather than a comparison at the top of each round,
+	// so `--for` means what it says. Checked only between rounds, a watch given an
+	// hour and a seven-minute period would run sixty-three minutes — right for the
+	// default, where the period divides the hour exactly, and wrong for every
+	// setting that does not. A nil channel blocks for ever, which is exactly the
+	// behaviour wanted when no lifetime was asked for.
+	var expired <-chan time.Time
+	if stopAt != nil {
+		timer := time.NewTimer(time.Until(*stopAt))
+		defer timer.Stop()
+		expired = timer.C
+	}
+
 	for {
 		report, err := ag.Sync(context.Background())
 		if err != nil {
@@ -488,7 +566,40 @@ func (a App) sync(args []string) error {
 		} else if err := a.report(report); err != nil {
 			return err
 		}
-		<-ticker.C
+
+		// Asked here too, because a round can take longer than the lifetime left:
+		// finishing one and then waiting for a timer that has already fired would
+		// be a watch that outlives its own expiry by a whole period.
+		if stopAt != nil && !time.Now().Before(*stopAt) {
+			return a.say("cq: the watch has run its %s and is stopping", round(ttl))
+		}
+		if watch.Replaced(exe, stamp) {
+			// Removed first: after exec there is no `defer` left to run, and a
+			// record naming this pid would then describe the new image with the old
+			// one's claim. The new watcher writes its own on the way in.
+			release()
+			a.tell("cq: restarting into the new build")
+			if err := watch.Restart(exe, selfArgs()); err != nil {
+				// Not fatal, and not the end of the watch. Carrying on means the
+				// mirror keeps updating on the build it has, which is the whole
+				// point of this loop; the next round tries again, and a build that
+				// was mid-write when this looked will have finished by then.
+				a.complain(err)
+				release = announce()
+				// And the stamp moves on, so a build this process cannot exec into
+				// is not re-tried every round for ever. What is wanted is one
+				// complaint per new build, not one per cycle.
+				if now, err := watch.Look(exe); err == nil {
+					stamp = now
+				}
+			}
+		}
+
+		select {
+		case <-ticker.C:
+		case <-expired:
+			return a.say("cq: the watch has run its %s and is stopping", round(ttl))
+		}
 	}
 }
 

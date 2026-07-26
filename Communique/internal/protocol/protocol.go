@@ -41,8 +41,18 @@ const (
 	// The fleet's own limits. Orc holds the real ones; these are the bound cq
 	// allocates against, set generously enough that only a store already in
 	// trouble reaches them.
-	MaxNoteRunes        = 4096
-	MaxPatternRunes     = 512
+	MaxNoteRunes    = 4096
+	MaxPatternRunes = 512
+
+	// The standing instructions' bounds, and they are Orc's rather than cq's:
+	// `instruct.MaxLayer` and `instruct.MaxWake`, repeated here because cq cannot
+	// import Orc and a queue that accepted what the agent machine will refuse is a
+	// queue that fails after a sync, on a machine nobody is watching.
+	//
+	// A layer is a document and a wake message is a sentence, which is why there
+	// are two numbers rather than one.
+	MaxPromptBytes      = 16 << 10
+	MaxWakeBytes        = 2 << 10
 	MaxDescriptionRunes = 512
 	// MaxSpawnLoad matches Orc's model.MaxLoad, which is what the operator's own
 	// budget is set to. A queued budget above it would be refused there.
@@ -210,8 +220,18 @@ func (o Op) Idempotent() bool {
 		// task to whoever already owns it, and inviting a collaborator who is
 		// already one — both say so and change nothing.
 		return true
+	case OpOrcWorkspace:
+		// Two operations behind one verb. Adopting points a value at a directory
+		// that is already there, which lands in the same place however many times
+		// it is applied. Relocating copies files, and the second application finds
+		// the source where it left it and the target already made — so it is not
+		// idempotent, and does not need to be: `from` is the guard, exactly as
+		// `base` is for a file write. A retry whose `from` no longer matches is
+		// refused rather than repeated.
+		return false
 	case OpOrcAssignRole, OpOrcAssignAuthority, OpOrcAssignPerm, OpOrcMove,
-		OpOrcBudget, OpOrcTend, OpOrcFire, OpOrcRevoke, OpOrcEditPermission:
+		OpOrcBudget, OpOrcTend, OpOrcFire, OpOrcRevoke, OpOrcEditPermission,
+		OpOrcInstructSet, OpOrcInstructClear:
 		// Each sets a state to what was asked for rather than stepping it. An
 		// identity already under that boss stays there; a role already at that
 		// authority is unchanged; `tend` reconciles to the same place however many
@@ -653,6 +673,34 @@ type Args struct {
 	// every employ — so it is present-and-meaningful rather than absent.
 	Load    int    `json:"load,omitempty"`
 	Message string `json:"message,omitempty"`
+
+	// `orc workspace`'s operands.
+	//
+	// Workspace is the absolute path to work in, and is deliberately not `Path`:
+	// that field means "relative to the mirrored checkout and may not climb out of
+	// it", and two meanings on one field would make the queue's own report of what
+	// an action is about depend on which operation sat beside it.
+	//
+	// From is where the operator saw the identity working. Adopt says the directory
+	// is expected to be there already, which is the difference between working in
+	// somebody's checkout and moving an agent's files to a new path.
+	Workspace string `json:"workspace,omitempty"`
+	From      string `json:"from,omitempty"`
+	Adopt     bool   `json:"adopt,omitempty"`
+
+	// `orc instruct`'s operands. Prompt is which layer — "system", "role", or
+	// "identity" — and PromptName whose, empty for the fleet's own. Wake asks for
+	// the message rather than the prompt, which is a different bound and the
+	// opposite composition rule.
+	//
+	// The text itself reuses `Text`, the library's field, because it is the same
+	// kind of thing — a whole replacement, not an addition — and its rule already
+	// bounds and validates one. `Path` is *not* reused for the same reason it was
+	// not for a workspace: that field means "relative to the mirrored checkout",
+	// and a prompt is not in the checkout at all.
+	Prompt     string `json:"prompt,omitempty"`
+	PromptName string `json:"prompt_name,omitempty"`
+	Wake       bool   `json:"wake,omitempty"`
 }
 
 // Action is one thing the user did in the browser, waiting to be applied on the
@@ -708,6 +756,16 @@ type argRule struct {
 	optUntil    bool
 	optMessage  bool
 	optSession  bool // --model and --effort are allowed
+	// workspace and from are `orc workspace`'s operands: where to, and where the
+	// operator believed it was. optAdopt is whether the directory is expected to
+	// exist already.
+	workspace bool
+	from      bool
+	optAdopt  bool
+	// prompt is `orc instruct`'s target: the layer's kind, its name, and whether it
+	// is the wake message. What the layer becomes travels in `text`, the library's
+	// own operand.
+	prompt bool
 }
 
 var argRules = map[Op]argRule{

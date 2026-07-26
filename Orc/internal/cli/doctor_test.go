@@ -370,3 +370,58 @@ func TestTendWithoutWatchStillRunsOnce(t *testing.T) {
 		t.Errorf("a reconciled fleet did not say so:\n%s", got.stdout)
 	}
 }
+
+// TestDoctorFindsAWorkspaceThatMoved — §2.4.1. `orc workspace <identity>` says this
+// for one agent; nobody runs that for every agent, and this is the check somebody
+// runs when something is already suspected.
+func TestDoctorReportsWorkspaceDrift(t *testing.T) {
+	withHook(t)
+	r := fullFleet(t)
+	first := filepath.Join(t.TempDir(), "one")
+	second := filepath.Join(t.TempDir(), "two")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r.ok("boss", "workspace", "ember", first, "--adopt")
+	r.ok("boss", "employ", "ember")
+
+	// Nothing has moved: the guard holds, and doctor is quiet about it.
+	got := doctored(t, r, asBoss(r), "doctor")
+	if !strings.Contains(squeezed(got.stdout), "workspace drift") {
+		t.Fatalf("the check is not listed at all:\n%s", got.stdout)
+	}
+	if strings.Contains(got.stdout, "is working in") {
+		t.Errorf("a fleet in agreement reported drift:\n%s", got.stdout)
+	}
+
+	// Moved while it runs: the session keeps the old directory, and its compiled
+	// permissions name the old paths.
+	r.ok("boss", "workspace", "ember", second, "--adopt")
+
+	got = doctored(t, r, asBoss(r), "doctor")
+	if got.code != fault.CodeConflict {
+		t.Errorf("a drifted fleet exited %d, want %d:\n%s", got.code, fault.CodeConflict, got.stdout)
+	}
+	for _, want := range []string{"ember", first, second} {
+		if !strings.Contains(got.stdout, want) {
+			t.Errorf("the report does not say %q:\n%s", want, got.stdout)
+		}
+	}
+	if !strings.Contains(squeezed(got.stdout), "orc refresh") {
+		t.Errorf("it does not say how to fix it:\n%s", got.stdout)
+	}
+
+	// And a replaced session clears it.
+	r.ok("boss", "refresh", "ember")
+	if after := doctored(t, r, asBoss(r), "doctor"); strings.Contains(after.stdout, "is working in") {
+		t.Errorf("a refreshed session still reads as drifted:\n%s", after.stdout)
+	}
+}
+
+// asBoss is the environment for a rig bootstrapped as boss rather than root.
+func asBoss(r *rig) map[string]string {
+	return map[string]string{"ORC_USER": "boss", "ORC_KEY": r.keys["boss"]}
+}

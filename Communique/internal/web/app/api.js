@@ -52,6 +52,15 @@ async function request(method, path, body) {
   return payload;
 }
 
+// instructPath is §10's table, in one place, so the routes cannot drift between the
+// six calls that would otherwise each spell one out.
+function instructPath(kind, name, wake) {
+  const root = wake ? "/api/v1/instruct/wake" : "/api/v1/instruct";
+  if (kind === "system") return wake ? root : `${root}/system`;
+  const group = kind === "role" ? "roles" : "identities";
+  return `${root}/${group}/${encodeURIComponent(name)}`;
+}
+
 export const api = {
   session: () => request("GET", "/api/v1/session"),
   inbox: (machine) => request("GET", withMachine("/api/v1/inbox", machine)),
@@ -128,6 +137,19 @@ export const api = {
   poke: (machine, name, message) =>
     fleetCall("identities", name, "poke", machine, { message: message || undefined }),
   refreshAgent: (machine, name) => fleetCall("identities", name, "refresh", machine, {}),
+  // `from` is where the browser saw it working. The server requires it: a snapshot
+  // is minutes old by the time somebody clicks, and without it a move made here
+  // would silently overturn one made on the machine in between.
+  moveWorkspace: (machine, name, { workspace, from, adopt }) =>
+    fleetCall("identities", name, "workspace", machine, { workspace, from, adopt }),
+  // The standing instructions. The layer is in the path, so a call cannot name one
+  // layer and carry another; `name` is the role's or the agent's, and empty for the
+  // fleet's own.
+  setInstruct: (machine, { kind, name, wake }, text) =>
+    request("PUT", instructPath(kind, name, wake), { machine, text }),
+  clearInstruct: (machine, { kind, name, wake }) =>
+    request("DELETE", instructPath(kind, name, wake), { machine }),
+
   grant: (machine, name, permission, until) =>
     fleetCall("identities", name, "grant", machine, { permission, until: until || undefined }),
   revoke: (machine, name, permission) =>

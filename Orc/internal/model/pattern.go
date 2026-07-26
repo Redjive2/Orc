@@ -27,6 +27,19 @@ const (
 	KindWrite
 	KindSpawn
 	KindOrc
+	// KindShell is which shell commands an agent may run.
+	//
+	// It is the only kind that is *deny by default*: an identity with no shell
+	// clause may still run the handful of commands in Innocuous, and nothing
+	// else. Every other kind narrows something agents could otherwise do freely;
+	// this one is the reverse, because a shell is every capability at once, and
+	// "everything except what somebody thought to forbid" is not a policy.
+	//
+	// Terms are command names as typed — `shell(ls cat)` — matched against the
+	// base name of what a command line actually runs, so `/bin/ls` is `ls`. That
+	// is a shape match on an undecidable thing; hook.Commands says exactly what
+	// it can and cannot see.
+	KindShell
 	// KindTool is a named capability in another Orc tool.
 	//
 	// It exists because containment is by *clause*, not by name — see Contains and
@@ -54,6 +67,8 @@ func (k Kind) String() string {
 		return "spawn"
 	case KindOrc:
 		return "orc"
+	case KindShell:
+		return "shell"
 	case KindTool:
 		return "tool"
 	default:
@@ -75,16 +90,20 @@ func ParseKind(raw string) (Kind, error) {
 		return KindSpawn, nil
 	case "orc":
 		return KindOrc, nil
+	case "shell":
+		return KindShell, nil
 	case "tool":
 		return KindTool, nil
 	default:
 		return KindUnset, fault.Usage{Reason: fmt.Sprintf(
-			"unknown permission kind %q; try read, write, spawn, orc, or tool", raw)}
+			"unknown permission kind %q; try read, write, spawn, orc, shell, or tool", raw)}
 	}
 }
 
 // Kinds lists every kind, for help and for tests that must be total.
-func Kinds() []Kind { return []Kind{KindRead, KindWrite, KindSpawn, KindOrc, KindTool} }
+func Kinds() []Kind {
+	return []Kind{KindRead, KindWrite, KindSpawn, KindOrc, KindShell, KindTool}
+}
 
 // Pattern is one clause of a permission: a kind and what it applies to.
 //
@@ -247,7 +266,7 @@ func cleanTerm(kind Kind, term string) (string, error) {
 	switch kind {
 	case KindRead, KindWrite:
 		return cleanGlob(term)
-	default: // KindOrc, KindTool
+	default: // KindOrc, KindShell, KindTool
 		// A verb and a tool name are single words, so a slash is always a mistake
 		// — usually a path clause written under the wrong kind. Wildcards are not:
 		// `orc(re*)` is a pattern over verbs exactly as `read(Anno/*)` is a pattern
@@ -405,7 +424,7 @@ func (p Pattern) Matches(target string) bool {
 			return false
 		}
 		clean = got
-	case KindOrc, KindTool:
+	case KindOrc, KindShell, KindTool:
 		clean = strings.ToLower(strings.TrimSpace(target))
 		if clean == "" {
 			return false

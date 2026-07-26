@@ -48,6 +48,20 @@ type SessionState struct {
 	Model  string `json:"model"`
 	Effort string `json:"effort"`
 
+	// Workspace is the directory the session was started in.
+	//
+	// It is recorded rather than looked up because it is a fact about *this*
+	// session, and the identity's workspace can change under it: a working
+	// directory is fixed when Claude starts, so an agent moved while it runs keeps
+	// writing where it began. Without this there is no way to notice — only to
+	// infer it from a session being older than the change — and an agent working
+	// outside the directory its permissions were compiled against is exactly the
+	// state somebody needs told.
+	//
+	// Empty on a session written before this existed, which reads as "cannot say"
+	// rather than as a disagreement.
+	Workspace string `json:"workspace,omitempty"`
+
 	Started  string `json:"started"`
 	Restarts int    `json:"restarts"`
 	// LastExit describes why the child last went away, when it has. It is text

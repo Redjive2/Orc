@@ -43,6 +43,12 @@ func (s *Store) bindingPath(worktree string) string {
 	return filepath.Join(s.root, worktreesDir, hex.EncodeToString(sum[:])+".json")
 }
 
+// Canonical is canonical, for callers outside the store who have to compare a path
+// against a binding's. Two spellings of one directory — /tmp and /private/tmp, most
+// often — are the same binding, and a caller that compared them literally would
+// rewrite every binding it looked at.
+func Canonical(path string) string { return canonical(path) }
+
 // canonical resolves a path to the one spelling every caller will agree on.
 //
 // Symlinks are followed, because the hook looks a directory up by the root

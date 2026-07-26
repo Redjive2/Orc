@@ -275,24 +275,48 @@ test("the queue leads with what needs a decision", () => {
 // the badge would stop meaning anything.
 test("the badge counts only what needs a decision", () => {
   const waiting = { action: { id: "f".repeat(32), op: "read", args: { puid: 1 } }, state: "queued" };
-  const withStuck = text(views.nav({ inbox: [], queue: [refused, waiting] }, "/inbox"));
+  const withStuck = text(views.nav({ inbox: [], queue: [refused, waiting] }, "/tooling/queue"));
   assert.match(withStuck, /queue\s*1/);
 
-  const clean = text(views.nav({ inbox: [], queue: [waiting] }, "/inbox"));
+  const clean = text(views.nav({ inbox: [], queue: [waiting] }, "/tooling/queue"));
   assert.doesNotMatch(clean, /queue\s*\d/);
 });
 
-test("the navigation offers every box", () => {
-  const out = text(views.nav({ ...state, adminEnabled: false }, "/inbox"));
-  for (const box of ["inbox", "compose", "sent", "archive", "queue"]) {
-    assert.match(out, new RegExp(box));
+// A badge on a sub-tab is invisible whenever another area is open — which is
+// most of the time, and exactly when it matters. So the area carries the sum.
+test("a count reaches the area above it", () => {
+  const refusedTwice = [refused, { ...refused, action: { ...refused.action, id: "c".repeat(32) } }];
+  const out = text(views.nav({ inbox: [], queue: refusedTwice }, "/mail/inbox"));
+  // Tooling is closed, so only the area is on screen — and it still says two.
+  assert.match(out, /tooling\s*2/);
+  assert.doesNotMatch(out, /queue/, "a closed area should not show its sub-tabs");
+});
+
+test("the navigation shows the areas, and the open one's tabs", () => {
+  const out = text(views.nav({ ...state, adminEnabled: true }, "/mail/inbox"));
+  for (const area of ["mail", "project", "manage", "admin", "tooling"]) {
+    assert.match(out, new RegExp(area), `no ${area}`);
   }
+  for (const sub of ["inbox", "compose", "sent", "archive", "store"]) {
+    assert.match(out, new RegExp(sub), `no ${sub}`);
+  }
+  // Another area's contents are not on screen.
+  assert.doesNotMatch(out, /identities/);
+});
+
+// `--no-admin` leaves two areas with nothing behind them, and an area with no
+// visible tabs is an area that does nothing when pressed.
+test("an area with nothing behind it is not shown", () => {
+  const out = text(views.nav({ ...state, adminEnabled: false }, "/mail/inbox"));
+  assert.doesNotMatch(out, /admin/);
+  assert.doesNotMatch(out, /store/);
+  assert.match(out, /mail/);
 });
 
 // The admin panel lists accounts by name alone, because a name is all Mailman
 // keeps: it once showed a creation time and the column was always blank.
 test("the account list renders from names alone", () => {
-  const out = text(views.admin({
+  const out = text(views.store({
     ...state,
     admin: {
       machines: [{
@@ -310,7 +334,7 @@ test("the account list renders from names alone", () => {
 
 // A machine that syncs without the admin view is a normal state, not an error.
 test("a machine with no admin view says so", () => {
-  const out = text(views.admin({
+  const out = text(views.store({
     ...state,
     admin: { machines: [{ machine: "studio", state: null }] },
   }));

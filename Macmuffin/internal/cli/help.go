@@ -39,6 +39,7 @@ var commands = []entry{
 	{"info", "<task>", "one task in full"},
 	{"scope", "<task> <paths...>", "limit editing to these paths"},
 	{"worktree", "<task> <path>", "bind the task to a git worktree"},
+	{"rebind", "<old> <new>", "follow worktrees that moved"},
 	{"check-scope", "<paths...>", "exit 0 in scope, 9 outside"},
 	{"create", "<task> --sub <name>", "add a subtask"},
 	{"status", "<task> <1..4>", "say how the work is going"},
@@ -121,6 +122,20 @@ var topics = map[string]topic{
 			"A worktree already bound to another live task is refused — an ambiguous\n" +
 			"lookup would silently enforce the wrong scope.",
 		examples: []string{"muff worktree fix-the-parser .", "muff worktree fix-the-parser ../parser-tree"},
+	},
+	"rebind": {
+		detail: "Follows a directory that moved. Every binding at or under <old> is\n" +
+			"rebound to the matching path under <new> — which is what keeps the hook\n" +
+			"enforcing after `orc workspace` relocates an agent's files.\n\n" +
+			"A binding whose new path is not a worktree is left alone and reported,\n" +
+			"with the `muff worktree` command that restores it, and the exit is 6:\n" +
+			"a task whose binding did not follow is a task whose scope is no longer\n" +
+			"enforced anywhere, which is a silence worth failing over.\n\n" +
+			"--dry-run lists what would move and changes nothing.",
+		examples: []string{
+			"muff rebind /old/tree /new/tree",
+			"muff rebind --dry-run /old/tree /new/tree",
+		},
 	},
 	"check-scope": {
 		detail: "Exit 0 if every path is in scope, 9 if any is not, and nothing on stdout\n" +
@@ -420,7 +435,7 @@ var groups = []struct {
 	name  string
 	verbs []string
 }{
-	{"making", []string{"create", "push", "scope", "worktree"}},
+	{"making", []string{"create", "push", "scope", "worktree", "rebind"}},
 	{"the board", []string{"pool", "info", "status", "complete", "delete"}},
 	{"who has it", []string{"claim", "assign", "invite", "kick", "leave"}},
 	{"checking", []string{"check-scope", "verify"}},

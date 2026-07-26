@@ -75,6 +75,18 @@ type CLI struct {
 	// Run executes a command; it exists so tests can drive this without either
 	// tool installed. Defaults to running the real thing.
 	Run func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// EnsureWatch makes sure something is still mirroring this machine once an
+	// upgrade has replaced the binaries.
+	//
+	// It is a hook rather than work done here because the decision needs the agent
+	// home and the flags this machine syncs with, and neither is a fact about a
+	// snapshot source. What it must guarantee is the promise in cli.ensureWatch:
+	// after an upgrade, this machine is being watched by something.
+	//
+	// Optional. A nil hook means an upgrade changes nothing about what is running,
+	// which is the old behaviour and the right one for a caller — a test, a probe —
+	// that is not managing a real machine.
+	EnsureWatch func() error
 }
 
 // NewCLI returns an adapter with the usual commands.
@@ -597,6 +609,19 @@ func (c *CLI) upgrade(ctx context.Context) error {
 	// machine is on now.
 	c.warn("upgraded %s: %s → %s, built %s", report.Source,
 		orNone(report.Before), orNone(report.After), strings.Join(report.Built, " "))
+
+	// And then: make sure something is still watching this machine.
+	//
+	// After the hook, not before, because a machine whose build failed does not
+	// want a watcher started on the binaries that failed to replace. And its
+	// failure does not fail the upgrade — the upgrade *worked*, and reporting it as
+	// failed would have the operator chasing a build that is fine while the real
+	// problem, that nothing is mirroring, goes unsaid. So it is said, separately.
+	if c.EnsureWatch != nil {
+		if err := c.EnsureWatch(); err != nil {
+			c.warn("upgraded, but could not make sure this machine is still being mirrored: %v", err)
+		}
+	}
 	return nil
 }
 

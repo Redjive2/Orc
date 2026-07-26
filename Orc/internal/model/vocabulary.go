@@ -1,6 +1,9 @@
 package model
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // The words `orc(...)` and `tool(...)` can be written with.
 //
@@ -45,6 +48,8 @@ func OrcVerbs() []OrcVerb {
 		{"refresh", "rewrite a session's settings from the fleet"},
 		{"wake", "nudge sessions that have gone quiet"},
 		{"model", "change what an identity runs on"},
+		{"workspace", "change where an identity works"},
+		{"instruct", "write the standing instructions agents run under"},
 		{"grant", "hand a permission to an identity, temporarily"},
 		{"revoke", "end a grant early"},
 		{"remove", "delete an identity, a role, or a permission"},
@@ -105,13 +110,55 @@ func KnownTool(word string) bool {
 	return slices.Contains(ToolNames(), word)
 }
 
-// Vocabulary is both lists together, for a caller that has to hand them on —
+// --- the shell ------------------------------------------------------------
+
+// Innocuous is what an agent may run with no `shell(...)` clause at all.
+//
+// `shell` is deny by default, so this list is the whole of what an unprivileged
+// agent can do at a prompt. It is short on purpose, and one test decides
+// membership: **could this command, with any arguments, change anything or tell
+// the agent something it does not already have?** If the answer is anything but
+// a flat no, it is not on the list.
+//
+// So `echo` and `printf` are here — they write to a stream the agent already
+// owns. `pwd`, `basename`, `dirname` are string arithmetic on a path the agent
+// already knows. `true` and `false` are control flow.
+//
+// And the near misses, because the reasons are the interesting part:
+//
+//   - `ls` discloses what is on a disk the agent may not read, so it is a grant,
+//     not a default. It is the first thing most fleets will put in a clause.
+//   - `cat`, `head`, `tail` read files, which is what `read(...)` governs — a
+//     second path to the same thing, past the clause that was supposed to
+//     decide it.
+//   - `which` and `env` map the machine, which is reconnaissance.
+//   - `sleep` cannot change anything and is still absent: it spends the one
+//     resource a budget is denominated in.
+//
+// Nothing here takes a path, so nothing here can be turned into a file read by
+// choosing a clever argument.
+func Innocuous() []string {
+	return []string{"basename", "dirname", "echo", "false", "printf", "pwd", "true"}
+}
+
+// InnocuousCommand reports whether a command name needs no clause at all.
+func InnocuousCommand(name string) bool {
+	return slices.Contains(Innocuous(), strings.ToLower(strings.TrimSpace(name)))
+}
+
+// Vocabulary is the lists together, for a caller that has to hand them on —
 // `orc status --json` does, so that cq's browser can offer the words without
 // keeping its own copy that drifts.
 type Vocabulary struct {
 	Verbs []OrcVerb
 	Tools []Tool
+	// Innocuous is what `shell` allows with no clause. The browser shows it
+	// beside a shell clause, because a permission list that omits what everybody
+	// already has is a list that reads as more restrictive than it is.
+	Innocuous []string
 }
 
 // Words returns the vocabulary this build knows.
-func Words() Vocabulary { return Vocabulary{Verbs: OrcVerbs(), Tools: Tools()} }
+func Words() Vocabulary {
+	return Vocabulary{Verbs: OrcVerbs(), Tools: Tools(), Innocuous: Innocuous()}
+}

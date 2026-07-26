@@ -44,6 +44,12 @@ export const KINDS = [
     means: "how much thinking it may employ at once" },
   { kind: "orc", takes: "verbs", example: "orc(new assign)",
     means: "narrows which orc verbs it may run" },
+  // The one kind that *widens*. Everything above narrows something an agent
+  // could otherwise do freely; a shell is shut until a clause opens it, so a
+  // permission list with no shell clause in it is an agent that cannot run
+  // anything but `echo`.
+  { kind: "shell", takes: "command names", example: "shell(** except rm curl)",
+    means: "which shell commands it may run — shut without one" },
   { kind: "tool", takes: "capabilities", example: "tool(upgrade)",
     means: "a named capability in another orc tool" },
 ];
@@ -57,13 +63,44 @@ export const MAX_LOAD = 4096;
 // FALLBACK_WORDS is what the sheet offers when the fleet carried no vocabulary —
 // an older Orc, or a machine that could not be reached.
 //
-// A short list rather than a stale copy of the full one: these are the words that
-// have to exist for the *syntax* to be worth showing at all, and anything more
-// would be a second privilege list quietly going out of date. When the fleet
-// carries its own, this is not used.
+// It used to be four words with no descriptions, on the reasoning that a copy of a
+// privilege list goes stale silently and a short one has less to go stale. That was
+// the wrong trade twice over. A sheet headed "what orc() takes" listing four of
+// fifteen verbs does not read as a stub, it reads as the answer — and `unknownWord`
+// shares this list, so an unreachable fleet made it tell somebody that `orc(grant)`
+// "controls nothing", about a clause that controls a great deal.
+//
+// So it is the whole list, copied from Orc/internal/model/vocabulary.go. Drift is
+// answered by checking rather than by omission: vocabulary_test.go compares the two
+// files whenever Orc's source is beside cq's, and the sheet says plainly when the
+// words are this build's copy rather than the fleet's own (see cheatsheet).
 const FALLBACK_WORDS = {
-  verbs: [{ word: "new" }, { word: "assign" }, { word: "employ" }, { word: "remove" }],
-  tools: [{ word: "upgrade", in: "cq" }],
+  verbs: [
+    { word: "new", does: "create an identity, a role, or a permission" },
+    { word: "assign", does: "give a role its authority, its permissions, or an identity its role" },
+    { word: "edit", does: "rewrite a permission in place, for every holder at once" },
+    { word: "move", does: "change who an identity works for" },
+    { word: "employ", does: "put an agent on the work list, and spend budget on it" },
+    { word: "fire", does: "take it off" },
+    { word: "attach", does: "open a running session" },
+    { word: "poke", does: "say something to a running agent" },
+    { word: "refresh", does: "rewrite a session's settings from the fleet" },
+    { word: "wake", does: "nudge sessions that have gone quiet" },
+    { word: "model", does: "change what an identity runs on" },
+    { word: "workspace", does: "change where an identity works" },
+    { word: "instruct", does: "write the standing instructions agents run under" },
+    { word: "grant", does: "hand a permission to an identity, temporarily" },
+    { word: "revoke", does: "end a grant early" },
+    { word: "remove", does: "delete an identity, a role, or a permission" },
+  ],
+  tools: [
+    { word: "upgrade", does: "rebuild and restart every Orc tool, on every machine", in: "cq" },
+  ],
+  // What `shell(…)` allows with no clause. Kept here for the same reason as the
+  // lists above, and shown for the opposite one: those say what a clause may
+  // name, this says what nobody has to ask for. A permission list without it
+  // reads as an agent that can run nothing at all.
+  innocuous: ["basename", "dirname", "echo", "false", "printf", "pwd", "true"],
 };
 
 // read splits one clause into its parts and says what is wrong with it.
@@ -166,10 +203,21 @@ function unknownWord(kind, term, words) {
 
 // vocabulary normalises whatever the fleet carried, falling back when it carried
 // nothing.
+//
+// `mine` says the words came from this build rather than from the fleet, so the
+// sheet can admit it. The two halves are tracked apart: an Orc that grew a verb
+// but has only ever had one capability sends verbs and no tools, and calling that
+// whole answer second-hand would be a warning about nothing.
 export function vocabulary(words) {
-  const verbs = words && words.verbs && words.verbs.length ? words.verbs : FALLBACK_WORDS.verbs;
-  const tools = words && words.tools && words.tools.length ? words.tools : FALLBACK_WORDS.tools;
-  return { verbs, tools };
+  const gotVerbs = Boolean(words && words.verbs && words.verbs.length);
+  const gotTools = Boolean(words && words.tools && words.tools.length);
+  const gotFree = Boolean(words && words.innocuous && words.innocuous.length);
+  return {
+    verbs: gotVerbs ? words.verbs : FALLBACK_WORDS.verbs,
+    tools: gotTools ? words.tools : FALLBACK_WORDS.tools,
+    innocuous: gotFree ? words.innocuous : FALLBACK_WORDS.innocuous,
+    mine: { verbs: !gotVerbs, tools: !gotTools, innocuous: !gotFree },
+  };
 }
 
 // split breaks a line into clauses.
@@ -309,16 +357,38 @@ export function cheatsheet(words, open = true) {
       h("code", {}, "Anno/**"), " mean the same thing, and ", h("code", {}, "write"),
       " implies ", h("code", {}, "read"), ". every kind but ", h("code", {}, "spawn"),
       " takes both halves."),
-    wordSheet(known.verbs, "orc", "verbs orc checks — a clause naming anything else controls nothing", words),
-    wordSheet(known.tools, "tool", "capabilities other tools ask about", words),
+    wordSheet(known.verbs, "orc",
+      "verbs orc checks — a clause naming anything else controls nothing", words, known.mine.verbs),
+    wordSheet(known.tools, "tool",
+      "capabilities other tools ask about", words, known.mine.tools),
+    // Not a wordSheet: these are not words a clause names, they are what runs
+    // without one. Said plainly, because `shell` is the only kind whose absence
+    // means something, and a reader who does not know that reads every identity
+    // without a shell clause as one that can do nothing.
+    h("p", { class: "muted hint" },
+      h("code", {}, "shell"), " is the one kind that is shut until a clause opens it. ",
+      "with none, an identity may run only: ",
+      ...known.innocuous.flatMap((w, i) => i === 0 ? [h("code", {}, w)] : [" ", h("code", {}, w)]),
+      known.mine.innocuous ? SECOND_HAND : null),
   );
 }
 
+// SECOND_HAND is the sheet admitting whose words these are.
+//
+// The list is complete for the Orc this browser was built alongside, which is not
+// the same as complete for the fleet in front of somebody — that is the whole
+// hazard of keeping a copy. Saying so costs a line and turns a silently wrong sheet
+// into a dated one.
+const SECOND_HAND =
+  "this fleet did not send its own list, so these are the words this build knows — " +
+  "a newer orc may check more";
+
 // wordSheet renders one sub-sheet: the arguments one kind actually accepts.
-function wordSheet(list, kind, note, words) {
+function wordSheet(list, kind, note, words, mine = false) {
   return h("details", { class: "cheatsheet inner" },
     h("summary", {}, `what ${kind}() takes`),
     h("p", { class: "muted hint" }, note),
+    mine ? h("p", { class: "muted hint" }, SECOND_HAND) : null,
     h("table", { class: "cheat" },
       h("tbody", {},
         ...list.map((w) => h("tr", {},

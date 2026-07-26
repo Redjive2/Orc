@@ -85,3 +85,38 @@ test("an element with no focus method is not one to restore to", () => {
   odd.focus = undefined;
   assert.equal(restore(h("div", {}, odd), { name: "body", start: 0, end: 0 }), false);
 });
+
+// --- the reader's place on the page ---------------------------------------
+
+// Putting the caret back must not move the page. Focusing an element scrolls it
+// into view, and the field being restored to is often a long way down: a reply
+// box under a forty-message thread sits about 7700px from the top. Somebody who
+// scrolled up to re-read the thread while their reply waits below is still
+// *focused* on that box, so a sync landing while they read used to throw them
+// back down to it — measured at 6431px in a browser before this was passed.
+//
+// They kept their words and lost their place, which is the same complaint the
+// drafts were written for, one layer out.
+test("putting the caret back does not move the page", () => {
+  const memo = remember(typing("body", "half a sen", 4));
+  const after = h("div", {}, typing("body", "half a sen", 0));
+  restore(after, memo);
+
+  const field = after.childNodes[0];
+  assert.ok(field.focusedWith,
+    "focus() was called bare, so the browser will scroll the field into view " +
+    "and take the reader with it");
+  assert.equal(field.focusedWith.preventScroll, true,
+    "focus() must be told not to scroll: the field is often far down the page, " +
+    "and the reader may be reading somewhere else on it");
+});
+
+// The same for a field that will not take a caret. It leaves restore() by a
+// different path, and the scrolling happens either way.
+test("a field that refuses a caret does not move the page either", () => {
+  const picker = h("select", { name: "machine" });
+  picker.setSelectionRange = () => { throw new TypeError("does not support selection"); };
+
+  restore(h("div", {}, picker), { name: "machine", start: 0, end: 0 });
+  assert.equal(picker.focusedWith && picker.focusedWith.preventScroll, true);
+});

@@ -120,7 +120,9 @@ func (h *harness) withToken() func(*http.Request) {
 //
 // It walks every registered route rather than a hand-written list, so an
 // endpoint added without a credential is caught here rather than shipped. The
-// exemption list is asserted to be exactly three, by name.
+// exemption list is asserted by name, and every entry has to earn its place:
+// two are the login itself, one says the process is alive, and one is the tab
+// icon a browser fetches before anybody has logged in.
 func TestNothingIsVisibleWithoutLogging(t *testing.T) {
 	h := newHarness(t)
 	patterns := h.Patterns()
@@ -135,6 +137,10 @@ func TestNothingIsVisibleWithoutLogging(t *testing.T) {
 		"GET /login":         true,
 		"POST /login":        true,
 		"GET /api/v1/health": true,
+		// Requested unprompted, with no session and no referrer, and the login
+		// page is where recognising the tab is worth most. It discloses that this
+		// is cq, which that page already says in words.
+		"GET /favicon.ico": true,
 	}
 	if len(public) != len(want) {
 		t.Errorf("%d routes are public, want %d: %v", len(public), len(want), public)
@@ -546,4 +552,33 @@ func newHarnessWithAdmin(t *testing.T, from *harness, admin bool) *harness {
 	}
 	h.Server = srv
 	return h
+}
+
+// TestTheFaviconIsServedToAStranger.
+//
+// A browser asks for it with no session and no referrer, and it is the one
+// static file that answers. Three things have to hold: it arrives, it arrives as
+// an icon, and it is allowed to be cached — it is the largest thing cq serves,
+// and the no-cache header every other route carries would re-send it on every
+// page load.
+func TestTheFaviconIsServedToAStranger(t *testing.T) {
+	h := newHarness(t)
+
+	rec := h.do(t, "GET", "/favicon.ico", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a stranger's browser gets no icon", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/x-icon" {
+		t.Errorf("Content-Type = %q, want image/x-icon", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "max-age") {
+		t.Errorf("Cache-Control = %q; the icon is re-sent on every page load", got)
+	}
+
+	// The ICO magic: a zero reserved word, then type 1.
+	body := rec.Body.Bytes()
+	if len(body) < 4 || body[0] != 0 || body[1] != 0 || body[2] != 1 || body[3] != 0 {
+		t.Errorf("what was served is not an icon (first bytes %v)", body[:min(4, len(body))])
+	}
 }

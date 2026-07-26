@@ -87,7 +87,7 @@ type jsonPermission struct {
 	Created  string   `json:"created"`
 }
 
-// jsonVocabulary is the words `orc(...)` and `tool(...)` may be written with.
+// jsonVocabulary is the words a clause may be written with.
 //
 // It travels with the fleet because the only other way for cq's browser to offer
 // them is to keep its own copy, and a copy of a privilege list is a copy that goes
@@ -104,6 +104,14 @@ type jsonWord struct {
 type jsonVocabulary struct {
 	Verbs []jsonWord `json:"verbs"`
 	Tools []jsonWord `json:"tools"`
+	// Innocuous is what `shell` allows with no clause at all.
+	//
+	// It travels for the opposite reason to the two above. Those are words a
+	// clause may *use*; this is what an identity already has without one — and a
+	// browser showing a permission list without it shows a fleet as more
+	// restricted than it is, because the commands nobody had to ask for are the
+	// ones nothing mentions.
+	Innocuous []string `json:"innocuous"`
 }
 
 type jsonFleet struct {
@@ -125,6 +133,7 @@ func vocabulary() jsonVocabulary {
 	for _, t := range model.Tools() {
 		out.Tools = append(out.Tools, jsonWord{Word: t.Name, Does: t.Does, In: t.In})
 	}
+	out.Innocuous = model.Innocuous()
 	return out
 }
 

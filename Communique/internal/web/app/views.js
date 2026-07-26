@@ -5,7 +5,7 @@
 import { h, mount, clock, since, ellipsis } from "./dom.js";
 import { render } from "./markdown.js";
 import { survey } from "./survey.js";
-import { fleet } from "./fleet.js";
+import * as routes from "./routes.js";
 
 // pendingFor finds the queue entries that concern one message, so a reply the
 // user just sent appears beside the thread it belongs to — marked queued.
@@ -313,10 +313,19 @@ export function compose(state, actions) {
 
   // Only asked when there is a real choice. One machine is the ordinary case,
   // and a select with one option is a question with one answer.
+  //
+  // Drafted like the text fields beside it, and for the same reason: the view is
+  // remounted whenever a sync lands, and a select rebuilt from its options comes
+  // back on the *first* one. Losing a choice is quieter than losing a sentence —
+  // the form still submits, just to a machine nobody picked — which makes it the
+  // worse of the two to leave unfixed.
   const picker = machines.length > 1
-    ? h("select", { name: "machine" },
-        ...machines.map((m) => h("option", { value: m.machine }, m.machine)))
+    ? h("select", {
+        name: "machine",
+        onchange: (e) => actions.draft(key, "machine", e.target.value),
+      }, ...machines.map((m) => h("option", { value: m.machine }, m.machine)))
     : null;
+  if (picker) picker.value = draft.machine ?? machines[0].machine;
   const machineOf = () => (picker ? picker.value : machines[0].machine);
 
   const form = h("form", {
@@ -399,6 +408,7 @@ function mayRetry(entry) {
 
 export function queue(state, actions) {
   const entries = state.queue || [];
+  const many = (state.machines || []).length > 1;
   if (entries.length === 0) {
     return [h("p", { class: "muted" }, "nothing queued")];
   }
@@ -420,12 +430,14 @@ export function queue(state, actions) {
           }, "clear them")
         : null));
     if (group.note) out.push(h("p", { class: "muted" }, group.note));
-    for (const entry of rows) out.push(queueRow(entry, actions));
+    for (const entry of rows) out.push(queueRow(entry, actions, many));
   }
   return out;
 }
 
-function queueRow(entry, actions) {
+// showMachine follows the mailbox's rule: name the machine only when there is
+// more than one, or every row carries a word that never varies.
+function queueRow(entry, actions, showMachine) {
   const unresolved = entry.state === "failed" || entry.state === "in_doubt";
   const controls = [];
 
@@ -463,6 +475,7 @@ function queueRow(entry, actions) {
     h("h2", {}, verb(entry.action.op)),
     h("div", { class: "meta" },
       h("span", { class: "badge" }, entry.state.replace("_", " ")),
+      showMachine ? h("span", { class: "machine" }, ` ${entry.action.machine}`) : null,
       ` ${describe(entry.action)}`),
     entry.error ? h("div", { class: "body" }, h("pre", {}, entry.error)) : null,
     controls.length > 0 ? h("div", { class: "meta" }, ...spaced(controls)) : null,
@@ -539,31 +552,46 @@ function spaced(nodes) {
 
 // --- chrome -------------------------------------------------------------
 
+// nav is two rows: what kind of thing, then which one.
+//
+// Both are drawn from routes.js, so a tab that exists is a tab that appears and
+// a tab that appears is one the router can reach. The alternative — a list of
+// links here and a chain of route matches there — is two places to remember, and
+// the one people forget is the second.
+//
+// Only the open area's sub-tabs are shown. Showing all seventeen at once is the
+// flat row this replaced.
 export function nav(state, route) {
-  const unread = (state.inbox || []).filter((m) => !m.read).length;
-  // Only what needs a decision is counted. Something on its way is not a
-  // problem, and a badge that counts it would never reach zero.
-  const stuck = (state.queue || []).filter(
-    (e) => e.state === "failed" || e.state === "in_doubt").length;
-  const link = (href, label, extra) => h("a", {
-    href,
-    "aria-current": route.startsWith(href.slice(1)) ? "page" : null,
-  }, label, extra);
+  const here = routes.resolve(route) || routes.resolve(routes.MOVED[route.split("?")[0]] || "");
+  const open = here ? here.major : null;
 
-  return [
-    link("#/inbox", "inbox", unread > 0 ? h("span", { class: "count" }, ` ${unread}`) : null),
-    link("#/compose", "compose"),
-    link("#/sent", "sent"),
-    link("#/archive", "archive"),
-    link("#/queue", "queue", stuck > 0 ? h("span", { class: "count" }, ` ${stuck}`) : null),
-    link("#/docs", "docs"),
-    link("#/code", "code"),
-    link("#/tasks", "tasks"),
-    link("#/tree", "tree"),
-    state.adminEnabled ? link("#/admin", "admin") : null,
+  const majors = [];
+  for (const area of routes.AREAS) {
+    const subs = routes.visible(area, state);
+    // An area with nothing behind it is not shown. `--no-admin` empties two.
+    if (subs.length === 0) continue;
+    majors.push(tab(routes.home(area.major, state), area.major,
+      routes.areaCount(area, state), area.major === open));
+  }
+
+  const rows = [h("div", { class: "majors" }, ...majors,
     h("span", { class: "spacer" }),
-    h("a", { href: "#/inbox", onclick: (e) => { e.preventDefault(); logout(); } }, "logout"),
-  ];
+    h("a", { href: "#" + routes.HOME, onclick: (e) => { e.preventDefault(); logout(); } }, "logout"))];
+
+  const area = routes.AREAS.find((a) => a.major === open);
+  if (area) {
+    rows.push(h("div", { class: "subs" },
+      ...routes.visible(area, state).map((s) =>
+        tab(`/${area.major}/${s.sub}`, s.sub, routes.count(s, state), here && here.sub === s.sub))));
+  }
+  return rows;
+}
+
+function tab(href, label, n, current) {
+  return h("a", {
+    href: "#" + href,
+    "aria-current": current ? "page" : null,
+  }, label, n > 0 ? h("span", { class: "count" }, ` ${n}`) : null);
 }
 
 async function logout() {
@@ -641,11 +669,17 @@ export function tasks(state, actions) {
   const many = machines.length > 1;
 
   // Which machine a new task belongs to only has to be asked when there is more
-  // than one, and the picker is the same shape compose uses for the same reason.
+  // than one, and the picker is the same shape compose uses — drafted for the same
+  // reason, and named so the cursor comes back to it after a redraw.
+  const key = draftKey("tasks");
+  const draft = drafted(state, key);
   let picker = null;
   if (many) {
-    picker = h("select", { class: "machine" },
-      ...machines.map((m) => h("option", { value: m.machine }, m.machine)));
+    picker = h("select", {
+      class: "machine", name: "machine",
+      onchange: (e) => actions && actions.draft(key, "machine", e.target.value),
+    }, ...machines.map((m) => h("option", { value: m.machine }, m.machine)));
+    picker.value = draft.machine ?? machines[0].machine;
   }
   const machineOf = () => (picker ? picker.value : (machines[0] && machines[0].machine));
   const head = h("div", { class: "row-actions" },
@@ -802,8 +836,13 @@ function taskPending(state, t) {
 // Its own block at the foot of the panel rather than a control beside the fleet:
 // it is the only thing in cq that takes the site down, and a button that does that
 // should not sit next to `tend`.
-function upgrading(state, actions) {
-  if (!actions) return [];
+// rebuild is `tooling › rebuild`.
+//
+// The card is drawn whether or not there is anything to press. It was a section
+// of the admin panel before and could simply be absent; as a tab of its own an
+// empty render is a blank page, and a blank page is indistinguishable from a
+// broken one.
+export function rebuild(state, actions) {
   const got = state.upgrading;
   return [h("article", { class: "card" },
     h("h2", {}, "the build"),
@@ -811,8 +850,10 @@ function upgrading(state, actions) {
       "pull the tree, rebuild every orc tool, and restart — here and on every agent machine"),
     h("div", { class: "body" },
       h("div", { class: "controls" },
-        h("button", { class: "danger", onclick: () => actions.upgradeEverything(state) },
-          "rebuild everything"),
+        actions
+          ? h("button", { class: "danger", onclick: () => actions.upgradeEverything(state) },
+              "rebuild everything")
+          : null,
         h("span", { class: "muted" }, "the site restarts; agents rebuild on their next sync")),
       // What the server said, kept on screen. It is the last thing this page hears
       // before the server goes away, so throwing it out on the next redraw would
@@ -858,23 +899,24 @@ export function tree(state) {
 
 // --- admin ---------------------------------------------------------------
 
-export function admin(state, actions) {
+// store is `mail › store`: the whole mailbox, not just mine.
+//
+// This screen and three others used to be one tab called `admin`, stacked in the
+// order they were written — the fleet, the build, the queue, and this. Each has
+// its own place now. The reasoning that moved the repository survey out first is
+// the same one that moved the rest: a screen answering two unrelated questions is
+// a screen people scroll past.
+//
+// It needs a whole-store permission the others do not, which is why it is the one
+// that can say "nothing has synced" on a machine where every other tab works:
+// `mailman admin owner <name>` is what grants it.
+export function store(state) {
   const blocks = state.admin && state.admin.machines ? state.admin.machines : [];
-  // The survey used to be here and is now its own section — see `tree` below.
-  // It was in the admin panel because that is the tab about the state of things,
-  // but it is about the *repository* and the admin panel is about the *mail*, and
-  // one screen answering two unrelated questions is a screen people scroll past.
-  // The fleet first, then the queue, then the mail.
-  //
-  // Who exists and what they may do is what this panel is opened for, and unlike
-  // the mail view below it needs no whole-store permission — so it answers even on
-  // a machine that has never run `mailman admin owner`. The queue used to come
-  // first and is a health check: worth having, not worth twenty rows of resolved
-  // history between somebody and the thing they came to change.
-  const out = [...fleet(state, actions), ...upgrading(state, actions), queueHealth(state)];
+  const out = [];
 
   if (blocks.length === 0) {
-    out.push(h("p", { class: "muted" }, "nothing has synced an admin view yet"));
+    out.push(h("p", { class: "muted" },
+      "nothing has synced a whole-store view — `mailman admin owner` on the agent machine grants it"));
     return out;
   }
 
@@ -937,36 +979,3 @@ function traffic(messages, receipts) {
     }));
 }
 
-// queueHealth is the panel's most operational view: what the user asked for and
-// what became of it.
-function queueHealth(state) {
-  const queue = state.queue || [];
-  if (queue.length === 0) {
-    return h("article", { class: "card" },
-      h("h2", {}, "queue"),
-      h("div", { class: "body" }, h("p", { class: "muted" }, "nothing queued")));
-  }
-  return h("article", { class: "card" },
-    h("h2", {}, "queue"),
-    h("div", { class: "body" },
-      h("div", { class: "grid queue" },
-        h("div", { class: "muted" }, "state"),
-        h("div", { class: "muted" }, "action"),
-        h("div", { class: "muted" }, "machine"),
-        h("div", { class: "muted" }, "detail"),
-        ...queue.flatMap((e) => [
-          h("div", { class: stateClass(e.state) }, e.state),
-          h("div", {}, verb(e.action.op)),
-          h("div", { class: "muted" }, e.action.machine),
-          h("div", { class: e.state === "failed" ? "failed" : "muted" },
-            e.error || (e.action.args && e.action.args.subject) || "—"),
-        ]))));
-}
-
-function stateClass(s) {
-  switch (s) {
-    case "failed": return "failed";
-    case "done": return "ok";
-    default: return "pending";
-  }
-}

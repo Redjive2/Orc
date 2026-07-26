@@ -73,6 +73,9 @@ func usage(p style.Palette) string {
 	verb("orc budget", "what each identity may employ, and what it spends")
 	verb("orc budget <role> <load>", "set the load a role may keep employed")
 	verb("orc model <identity> [<model>] [--effort e]", "what it thinks with; --now restarts it")
+	verb("orc workspace <identity> [<path>] [--adopt]", "where it works; --now restarts it there")
+	verb("orc instruct [<target>] [--set f|--edit|--clear]", "the standing instructions agents run under")
+	verb("orc instruct show <identity> [--diff]", "what an agent is actually told, composed")
 	verb("orc employ <identity> [--model m] [--effort e]", "put it on the work list and start it")
 	verb("orc fire <identity> [--yes]", "take it off; --yes if a session is live")
 	verb("orc tend [--watch <dur>]", "reconcile the work list with what is running")
@@ -125,6 +128,7 @@ func usage(p style.Palette) string {
 		{"write(Anno/internal/**)", "the same, for editing"},
 		{"spawn(24)", "how much thinking may be employed at once (see below)"},
 		{"orc(assign)", "narrows which orc verbs a role may run"},
+		{"shell(ls cat)", "which commands may be run — shut without one"},
 		{"tool(upgrade)", "a named capability in another tool"},
 	} {
 		line("  %s%s%s", p.Value(row[0]), strings.Repeat(" ", 25-theme.Width(row[0])), row[1])
@@ -140,6 +144,12 @@ func usage(p style.Palette) string {
 	line("")
 	line("  %s %s", p.Setting("orc verbs:"), p.Muted(strings.Join(model.OrcVerbNames(), " ")))
 	line("  %s %s", p.Setting("tools:    "), p.Muted(strings.Join(model.ToolNames(), " ")))
+	// The one kind that refuses by default, so the one whose absence has to be
+	// printed: every other list here says what a clause could add.
+	line("  %s %s", p.Setting("no clause:"), p.Muted(strings.Join(model.Innocuous(), " ")))
+	line("  %s runs nothing but those. a line that hides what it runs —", p.Value("shell"))
+	line("  %s, %s, %s — needs %s.",
+		p.Value("$(…)"), p.Value("sh -c"), p.Value("xargs"), p.Value("shell(**)"))
 	line("  a clause naming anything else parses and controls nothing, which is what")
 	line("  %s is built on: its clause allows nothing, and holding it bars", p.Value("orc-read"))
 	line("  every verb above.")
@@ -272,7 +282,8 @@ func verbs() []string {
 	return []string{
 		"bootstrap", "new", "assign", "remove", "grant", "revoke", "move",
 		"status", "list", "budget", "model", "introspect", "check-control", "check-permission", "env", "verify",
-		"doctor", "owner", "employ", "fire", "tend", "attach", "poke", "wake", "refresh", "help",
+		"doctor", "owner", "employ", "fire", "tend", "attach", "poke", "wake", "refresh",
+		"workspace", "instruct", "help",
 	}
 }
 
@@ -302,7 +313,7 @@ var topics = map[string]topic{
 	},
 	"new": {
 		forms: []string{
-			"orc new identity <name> [--worktree]",
+			"orc new identity <name>",
 			"orc new role <name> <authority> <what it is>",
 			"orc new permission <name> <floor> <patterns…>",
 		},
@@ -389,6 +400,65 @@ var topics = map[string]topic{
 			"With no arguments it reports; with a role and a number it sets what that\n" +
 			"role may keep employed.",
 		examples: []string{"orc budget", "orc budget engineer 12"},
+	},
+	"instruct": {
+		forms: []string{
+			"orc instruct",
+			"orc instruct <target> [--set <file>] [--edit] [--clear]",
+			"orc instruct show <identity> [--diff]",
+		},
+		does: "the standing instructions agents run under",
+		detail: "A target is `system`, `role <name>`, `identity <name>`, or `wake` —\n" +
+			"and `wake role <name>` or `wake identity <name>` for one of those.\n\n" +
+			"Four kinds, and they are two mechanisms rather than four of a kind.\n\n" +
+			"**system, role, identity** are prompt layers. They compose *additively* —\n" +
+			"the fleet's, then the role's, then the agent's, each under a heading\n" +
+			"naming where it came from — and an agent gets the result at the start of\n" +
+			"a session. An identity layer adds to its role's and cannot replace it:\n" +
+			"the fleet's layer is the floor, not a default.\n\n" +
+			"**wake** is a message, not a layer: what `orc wake` types at an agent\n" +
+			"that has gone quiet. Those *override* — the agent's, else its role's,\n" +
+			"else the fleet's, else `continue` — because a wake message is one thing\n" +
+			"you say, and three of them stapled together is not a message.\n\n" +
+			"With no arguments it lists every layer, its size, and when it last\n" +
+			"changed. `show` prints what an agent actually gets, which is the question\n" +
+			"this feature generates most; `--diff` says whether a running session\n" +
+			"started on what is set now.\n\n" +
+			"The fleet's layer is the operator's alone, because it reaches every\n" +
+			"agent. A role's or an agent's needs the `instruct` permission, and an\n" +
+			"agent's also needs ancestry: you may instruct what you control.\n\n" +
+			"**A prompt is not a permission.** \"do not edit Communique\" is a request;\n" +
+			"`write(Anno/**)` is a rule the hook enforces on every tool call. Using\n" +
+			"the first where you needed the second fails silently.",
+		examples: []string{
+			"orc instruct",
+			"orc instruct system --edit",
+			"orc instruct identity ember --set brief.md",
+			"orc instruct wake --set nudge.md",
+			"orc instruct show ember",
+		},
+	},
+	"workspace": {
+		forms: []string{"orc workspace <identity>", "orc workspace <identity> <path> --adopt [--now]"},
+		does:  "where it works; --now restarts it there",
+		detail: "With no path it says where the identity works, and whether that is the\n" +
+			"directory orc made for it or one somebody chose.\n\n" +
+			"With a path it points the identity there. `--adopt` works in a directory\n" +
+			"that already exists — a checkout, a worktree, a tree somebody else made —\n" +
+			"and is the form that is built. Moving an agent's *files* to a new path is\n" +
+			"not: make the directory, put what it needs in it, and adopt it.\n\n" +
+			"A workspace inside the fleet's own store is refused — it holds every\n" +
+			"identity's key — and so is one inside another agent's workspace, which\n" +
+			"would make two scopes overlap where nobody said so.\n\n" +
+			"A session's working directory is fixed when Claude starts, so a running\n" +
+			"agent keeps writing to the old one until it is replaced. That matters more\n" +
+			"here than for a model change: its permissions are compiled against the new\n" +
+			"path. `--now` replaces the session, and loses its context.",
+		examples: []string{
+			"orc workspace ember",
+			"orc workspace ember /Users/me/trees/parser --adopt",
+			"orc workspace ember /Users/me/trees/parser --adopt --now",
+		},
 	},
 	"model": {
 		forms: []string{"orc model <identity>", "orc model <identity> <model> [--effort <e>] [--now]"},

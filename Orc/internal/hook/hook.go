@@ -267,6 +267,16 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 		return Outcome{Code: CodeBlock, Stderr: refuseSubagent()}
 	}
 
+	// The shell is checked before anything path-shaped, because it is decided by
+	// what a command is *called* rather than by what it touches — and because it
+	// is the one gate that refuses by default, so it must not depend on a path
+	// having been found first.
+	if p.ToolName == "Bash" {
+		if out, decided := decideShell(s, who, p.ToolInput.Command); decided {
+			return out
+		}
+	}
+
 	targets, kind := p.targets()
 
 	// Reaching into the fleet's own store is an escape rather than an ordinary
@@ -319,6 +329,53 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 		}
 	}
 	return pass
+}
+
+// decideShell gates a command line on the identity's `shell` clauses.
+//
+// It reports whether it decided: a pass here means "the shell gate is content",
+// and the caller carries on to the path checks, because `rm Docs/x` is both a
+// command and a write.
+//
+// **This gate refuses by default**, which no other one does. An identity with no
+// shell clause may run model.Innocuous and nothing else. That is the point of it:
+// every other kind narrows something agents may otherwise do freely, and a shell
+// is every capability at once.
+//
+// The blind rung is a refusal too, and this is the one place that differs from
+// reads. When no permissions can be read at all, a read passes because a blocked
+// read discloses nothing new. A command is not like that — it could be anything —
+// so an unreadable store stops the shell rather than opening it.
+func decideShell(s *store.Store, who user.Name, command string) (Outcome, bool) {
+	line := strings.TrimSpace(command)
+	if line == "" {
+		return pass, false
+	}
+
+	patterns, source, ok := permissions(s, who)
+	if !ok {
+		return Outcome{Code: CodeBlock, Stderr: refuseBlindShell(line)}, true
+	}
+
+	// An opaque line hides what it runs, so the only clause that can honestly
+	// permit it is one that permits everything. Anything narrower would be
+	// deciding on a name that says nothing about what happens.
+	if Opaque(line) {
+		if allows(patterns, model.KindShell, "**") {
+			return pass, false
+		}
+		return Outcome{Code: CodeBlock, Stderr: refuseOpaque(line, patterns, source)}, true
+	}
+
+	for _, name := range Commands(line) {
+		if model.InnocuousCommand(name) {
+			continue
+		}
+		if !allows(patterns, model.KindShell, name) {
+			return Outcome{Code: CodeBlock, Stderr: refuseShell(name, line, patterns, source)}, true
+		}
+	}
+	return pass, false
 }
 
 // permissions climbs the ladder: the live store, then the snapshot.

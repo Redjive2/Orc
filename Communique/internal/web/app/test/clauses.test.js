@@ -238,6 +238,82 @@ test("a fleet with no vocabulary still gets a sheet", () => {
   assert.ok(sheet.textContent.includes("upgrade"));
 });
 
+// --- the sheet is the whole list, and says whose ---------------------------
+
+// The sheet is headed "what orc() takes" and read as the answer to that question.
+// A partial one does not look partial, so a fallback that listed four of fifteen
+// verbs was not a smaller answer — it was a wrong one.
+test("the fallback offers every word, described", () => {
+  const known = clauses.vocabulary(undefined);
+  for (const [kind, list] of [["orc", known.verbs], ["tool", known.tools]]) {
+    assert.ok(list.length > 0, `${kind}() has no words to offer at all`);
+    for (const w of list) {
+      assert.ok(w.does && w.does.trim(),
+        `${kind}(${w.word}) is listed with no description; the sheet shows a bare ` +
+        `word in a column headed by what it does`);
+    }
+  }
+  // Pinned low rather than exactly: the count belongs to Orc, and vocabulary_test.go
+  // is what holds the two lists equal. This only catches a fallback that shrank back
+  // to a handful.
+  assert.ok(known.verbs.length >= 15,
+    `only ${known.verbs.length} verbs offered; orc checks more than that`);
+});
+
+// The list above is a copy of Orc's, and a copy is a thing that goes out of date.
+// The sheet may be dated, but it must not be dated *silently*.
+test("a sheet drawn from this build's own words says so", () => {
+  const sheet = clauses.cheatsheet(undefined);
+  assert.ok(sheet.textContent.includes("this build knows"),
+    "the sheet passes off its own copy as the fleet's answer");
+
+  const fleet = clauses.cheatsheet({
+    verbs: [{ word: "new", does: "make one" }],
+    tools: [{ word: "upgrade", does: "rebuild", in: "cq" }],
+    innocuous: ["echo"],
+  });
+  assert.ok(!fleet.textContent.includes("this build knows"),
+    "the fleet answered with its own vocabulary and the sheet still hedged");
+
+  // An orc from before `shell` sends verbs and tools and no innocuous list. The
+  // sheet still has to say what runs without a clause, and still has to admit
+  // that part is its own.
+  const older = clauses.cheatsheet({
+    verbs: [{ word: "new", does: "make one" }],
+    tools: [{ word: "upgrade", does: "rebuild", in: "cq" }],
+  });
+  assert.ok(older.textContent.includes("echo"), "the sheet dropped what runs with no clause");
+  assert.ok(older.textContent.includes("this build knows"),
+    "the sheet passed off its own innocuous list as the fleet's");
+});
+
+// The halves travel separately: an Orc that grows a verb but has only ever had one
+// capability sends verbs and no tools, and hedging over the whole sheet then would
+// be a warning about nothing.
+test("only the part that was missing is called second-hand", () => {
+  const partial = clauses.vocabulary({ verbs: [{ word: "new", does: "make one" }] });
+  assert.deepEqual(partial.mine, { verbs: false, tools: true, innocuous: true });
+
+  // What `shell` allows with no clause travels the same way and falls back the
+  // same way — an older orc sends none, and the sheet still has to say something
+  // true rather than nothing.
+  const shellOnly = clauses.vocabulary({ innocuous: ["echo"] });
+  assert.deepEqual(shellOnly.innocuous, ["echo"]);
+  assert.equal(shellOnly.mine.innocuous, false);
+  assert.ok(clauses.vocabulary({}).innocuous.includes("echo"));
+});
+
+// `unknownWord` reads the same list, which is the quieter half of the bug: with a
+// short fallback, an unreachable fleet made the box tell somebody that a clause
+// naming a real verb controlled nothing.
+test("a real verb is not called meaningless when the fleet went quiet", () => {
+  for (const verb of ["grant", "revoke", "workspace", "poke", "model"]) {
+    assert.equal(clauses.read(`orc(${verb})`).error, null);
+    assert.deepEqual(clauses.problems(`orc(${verb})`, undefined), [],
+      `orc(${verb}) is reported as controlling nothing when the fleet sends no vocabulary`);
+  }
+});
+
 test("every example in the sheet is a clause that parses", () => {
   for (const k of clauses.KINDS) {
     assert.equal(clauses.read(k.example).error, null, `${k.example} does not parse`);

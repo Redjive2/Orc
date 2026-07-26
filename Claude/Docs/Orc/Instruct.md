@@ -3,8 +3,9 @@
 A plan for keeping an agent's standing instructions in Orc, and editing them from
 cq. Four kinds, as asked: **system**, **role**, **identity**, and **wake**.
 
-Nothing here is built yet. This says what to build, in what order, and — where a
-choice was not obvious — why that one.
+This says what to build, in what order, and — where a choice was not obvious — why
+that one. **Steps 1 to 4 of §11 are built**; see §13–§15 for what they came to and
+what they changed.
 
 ## §1 The constraint everything else bends around
 
@@ -292,3 +293,244 @@ Each step is useful on its own and leaves the tree green.
 - **Prompts for the operator's own identity.** The operator is a person at a
   terminal, not a session Orc starts. Composing a system prompt for them would be
   writing instructions nobody reads.
+
+---
+
+## §13 Step 1, as built
+
+The store and the composition. Everything here is reachable from Go and from
+nothing else yet: there is no verb, no delivery, and no tab, which is §11's order
+and is deliberate — the layering rules are what every later step assumes, so they
+are what got tests first.
+
+**`internal/instruct`** is the composition, and it is a leaf package that reads no
+files and knows no paths. `Compose` is additive and puts each layer under a heading
+naming where it came from; `WakeFor` overrides, most specific winning, with
+`continue` as the built-in bottom. Both rules are tested against each other rather
+than only in isolation: a test asserts the losing wake messages are *not* appended
+anywhere, because the failure worth catching is one rule quietly acquiring the
+other's shape.
+
+**`internal/store/prompts.go`** is where they live — beside the thing they describe,
+as §3 says. `orc remove role engineer` already takes `roles/engineer/` with it, and a
+test kills a role's directory and checks its prompt went too.
+
+**One thing came out differently.** §3 and §7 talk about a prompt's *target* as a
+kind and a name, and the first cut of the API took `(kind, name, wake)`. That does
+not survive contact with the store: a role is a `model.Name` and an identity is a
+`user.Name`, and one parameter for both would have accepted
+`PromptPath(Role, emberTheIdentity)` and filed a role's prompt under an agent's
+directory. It is a `store.Target` struct with separate fields, built by
+`FleetPrompt`, `RolePrompt`, and `IdentityPrompt`, so a caller cannot express the
+mistake.
+
+**Two decisions the plan left open, taken here:**
+
+- **Writing empty text clears the layer** rather than writing an empty file. "No
+  layer" and "a layer that says nothing" compose identically, and two ways to spell
+  one state is a state somebody eventually disagrees about.
+- **Bounds are checked on read as well as on write.** These are plain files an
+  operator is expected to edit by hand, so a prompt that would be refused on write
+  must not be delivered because it arrived another way. A hand-edited 20 KiB
+  `system.md` is refused when it is read, not truncated into a session.
+
+**Next is §11 step 2, delivery**, and it opens with the check §5 asks for: does the
+installed `claude` accept `--append-system-prompt`? Until that is answered nothing
+composed here reaches an agent, and the answer decides whether the fallback in §5.1
+is needed.
+
+---
+
+## §14 Step 2, as built — delivery
+
+### The check §5 asked for, answered
+
+`claude 2.1.220` **accepts `--append-system-prompt <text>`**, and it is in
+`--help`. The fallback in §5.1 — a generated `ORC.md` and an import line the agent
+can delete — is not needed and should not be built.
+
+Two things found while checking, both worth writing down:
+
+- **`--append-system-prompt-file` is also parsed**, though it appears in `--help`
+  only inside another flag's prose, not as an option of its own. It is real: an
+  unknown flag errors (`error: unknown option '--definitely-not-a-real-flag'`) and
+  this one does not. It is *not* used here, for two reasons — it cannot be verified
+  as honoured without a live credential, and a flag absent from `--help` is one that
+  can vanish in a release without anybody calling it a break. It is the upgrade path
+  if either of the concerns below ever bites.
+- **`ARG_MAX` is 1 MiB on this machine**, against a composed bound of 48 KiB. §5's
+  worry about argument length is real but not close, and the bound holds it well
+  clear. The other argument for the file form is that a command line is visible in
+  `ps` to every user on the machine — which for *instructions* is a much weaker
+  concern than it is for the keys and message bodies this tree already keeps out of
+  argv, but it is the reason to prefer the file form the day it is documented.
+
+### Where the composition happens
+
+In `session.New`, once, and held on the supervisor for the session's life.
+
+Not in `Args()`, which cannot fail and is called again on every restart. Not in
+`Prepare`, which would mean threading the text back out to the process that builds
+the command line. `New` has the store, returns an error, and runs exactly once per
+session — which is also the *semantics* wanted, and for the reason `Prepare` already
+gives about the permission snapshot: **a restart continues the same conversation, so
+it must continue under the instructions that conversation has been following.** An
+operator who edits a prompt while an agent is running has changed the next session,
+not this one. `orc refresh` is how they mean otherwise, and a test pins it.
+
+### A broken prompt does not stop a session
+
+An unreadable or oversized layer leaves the prompt empty and the session starts
+anyway: an agent that cannot think is worse than an agent missing a layer somebody
+added, and one bad file must not make a fleet unstartable.
+
+The first draft swallowed that error with a comment claiming it was logged. It is
+logged now — `start` writes an `instruct` line saying the instructions could not be
+composed and why, at every start rather than once, because a session that keeps
+restarting is a session somebody is reading the log of.
+
+### Verified end to end
+
+A real spawn against the fixture, which prints its arguments:
+
+```
+fake-claude --session-id f8203bc7… --model sonnet --effort medium --name ember \
+  --append-system-prompt '# the fleet
+
+ask before you guess. never force-push.
+
+# the engineer role
+
+you write the parser, and only the parser.
+
+# ember
+
+you are covering for atlas this week.'
+```
+
+Three files, three layers, in order, each under a heading naming where it came from.
+**At this point the whole feature works for anybody at a terminal** — a fleet can be
+instructed by writing three files — which is what §11 said step 2 would buy. §11 step
+3 is `orc instruct`, which makes it reachable without knowing the layout.
+
+---
+
+## §15 Steps 3 and 4, as built — the CLI and the journal
+
+`orc instruct` exists, with `show`, and every layer records who last changed it.
+
+### §9's journal, filed differently
+
+§9 said to journal prompt changes in the entity's existing journal. They are in a
+separate append-only file beside the prompts instead — `prompts/journal.jsonl` for
+the fleet as §9 wanted, and `prompts.jsonl` in the role's or identity's own
+directory.
+
+The reason is what those journals are. `roles/<r>/journal.jsonl` and its identity
+equivalent are typed event streams that a **fold replays to reconstruct state**. A
+prompt change reconstructs nothing — the file is the state — so an event there would
+be one every fold had to carry and ignore, and one more shape in a vocabulary whose
+totality is tested. The change record still goes away with the thing it belongs to,
+which is the property §3 and §9 were both protecting.
+
+One line per change: who, when, the digest, and the size. The digest rather than the
+text, as §9 says, and for the reason it gives.
+
+### Who may, and the one thing that surprised
+
+§8's table, implemented as written: the fleet's layer is the operator's alone, a
+role's or an agent's needs the `instruct` toolkit permission (floor 70, `tool(...)`
+clause so no broad permission confers it), and an agent's needs ancestry too.
+
+The addition: **nobody instructs themselves.** §8 does not mention it, and the
+ancestry rule alone would have allowed it — an operator is above everybody, so `orc
+instruct identity boss` would have been fine. An agent writing its own standing
+instructions is an agent deciding what it is for, which is the one thing the layer
+exists to decide from outside. It is refused with that sentence.
+
+### `orc wake` now reads what is set
+
+This was the gap that would have made the feature a lie: `orc instruct wake` wrote a
+file, and `orc wake` still sent its own hard-coded `continue`. The cycle now walks
+the override chain per identity — the agent's, else its role's, else the fleet's,
+else `continue` — and `--message` still beats all of it, because an operator who
+typed a message meant that one. `--dry-run` says which layer the message came from.
+
+### What is left
+
+Step 5 and 6: cq's `instruct` tab, reading then writing. Everything below them is
+done, and a fleet can be instructed from a terminal today.
+
+One thing found on the way, and not mine to fix:
+`session.TestPokeIsBracketedWhenMultiline` has a **test-order dependency**. It passes
+when the package runs whole and fails 8 times out of 8 under
+`-run TestPokeIsBracketed` alone, because it asserts on pty-echoed output whose
+escape rendering depends on terminal state an earlier test leaves behind. It is
+occasionally flaky in the full run too. The file is another stream'''s.
+## §16 Steps 5 and 6, as built — cq
+
+Done. A fleet can now be instructed from a browser, and the round trip is the same
+one every other verb in cq takes: the browser queues, `cq sync` applies on the agent
+machine, and the server never reaches back.
+
+### Reading
+
+`orc instruct --json` came first, and shares `instructRows()` with the overview so
+the table a person reads and the list a program reads cannot disagree about which
+layers exist. The text travels with each row. cq's tab is an editor, not a listing,
+and an editor that fetched each layer separately would be one that could open a
+prompt somebody changed since the snapshot — the thing every other screen in cq is
+careful about.
+
+`source.Orc.Fleet` runs it as a second call and hangs the result on
+`protocol.Fleet.Prompts`. A machine whose Orc predates the command mirrors a fleet
+with no prompts rather than failing to mirror at all.
+
+### Writing
+
+Two ops, `orc.instruct.set` and `orc.instruct.clear`, carrying `Prompt` (the kind),
+`PromptName` (the role's or the agent's), `Wake`, and the library's existing `Text`
+rather than a second operand meaning the same thing. Both are idempotent: the same
+body twice lands in the same place.
+
+Three things worth keeping:
+
+- **The bounds are checked before queueing.** `checkInstructArgs` enforces §6's
+  16 KiB and 2 KiB at the browser. An oversized prompt refused only at apply time
+  would be refused on a machine nobody is watching, hours later.
+- **The prose never enters argv.** The apply side writes the text to a 0600 temp
+  file and passes the path, so a standing instruction does not appear in `ps` on a
+  machine several agents share.
+- **The layer is in the path, not the body.** `PUT /api/v1/instruct/roles/{name}`,
+  `.../identities/{name}`, `/instruct/system`, and `/instruct/wake/...` for the
+  other mechanism, with `DELETE` on each to clear. A client that passes a
+  discriminator in a body is one that can pass a discriminator disagreeing with the
+  route it posted to.
+
+### The tab
+
+`admin → instruct`, after `identities`, `roles` and `perms` — the four questions in
+the order each answers the next one's "why", with this one last because it is the
+only one that persuades rather than permits.
+
+Layers and wake messages are drawn as two groups, each headed by its rule
+("additive", "overriding"), because they are edited in the same place and mean
+opposite things; somebody who writes a wake message expecting it to add to the
+fleet's has made a mistake nothing else would tell them about. Every layer gets a
+row whether or not it exists — a row that appeared only once something was set would
+be a row you could not use to set the first one.
+
+**edit** opens `editor.js`, and an emptied editor is a clear rather than an empty
+file, matching the store. The note under each editor names the running sessions that
+will keep their old instructions until refreshed, rather than saying "some sessions",
+which is not something an operator can act on.
+
+**show composed** assembles the three layers from the mirror rather than fetching
+them: the server cannot reach the agent machine, so a round trip would return the
+same data with a delay on it. The sheet says so, and names `orc instruct show` as
+the authority. It is offered on agents only — a composed prompt is what one agent is
+told, and a role is one layer of several agents' worth.
+
+`dialog.show` was added for it: a sheet with a document and a way out. Reusing
+`confirm` would have put a "do it" button on something that does nothing, which is
+how somebody learns not to trust the buttons.

@@ -14,6 +14,7 @@ import (
 	"orc/cq/internal/fault"
 	"orc/cq/internal/protocol"
 	"orc/cq/internal/store"
+	"orc/cq/internal/web"
 )
 
 // --- request and response plumbing ---------------------------------------
@@ -152,10 +153,34 @@ type healthView struct {
 	Time time.Time `json:"time"`
 }
 
-// health says the process is alive and nothing else. It is the only endpoint
-// that answers a stranger with a body.
+// health says the process is alive and nothing else. With the favicon below, it
+// is one of two endpoints that answer a stranger with a body — and the only one
+// that answers with a fact.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, r, healthView{OK: true, Time: s.now()})
+}
+
+// favicon is the tab icon, and the one static file served without a session.
+//
+// A browser asks for it unprompted, before anybody has logged in. Behind the
+// session gate that is a 401 on every visit and no icon on the login page, which
+// is the screen where recognising the tab is worth most.
+//
+// It is the one response that overrides the no-cache header every other route
+// gets. That header is right for a mirror of somebody's mail — a stale inbox is
+// a lie — and wrong for a picture that changes when the binary does: without it
+// this is re-sent on every page load, and it is the largest thing cq serves.
+func (s *Server) favicon(w http.ResponseWriter, r *http.Request) {
+	data, err := web.Favicon()
+	if err != nil {
+		s.fail(w, r, serverSide(err))
+		return
+	}
+	w.Header().Set("Content-Type", "image/x-icon")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if _, err := w.Write(data); err != nil {
+		return
+	}
 }
 
 // --- session -------------------------------------------------------------

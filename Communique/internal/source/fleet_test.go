@@ -2,6 +2,7 @@ package source_test
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -68,6 +69,23 @@ func TestOrcApplyRunsTheRightCommand(t *testing.T) {
 		protocol.OpOrcRefresh: {
 			protocol.Args{Identity: "atlas"}, []string{"orc", "refresh", "atlas"}},
 		protocol.OpOrcTend: {protocol.Args{}, []string{"orc", "tend"}},
+		// The only verb that runs two commands: it reads where the identity works
+		// before it moves it, because `from` is a claim about a snapshot and this
+		// is where that claim is checked against the machine.
+		// The text travels through a temporary file, so its path is different every
+		// run. `<file>` in the expectation stands for "one argument, whatever it
+		// is" — what is worth pinning is that orc is asked to read the prompt from
+		// a file rather than take it on the command line, and the content is
+		// checked in TestInstructSetPassesTheText.
+		protocol.OpOrcInstructSet: {
+			protocol.Args{Prompt: "identity", PromptName: "atlas", Text: "you write the parser"},
+			[]string{"orc", "instruct", "identity", "atlas", "--set", "<file>"}},
+		protocol.OpOrcInstructClear: {
+			protocol.Args{Prompt: "role", PromptName: "engineer"},
+			[]string{"orc", "instruct", "role", "engineer", "--clear"}},
+		protocol.OpOrcWorkspace: {
+			protocol.Args{Identity: "atlas", Workspace: "/trees/parser", From: "/old/workspace"},
+			[]string{"orc", "workspace", "atlas", "/trees/parser"}},
 	}
 
 	for _, op := range protocol.FleetOps {
@@ -85,11 +103,21 @@ func TestOrcApplyRunsTheRightCommand(t *testing.T) {
 			if err := newCLI(f).Apply(t.Context(), action); err != nil {
 				t.Fatalf("Apply: %v", err)
 			}
-			if len(f.calls) != 1 {
-				t.Fatalf("ran %d commands, want 1: %v", len(f.calls), f.calls)
+			// Most verbs are one command. `orc.workspace` reads before it writes,
+			// so what is pinned here is the command that *changes* something —
+			// the last one — rather than the count.
+			if len(f.calls) == 0 {
+				t.Fatalf("ran nothing")
 			}
-			if strings.Join(f.calls[0], "\x00") != strings.Join(tc.want, "\x00") {
-				t.Errorf("ran %v, want %v", f.calls[0], tc.want)
+			got := f.calls[len(f.calls)-1]
+			want := tc.want
+			if len(want) > 0 && want[len(want)-1] == "<file>" && len(got) == len(want) {
+				// A path nobody can predict: matched by shape, and by the file's
+				// contents in a test of its own.
+				got = append(append([]string{}, got[:len(got)-1]...), "<file>")
+			}
+			if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+				t.Errorf("ran %v, want %v", got, want)
 			}
 		})
 	}
@@ -194,3 +222,44 @@ func TestFleetSaysWhyRatherThanShowingNothing(t *testing.T) {
 type errNoOrc struct{}
 
 func (errNoOrc) Error() string { return "orc: no fleet at /store" }
+
+// TestInstructSetPassesTheText: the prompt reaches orc through the file, and does
+// not travel on the command line where `ps` would show it.
+func TestInstructSetPassesTheText(t *testing.T) {
+	const text = "ask before you guess\nand never force-push\n"
+
+	f := newFakeRun()
+	var seen string
+	f.before = func(args []string) {
+		// The file exists while orc is running, and not afterwards.
+		if len(args) < 2 || args[len(args)-2] != "--set" {
+			return
+		}
+		body, err := os.ReadFile(args[len(args)-1])
+		if err != nil {
+			t.Errorf("orc was given a file it cannot read: %v", err)
+			return
+		}
+		seen = string(body)
+	}
+
+	action := protocol.Action{
+		ID: protocol.ActionID(strings.Repeat("a", 32)), Seq: 1, Machine: "studio",
+		Op: protocol.OpOrcInstructSet, Queued: at(),
+		Args: protocol.Args{Prompt: "system", Text: text},
+	}
+	if err := newCLI(f).Apply(t.Context(), action); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if seen != text {
+		t.Errorf("orc was given %q, want %q", seen, text)
+	}
+	for _, call := range f.calls {
+		for _, arg := range call {
+			if strings.Contains(arg, "force-push") {
+				t.Errorf("the prompt travelled on the command line: %v", call)
+			}
+		}
+	}
+}

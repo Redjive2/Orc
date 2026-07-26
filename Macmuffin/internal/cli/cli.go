@@ -245,6 +245,8 @@ func (a App) route(command string, rest []string) error {
 		return a.scope(rest)
 	case "worktree":
 		return a.worktree(rest)
+	case "rebind":
+		return a.rebind(rest)
 	case "check-scope":
 		return a.checkScope(rest)
 	case "verify":

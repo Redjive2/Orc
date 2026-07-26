@@ -302,10 +302,9 @@ function fileBody(file, ctx, depth) {
 
 // fileControls are what can be done to a whole file.
 //
-// They sit under its contents rather than beside its name, because a fold's row
-// is a link and a button inside a link is a target nobody can hit reliably —
-// and because the destructive one should be reached only by somebody who has
-// opened the file and looked at it.
+// They appear only once the file has been opened — the destructive one should be
+// reached only by somebody who has looked at what they are deleting, and an edit
+// carries the digest of text nobody has fetched yet otherwise.
 function fileControls(file, ctx) {
   if (ctx.state.picked !== `file:${file.path}`) return null;
   const loaded = ctx.state.files ? ctx.state.files[fileKey(file)] : null;
@@ -405,14 +404,21 @@ function fold({ key, ctx, depth, label, note, children, controls, onOpen }) {
     note ? h("span", { class: "muted note" }, note) : null,
   );
 
-  // Controls sit directly under the row they belong to, and outside the fold's
-  // contents. Two reasons. A folder can be acted on without being opened first —
-  // deleting one should not require expanding it. And in an open file they would
-  // otherwise be six hundred lines further down, past the thing they act on.
+  // Controls sit on the row they belong to, at the right-hand end, and outside
+  // the fold's contents. Outside, because a folder can be acted on without being
+  // opened first — deleting one should not require expanding it — and because in
+  // an open file they would otherwise be six hundred lines further down, past the
+  // thing they act on.
+  //
+  // Beside the fold rather than inside it: the whole row is already a button, and
+  // a button within a button is both invalid and a target nobody hits reliably.
+  // So the two are siblings in a flex row, which is what puts them on one line
+  // without either swallowing the other's clicks.
   const acts = controls ? controls() : null;
+  const row = acts ? h("div", { class: "fold-row" }, head, acts) : head;
 
-  if (!open) return acts ? h("div", { class: "folded" }, head, acts) : head;
-  return h("div", { class: "folded" }, head, acts,
+  if (!open) return row;
+  return h("div", { class: "folded" }, row,
     h("div", { class: "inner" }, ...children()));
 }
 

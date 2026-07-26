@@ -56,7 +56,12 @@ class Element extends Node {
   get firstChild() { return this.childNodes[0] ?? null; }
   // The two methods the editor asks a textarea for. They do nothing here; what
   // the tests check is the text, not the caret.
-  focus() { this.focused = true; }
+  //
+  // The options are kept because one of them is load-bearing: focusing an element
+  // scrolls it into view, and a redraw restoring focus to a reply box far down a
+  // thread throws the page down with it. `preventScroll` is the difference
+  // between keeping somebody's place and losing it, so it is worth asserting on.
+  focus(options) { this.focused = true; this.focusedWith = options; }
   setSelectionRange(start, end) { this.selection = [start, end]; }
 }
 

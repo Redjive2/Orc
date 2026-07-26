@@ -33,6 +33,7 @@ import (
 	"orc/common/clock"
 	"orc/common/fault"
 	"orc/common/user"
+	"orc/orc/internal/instruct"
 	"orc/orc/internal/model"
 	"orc/orc/internal/proc"
 	"orc/orc/internal/pty"
@@ -99,6 +100,13 @@ type Supervisor struct {
 	restarts int
 	stopping bool
 	lastExit string
+
+	// prompt is the composed system prompt: the fleet's layer, the role's, and the
+	// identity's, under headings naming each. Empty where nothing is set, which is
+	// every fleet that has not used the feature.
+	prompt string
+	// promptErr is why there is no prompt, when there should have been one.
+	promptErr error
 }
 
 // New builds a supervisor.
@@ -120,13 +128,33 @@ func New(s *store.Store, spec Spec, env []string, bin string) (*Supervisor, erro
 	if bin == "" {
 		bin = DefaultClaude
 	}
+
+	// The standing instructions, composed once for the session's whole life.
+	//
+	// Once rather than per restart, for the reason Prepare gives about the
+	// permission snapshot: a restart continues the same conversation, and a prompt
+	// that changed underneath it would mean an agent whose instructions differ from
+	// the ones it has been following since the first turn. `orc refresh` is what
+	// asks for new instructions, and it gets them by getting a new session.
+	// Not fatal if it fails. An agent that cannot think is worse than an agent
+	// missing a layer somebody added, and one unreadable prompt file must not make
+	// a fleet unstartable. It is carried rather than swallowed: `start` writes it
+	// to the session log, where somebody asking why an instruction is not being
+	// followed will find it.
+	prompt, promptErr := compose(s, spec.Identity)
+	if promptErr != nil {
+		prompt = ""
+	}
+
 	return &Supervisor{
-		store:    s,
-		spec:     spec,
-		env:      env,
-		bin:      bin,
-		ring:     newRing(Scrollback),
-		watchers: map[chan []byte]struct{}{},
+		store:     s,
+		spec:      spec,
+		prompt:    prompt,
+		promptErr: promptErr,
+		env:       env,
+		bin:       bin,
+		ring:      newRing(Scrollback),
+		watchers:  map[chan []byte]struct{}{},
 	}, nil
 }
 
@@ -142,10 +170,40 @@ func (s *Supervisor) Args() []string {
 		"--effort", s.spec.Effort.String(),
 		"--name", s.spec.Identity.String(),
 	}
+	if s.prompt != "" {
+		// `--append-system-prompt` rather than `--system-prompt`: appending leaves
+		// Claude's own instructions in place and adds the fleet's to them. Replacing
+		// them would mean Orc taking responsibility for everything an agent knows
+		// about how to be one.
+		args = append(args, "--append-system-prompt", s.prompt)
+	}
 	if s.spec.Resume {
 		args = append(args, "--resume", s.spec.ID)
 	}
 	return args
+}
+
+// compose gathers an identity's three prompt layers and joins them.
+//
+// The fleet is derived here rather than passed in for the reason Prepare gives: the
+// supervisor is a separate process from the `orc employ` that spawned it, and
+// whatever that command derived describes a fleet from before this session existed.
+func compose(s *store.Store, name user.Name) (string, error) {
+	fleet, err := s.Fleet()
+	if err != nil {
+		return "", err
+	}
+
+	var role model.Name
+	if got, err := fleet.Identity(name); err == nil {
+		role = got.Role()
+	}
+
+	layers, err := s.Instructions(name, role)
+	if err != nil {
+		return "", err
+	}
+	return instruct.Compose(layers)
 }
 
 // Run holds the session until it is told to stop or gives up.
@@ -264,6 +322,7 @@ func (s *Supervisor) once() error {
 		Child:      cmd.Process.Pid,
 		Model:      s.spec.Model.String(),
 		Effort:     s.spec.Effort.String(),
+		Workspace:  cmd.Dir,
 		Started:    clock.Format(s.store.Now()),
 		Restarts:   s.restarts,
 		LastExit:   s.lastExit,
@@ -272,6 +331,12 @@ func (s *Supervisor) once() error {
 		// Not fatal to the session, but it is fatal to anybody finding it, so it is
 		// reported rather than swallowed.
 		s.note("state", "could not record the session: "+err.Error())
+	}
+	if s.promptErr != nil {
+		// Said at every start rather than once, because a session that restarts is
+		// a session somebody is looking at the log of.
+		s.note("instruct", "the standing instructions could not be composed, so this "+
+			"session has none: "+s.promptErr.Error())
 	}
 	s.note("started", fmt.Sprintf("%s %s", s.bin, strings.Join(s.Args(), " ")))
 

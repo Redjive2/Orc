@@ -1,4 +1,4 @@
-// The fleet, in the admin panel.
+// The fleet: what is running, and who may do what.
 //
 // Orc is the tool with no other remote face: mail has a mailbox, tasks have a
 // board, and who-may-what had a terminal on the agent machine and nothing else.
@@ -13,6 +13,7 @@
 // bug against the wrong thing.
 
 import { h } from "./dom.js";
+import { plural } from "./library.js";
 import * as clause from "./clauses.js";
 
 // remaining renders a wall-clock expiry as time left rather than as an instant.
@@ -78,7 +79,7 @@ function level(id) {
 // running says what is *actually* happening, which is a different question from
 // what the work list says should be. The states where they disagree are the ones
 // worth a word: employed with no session is what `tend` fixes.
-function running(id) {
+function sessionState(id) {
   if (id.populated) {
     const label = id.restarts ? `live · restarted ${id.restarts}×` : "live";
     return h("span", { class: "ok" }, label);
@@ -87,7 +88,20 @@ function running(id) {
   return h("span", { class: "muted" }, "—");
 }
 
-export function fleet(state, actions) {
+// The fleet answers two different questions, and they became two tabs.
+//
+//   - *What is running right now* — `manage › fleet`. Load, sessions, employ and
+//     fire. Something you look at because an agent is or is not working.
+//   - *Who exists, and what may they do* — `admin › identities`, `roles`,
+//     `perms`. The structure underneath, which changes rarely and deliberately.
+//
+// One screen answering both is the screen this was, and it was long enough that
+// the running agents were below the permission editor.
+//
+// Each tab is built the same way: `perMachine` handles the cases every one of
+// them shares — the fleet could not be read, no machine carries one, this
+// machine is unreachable — so that no tab has to invent its own words for them.
+function perMachine(state, title, body) {
   const fleets = state.fleet || [];
   if (state.fleetError) {
     return [h("p", { class: "warn" }, `the fleet could not be read: ${state.fleetError}`)];
@@ -96,50 +110,126 @@ export function fleet(state, actions) {
     return [h("p", { class: "muted" },
       "no machine mirrors an orc fleet — a machine that runs agents will carry one")];
   }
-  return fleets.flatMap((f) => machineFleet(f, state, actions));
+
+  return fleets.flatMap((f) => {
+    if (f.unreachable) {
+      return [h("article", { class: "card" },
+        h("h2", {}, `${f.machine} — ${title}`),
+        h("div", { class: "body" }, h("p", { class: "warn" }, f.unreachable)))];
+    }
+    return [h("article", { class: "card" },
+      h("h2", {}, `${f.machine} — ${title}`),
+      ...body(f))];
+  });
 }
 
-function machineFleet(f, state, actions) {
-  if (f.unreachable) {
-    return [h("article", { class: "card" },
-      h("h2", {}, `${f.machine} — fleet`),
-      h("div", { class: "body" }, h("p", { class: "warn" }, f.unreachable)))];
-  }
+// agents is everybody in a fleet except the operator.
+//
+// The operator is a person, not an agent: it is never employed, runs no session,
+// holds no standing instructions and works in whatever directory it likes. So
+// every list *about agents* leaves it out — a row that can never be acted on is a
+// row somebody reads once and then learns to skip past.
+//
+// It is not hidden. The card above each list names it, because who the operator
+// is is worth knowing; it is just not one of the things being listed.
+export function agents(f) {
+  return (f.identities || []).filter((id) => !id.operator);
+}
 
-  return [
-    h("article", { class: "card" },
-      h("h2", {}, `${f.machine} — fleet`),
+// running is `manage › fleet`: what is employed, and what to do about it.
+//
+// Everybody is listed, not only the employed — an agent that is *not* working is
+// as often the thing somebody came to fix. The idle ones are dimmed rather than
+// hidden, so the list reads as a fleet with three of eight busy instead of as a
+// list of three.
+export function running(state, actions) {
+  return perMachine(state, "fleet", (f) => {
+    const list = agents(f);
+    const employed = list.filter((id) => id.employed).length;
+    return [
       h("div", { class: "meta" },
-        `operator ${f.operator}`,
-        f.identities ? ` · ${f.identities.length} identities` : "",
-        f.roles ? ` · ${f.roles.length} roles` : "",
-        f.permissions ? ` · ${f.permissions.length} permissions` : ""),
+        `operator ${f.operator} · ${employed} of ${plural(list.length, "agent")} employed`),
       h("div", { class: "body" },
         ...(f.problems || []).map((p) => h("p", { class: "warn" }, p)),
         actions ? h("div", { class: "controls" },
-          h("button", { onclick: () => actions.newIdentity(f) }, "hire…"),
-          h("button", { onclick: () => actions.newRole(f) }, "new role…"),
-          h("button", { onclick: () => actions.newPermission(f) }, "new permission…"),
           h("button", { class: "quiet", onclick: () => actions.tend(f) }, "tend"),
+          h("span", { class: "muted" }, "start what should be running and stop what should not"),
         ) : null,
-        h("h3", {}, "identities"),
-        ...identities(f, state, actions),
-        h("h3", {}, "roles"),
-        ...roles(f, actions),
-        h("h3", {}, "permissions"),
-        ...permissions(f, actions),
-      )),
-  ];
+        ...work(f, actions)),
+    ];
+  });
+}
+
+// work is one row per identity, ordered so the busy ones come first.
+function work(f, actions) {
+  const list = agents(f);
+  if (list.length === 0) return [h("p", { class: "muted" }, "nobody yet")];
+
+  const order = [...list].sort((a, b) => Number(Boolean(b.employed)) - Number(Boolean(a.employed)));
+  return order.map((id) => h("div", { class: id.employed ? "agent" : "agent idle" },
+    h("div", { class: "agent-head" },
+      h("span", { class: "name" }, h("span", { class: id.operator ? "ok" : "" }, id.name)),
+      h("span", { class: "muted" }, id.role || "no role"),
+      sessionState(id),
+      h("span", { class: "muted" },
+        id.employed ? `${id.model || "?"}/${id.effort || "?"} · load ${id.load}` : ""),
+      h("span", { class: "muted" },
+        id.has_spawn_budget ? `may employ ${id.spawn_budget}` : "no budget"),
+    ),
+    actions ? h("div", { class: "controls row" },
+      id.employed
+        ? h("button", { class: "quiet", onclick: () => actions.fire(f, id) }, "fire")
+        : h("button", { class: "quiet", onclick: () => actions.employ(f, id) }, "employ…"),
+      id.populated ? h("button", { class: "quiet", onclick: () => actions.poke(f, id) }, "poke…") : null,
+      id.populated ? h("button", { class: "quiet", onclick: () => actions.refreshAgent(f, id) }, "refresh") : null,
+    ) : null,
+  ));
+}
+
+// tree is `admin › identities`: who exists and under whom.
+export function tree(state, actions) {
+  return perMachine(state, "identities", (f) => [
+    h("div", { class: "meta" },
+      `operator ${f.operator} · ${plural(agents(f).length, "agent")}`),
+    h("div", { class: "body" },
+      ...(f.problems || []).map((p) => h("p", { class: "warn" }, p)),
+      actions ? h("div", { class: "controls" },
+        h("button", { onclick: () => actions.newIdentity(f) }, "hire…")) : null,
+      ...identities(f, state, actions)),
+  ]);
+}
+
+export function roleList(state, actions) {
+  return perMachine(state, "roles", (f) => [
+    h("div", { class: "meta" }, `${(f.roles || []).length} roles`),
+    h("div", { class: "body" },
+      actions ? h("div", { class: "controls" },
+        h("button", { onclick: () => actions.newRole(f) }, "new role…")) : null,
+      ...roles(f, actions)),
+  ]);
+}
+
+export function permissionList(state, actions) {
+  return perMachine(state, "permissions", (f) => [
+    h("div", { class: "meta" }, `${(f.permissions || []).length} permissions`),
+    h("div", { class: "body" },
+      actions ? h("div", { class: "controls" },
+        h("button", { onclick: () => actions.newPermission(f) }, "new permission…")) : null,
+      ...permissions(f, actions)),
+  ]);
 }
 
 // identities are drawn in tree order with an indent, because who works for whom
 // is the whole of what an Orc fleet is — a flat list of the same names says
 // nothing about why one of them may not do something.
 function identities(f, state, actions) {
-  const list = f.identities || [];
+  const list = agents(f);
   if (list.length === 0) return [h("p", { class: "muted" }, "nobody yet")];
 
-  const depth = (id) => (id.chain ? Math.max(id.chain.length - 1, 0) : 0);
+  // Depth is rebased past the operator. Everybody reports to it, so leaving the
+  // chain as Orc counts it would indent the whole fleet one step under a row that
+  // is not on screen — a tree hanging from nothing.
+  const depth = (id) => (id.chain ? Math.max(id.chain.length - 2, 0) : 0);
   return list.map((id) => h("div", { class: "agent" },
     h("div", { class: "agent-head" },
       h("span", { class: "name" },
@@ -147,23 +237,18 @@ function identities(f, state, actions) {
         h("span", { class: id.operator ? "ok" : "" }, id.name)),
       level(id),
       h("span", { class: "muted" }, id.role || "no role"),
-      running(id),
-      h("span", { class: "muted" },
-        id.employed ? `${id.model || "?"}/${id.effort || "?"} · load ${id.load}` : ""),
       h("span", { class: "muted" },
         id.has_spawn_budget ? `may employ ${id.spawn_budget}` : "no budget"),
     ),
     clauses(id, f.vocabulary),
     grants(id, f, actions),
-    actions ? h("div", { class: "controls" },
+    // Structural only. Employing and firing live in `manage › fleet`, because
+    // starting an agent is a thing you do to a running fleet, and giving it a
+    // role is a thing you do to the shape of one.
+    actions ? h("div", { class: "controls row" },
       h("button", { class: "quiet", onclick: () => actions.assignRole(f, id) }, "role…"),
       id.operator ? null : h("button", { class: "quiet", onclick: () => actions.moveIdentity(f, id) }, "move…"),
       h("button", { class: "quiet", onclick: () => actions.grant(f, id) }, "grant…"),
-      id.employed
-        ? h("button", { class: "quiet", onclick: () => actions.fire(f, id) }, "fire")
-        : h("button", { class: "quiet", onclick: () => actions.employ(f, id) }, "employ…"),
-      id.populated ? h("button", { class: "quiet", onclick: () => actions.poke(f, id) }, "poke…") : null,
-      id.populated ? h("button", { class: "quiet", onclick: () => actions.refreshAgent(f, id) }, "refresh") : null,
       id.operator ? null : h("button", { class: "quiet danger", onclick: () => actions.removeIdentity(f, id) }, "remove"),
     ) : null,
   ));
@@ -202,6 +287,16 @@ function grants(id, f, actions) {
     )));
 }
 
+// holders names the agents in a role, and not the operator.
+//
+// It would only ever be there if somebody assigned the operator a role, which is
+// legal and says nothing — its authority is 100 whatever role it holds. Listing
+// it among the agents doing a job would be the one place this rule leaked.
+function holders(f, r) {
+  const who = (r.held_by || []).filter((name) => name !== f.operator);
+  return who.length ? `held by ${who.join(", ")}` : "held by nobody";
+}
+
 function roles(f, actions) {
   const list = f.roles || [];
   if (list.length === 0) return [h("p", { class: "muted" }, "no roles yet")];
@@ -212,8 +307,7 @@ function roles(f, actions) {
       h("span", {}, String(r.authority)),
       h("span", { class: "muted" }, r.description || ""),
       h("span", { class: "muted" }, budgetLabel(roleBudget(f, r))),
-      h("span", { class: "muted" },
-        r.held_by && r.held_by.length ? `held by ${r.held_by.join(", ")}` : "held by nobody"),
+      h("span", { class: "muted" }, holders(f, r)),
     ),
     (r.permissions || []).length
       ? h("div", { class: "clauses" }, ...r.permissions.map((p) => h("span", { class: "clause" },

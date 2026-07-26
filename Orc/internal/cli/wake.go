@@ -10,6 +10,9 @@ import (
 
 	"orc/common/fault"
 	"orc/common/user"
+	"orc/common/watch"
+	"orc/orc/internal/instruct"
+	"orc/orc/internal/model"
 	"orc/orc/internal/view"
 )
 
@@ -48,9 +51,10 @@ const (
 	// tool calls, and a threshold under a minute would poke it for breathing.
 	MinQuiet = time.Minute
 
-	// WakeMessage is what a woken agent is told. It is `poke`'s default, and for
-	// the same reason: the whole verb is "nudge the identity to continue working".
-	WakeMessage = "continue"
+	// WakeMessage is what a woken agent is told when nothing says otherwise. It is
+	// `poke`'s default, and `instruct.DefaultWake` — the bottom of the override
+	// chain a fleet's, a role's, and an agent's wake messages sit above.
+	WakeMessage = instruct.DefaultWake
 )
 
 // wake is `orc wake [<identity>…]`.
@@ -85,10 +89,10 @@ func (a App) wake(args []string) error {
 		quiet = got
 	}
 
+	// An explicit --message is the operator saying what to send *this time*, so it
+	// beats everything stored. Left empty, each agent is told whatever its own
+	// standing wake message says — see `orc instruct wake`.
 	text := strings.TrimSpace(message)
-	if text == "" {
-		text = WakeMessage
-	}
 
 	var names []user.Name
 	for _, raw := range rest {
@@ -249,9 +253,20 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 		return alreadyWoken, nil
 	}
 
+	// What to say. The flag wins; otherwise the identity's own message, else its
+	// role's, else the fleet's, else `continue`.
+	message, from, err := w.messageFor(s, who)
+	if err != nil {
+		return working, err
+	}
+
 	if w.dry {
+		said := "waiting " + round(quiet)
+		if from != "" {
+			said += " · " + string(from) + "'s message"
+		}
 		if err := w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Muted("would wake"),
-			w.app.out.Identity(who.String()), w.app.out.Muted("waiting "+round(quiet)))); err != nil {
+			w.app.out.Identity(who.String()), w.app.out.Muted(said))); err != nil {
 			return working, err
 		}
 		return wokeIt, nil
@@ -261,14 +276,41 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 	if err != nil {
 		return working, err
 	}
-	if err := client.Poke(w.message); err != nil {
+	if err := client.Poke(message); err != nil {
 		return working, err
 	}
 	w.woken[who.String()] = last
 
 	return wokeIt, w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Good("woke"),
 		w.app.out.Identity(who.String()),
-		w.app.out.Muted(fmt.Sprintf("waiting %s · %s", round(quiet), quoteShort(w.message)))))
+		w.app.out.Muted(fmt.Sprintf("waiting %s · %s", round(quiet), quoteShort(message)))))
+}
+
+// messageFor is what to say to one agent, and where it came from.
+//
+// The flag first, because an operator who typed a message meant that one. Then the
+// override chain from Instruct.md §4, which the store walks: the agent's own, else
+// its role's, else the fleet's, else `continue`. Only one is ever sent — three
+// stapled together is not a message, it is a mess arriving mid-turn.
+func (w *waker) messageFor(s caller, who user.Name) (string, instruct.Kind, error) {
+	if w.message != "" {
+		return w.message, "", nil
+	}
+
+	var role model.Name
+	if target, err := s.fleet.Identity(who); err == nil {
+		role = target.Role()
+	}
+
+	text, from, err := s.store.WakeMessage(who, role)
+	if err != nil {
+		// A wake message that will not read must not stop the cycle: an agent
+		// left silent because somebody saved a bad file is the failure this whole
+		// command exists to prevent.
+		w.app.note("%s: its wake message could not be read, so it was sent the default: %v", who, err)
+		return WakeMessage, "", nil
+	}
+	return text, from, nil
 }
 
 // silence reports how long a session has been waiting for somebody to speak, and
@@ -331,6 +373,11 @@ func (w *waker) loop(interval time.Duration) error {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(stop)
 
+	// Recorded while it runs, so an upgrade can see that this fleet is being woken
+	// — and so this process picks up the new build when one arrives.
+	dog := w.app.watching(watch.Wake, interval, selfArgs())
+	defer dog.done()
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -346,6 +393,11 @@ func (w *waker) loop(interval time.Duration) error {
 		} else {
 			failures = 0
 		}
+
+		// Between passes, never during one: a pass that is half-way through poking
+		// a fleet when the process image changes underneath it is worse than a pass
+		// run by an old build.
+		dog.renew()
 
 		select {
 		case <-stop:

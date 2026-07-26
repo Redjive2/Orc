@@ -101,6 +101,27 @@ func Stylesheet(flavour theme.Flavour) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// FaviconPath is the tab icon, inside the embedded bundle.
+const FaviconPath = "favicon.ico"
+
+// Favicon returns the tab icon.
+//
+// Separate from Assets because Assets is behind the session gate and this is
+// not. A browser asks for /favicon.ico on its own, before anybody has logged in,
+// and the login page is exactly where somebody wants to recognise the tab — so
+// serving it only to a session would mean a 401 on every visit and no icon at
+// the one moment there is nothing else to go on.
+//
+// An icon is not a secret. It discloses that this is cq, which the login page
+// already says in words.
+func Favicon() ([]byte, error) {
+	data, err := files.ReadFile("app/" + FaviconPath)
+	if err != nil {
+		return nil, fault.Internal{Where: "web.Favicon", Detail: err.Error()}
+	}
+	return data, nil
+}
+
 // Index returns the application shell.
 func Index() ([]byte, error) {
 	data, err := files.ReadFile("app/index.html")
@@ -164,6 +185,8 @@ func contentType(name string) string {
 		return "text/html; charset=utf-8"
 	case ".svg":
 		return "image/svg+xml"
+	case ".ico":
+		return "image/x-icon"
 	default:
 		return "application/octet-stream"
 	}

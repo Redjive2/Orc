@@ -152,6 +152,17 @@ func (o *Orc) Fleet(ctx context.Context) protocol.Fleet {
 	if fleet.Operator == "" && len(fleet.Identities) == 0 {
 		return protocol.Fleet{Unreachable: "orc reported no fleet"}
 	}
+
+	// The standing instructions, in a second call because they are a second
+	// question: `orc status` is who exists and what they may do, and this is what
+	// they are told. A fleet whose prompts cannot be read is still a fleet — the
+	// panel loses one tab rather than the whole mirror.
+	if out, err := o.run(ctx, "instruct", "--json"); err == nil {
+		var prompts []protocol.FleetPrompt
+		if err := decodeJSON(out, &prompts, o.command()+" instruct"); err == nil {
+			fleet.Prompts = prompts
+		}
+	}
 	return fleet
 }
 
@@ -243,14 +254,127 @@ func (o *Orc) Apply(ctx context.Context, action protocol.Action) error {
 		}
 	case protocol.OpOrcRefresh:
 		args = []string{"refresh", a.Identity}
+	case protocol.OpOrcWorkspace:
+		// `from` is checked here rather than passed on, because orc has no opinion
+		// about what the browser was looking at. A snapshot is minutes old by the
+		// time somebody acts on it, and this is the moment the two can be compared:
+		// the agent machine knows where the identity works *now*.
+		if err := o.workspaceUnchanged(ctx, a.Identity, a.From); err != nil {
+			return err
+		}
+		args = []string{"workspace", a.Identity, a.Workspace}
+		if a.Adopt {
+			args = append(args, "--adopt")
+		}
 	case protocol.OpOrcTend:
 		args = []string{"tend"}
+
+	case protocol.OpOrcInstructSet:
+		// Through a file rather than argv: a prompt is up to 16 KiB of prose, and a
+		// command line is both size-limited and visible in `ps` to everyone on the
+		// machine — the same reason mail bodies do not travel as arguments.
+		//
+		// A file rather than stdin because the injected runner has no stdin, and
+		// widening that interface for one operation would change every fake in
+		// every test that uses it.
+		path, done, err := tempPrompt(a.Text)
+		if err != nil {
+			return err
+		}
+		defer done()
+		args = append(instructTarget(a), "--set", path)
+
+	case protocol.OpOrcInstructClear:
+		args = append(instructTarget(a), "--clear")
 	default:
 		return fault.Internal{Where: "source.Orc.Apply", Detail: "no command for operation " + string(action.Op)}
 	}
 
 	_, err := o.run(ctx, args...)
 	return err
+}
+
+// instructTarget turns the queued operands into the words `orc instruct` takes.
+func instructTarget(a protocol.Args) []string {
+	args := []string{"instruct"}
+	if a.Wake {
+		args = append(args, "wake")
+	}
+	switch a.Prompt {
+	case "system":
+		// `orc instruct wake` addresses the fleet's message; `wake system` is not a
+		// thing, which is why the word is only added for the prompt.
+		if !a.Wake {
+			args = append(args, "system")
+		}
+	case "role", "identity":
+		args = append(args, a.Prompt, a.PromptName)
+	}
+	return args
+}
+
+// tempPrompt writes prompt text where `orc instruct --set` can read it, and returns
+// how to remove it.
+//
+// 0600 and in the process's own temporary directory: it is somebody's standing
+// instructions, and it exists for the length of one exec.
+func tempPrompt(text string) (string, func(), error) {
+	f, err := os.CreateTemp("", "cq-instruct-*.md")
+	if err != nil {
+		return "", func() {}, fault.IO{Op: "create", Subject: "a temporary file for the prompt", Err: err}
+	}
+	done := func() { _ = os.Remove(f.Name()) }
+
+	if _, err := f.WriteString(text); err != nil {
+		_ = f.Close()
+		done()
+		return "", func() {}, fault.IO{Op: "write", Subject: f.Name(), Err: err}
+	}
+	if err := f.Close(); err != nil {
+		done()
+		return "", func() {}, fault.IO{Op: "close", Subject: f.Name(), Err: err}
+	}
+	return f.Name(), done, nil
+}
+
+// WorkspaceUnchanged is the staleness check, for callers outside the apply path.
+//
+// `cq workspace --from` on the agent machine is the same question a queued action
+// asks, and it should get the same answer from the same code: two implementations of
+// "has this moved since you looked" is one of them eventually being wrong.
+func (o *Orc) WorkspaceUnchanged(ctx context.Context, identity, from string) error {
+	return o.workspaceUnchanged(ctx, identity, from)
+}
+
+// Output runs an orc command and hands back what it said, for a caller that is
+// relaying rather than parsing.
+func (o *Orc) Output(ctx context.Context, args ...string) ([]byte, error) {
+	return o.run(ctx, args...)
+}
+
+// workspaceUnchanged refuses an action whose view of the world has moved on.
+//
+// The browser sends where it saw the identity working. If that is no longer true —
+// somebody moved it on the machine while the action sat in the queue — applying
+// anyway would silently overturn a decision the operator never saw. It is the same
+// guard the library verbs get from `base`, for the one fleet value whose old
+// location still exists on disk afterwards.
+func (o *Orc) workspaceUnchanged(ctx context.Context, identity, from string) error {
+	out, err := o.run(ctx, "workspace", identity)
+	if err != nil {
+		return err
+	}
+
+	// `orc workspace <identity>` says "<name> works in <path>", possibly with a
+	// note after it. The path is what sits between the two, and comparing on
+	// containment rather than parsing keeps this from breaking the first time the
+	// sentence gains a word.
+	if !strings.Contains(string(out), from) {
+		return fault.Conflict{Subject: identity, Reason: fmt.Sprintf(
+			"it no longer works in %s, so this move was made against a stale view; "+
+				"reload and try again", from)}
+	}
+	return nil
 }
 
 // run invokes orc and returns its standard output.

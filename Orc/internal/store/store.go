@@ -317,8 +317,26 @@ func (s *Store) ClaudeDir(name user.Name) string {
 }
 
 // WorkspaceDir returns an identity's working directory.
+//
+// Almost always the derived path, `<root>/identities/<name>/workspace`, which is
+// where every identity starts. An identity that has been pointed somewhere else
+// carries the exception in its journal, and this is where that is honoured — rather
+// than at each of the eight places that ask, which include the supervisor's `cmd.Dir`
+// and the hook's path resolution. One of them missing the exception would be an agent
+// working in one directory while its permissions were checked against another.
+//
+// An identity that will not load falls back to the derived path rather than failing.
+// The signature is the reason and the behaviour is right anyway: the hook asks this
+// on every tool call and must fail open, and an identity Orc cannot read is one no
+// command is about to succeed at regardless.
 func (s *Store) WorkspaceDir(name user.Name) string {
-	return filepath.Join(s.identityDir(name), workspaceDir)
+	derived := filepath.Join(s.identityDir(name), workspaceDir)
+
+	got, err := s.Identity(name)
+	if err != nil || got.Workspace() == "" {
+		return derived
+	}
+	return got.Workspace()
 }
 
 // SessionDir returns where an identity's live session state goes. Nothing writes

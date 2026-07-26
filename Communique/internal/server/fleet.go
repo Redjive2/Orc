@@ -71,6 +71,14 @@ type fleetBody struct {
 	Effort      string   `json:"effort,omitempty"`
 	Until       string   `json:"until,omitempty"`
 	Message     string   `json:"message,omitempty"`
+	// `orc workspace`'s operands. From is where the browser saw the identity
+	// working, and is what makes a stale click refusable rather than silent.
+	Workspace string `json:"workspace,omitempty"`
+	From      string `json:"from,omitempty"`
+	Adopt     bool   `json:"adopt,omitempty"`
+	// Text is a standing instruction's whole new text. The layer it belongs to is
+	// in the path, not here.
+	Text string `json:"text,omitempty"`
 	// Load is a spawn budget, and zero is a real one — a budget of nothing refuses
 	// every employ. It is a pointer so "not given" and "given as zero" stay apart:
 	// without that, setting a budget to nothing would be indistinguishable from
@@ -232,6 +240,41 @@ func (s *Server) refreshIdentity(w http.ResponseWriter, r *http.Request) {
 	s.fleetAction(w, r, protocol.OpOrcRefresh, func(b fleetBody, a *protocol.Args) {
 		a.Identity = named(r, b)
 	})
+}
+
+// setWorkspace changes where an identity works.
+//
+// `from` is required rather than optional, and the reason is the whole point of the
+// route: a snapshot is minutes old by the time somebody clicks, and a client that
+// cannot say what it was looking at is one that cannot be protected from acting on a
+// stale view. `GET /api/v1/fleet` carries the workspace, so filling it in costs
+// nothing.
+func (s *Server) setWorkspace(w http.ResponseWriter, r *http.Request) {
+	s.fleetAction(w, r, protocol.OpOrcWorkspace, func(b fleetBody, a *protocol.Args) {
+		a.Identity, a.Workspace, a.From, a.Adopt = named(r, b), b.Workspace, b.From, b.Adopt
+	})
+}
+
+// The standing instructions.
+//
+// One route per layer rather than one taking a kind, because the kind is *in* the
+// path: `/instruct/system`, `/instruct/roles/{name}`, `/instruct/identities/{name}`,
+// and `/wake` on any of them. A client that has to pass a discriminator in a body is
+// one that can pass a discriminator that disagrees with the path it posted to.
+func (s *Server) setInstruct(kind string, wake bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.fleetAction(w, r, protocol.OpOrcInstructSet, func(b fleetBody, a *protocol.Args) {
+			a.Prompt, a.PromptName, a.Wake, a.Text = kind, r.PathValue("name"), wake, b.Text
+		})
+	}
+}
+
+func (s *Server) clearInstruct(kind string, wake bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.fleetAction(w, r, protocol.OpOrcInstructClear, func(b fleetBody, a *protocol.Args) {
+			a.Prompt, a.PromptName, a.Wake = kind, r.PathValue("name"), wake
+		})
+	}
 }
 
 func (s *Server) tendFleet(w http.ResponseWriter, r *http.Request) {

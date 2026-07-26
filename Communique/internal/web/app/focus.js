@@ -43,7 +43,16 @@ export function restore(root, memo) {
   const el = findByName(root, memo.name);
   if (!el || typeof el.focus !== "function") return false;
 
-  el.focus();
+  // preventScroll, because focusing an element scrolls it into view and the
+  // field is usually a long way down the page. Somebody part-way through a reply
+  // who scrolls up to re-read the thread is still *focused* on the reply box, so
+  // a sync landing while they read would throw the page back down to it — a
+  // measured 6431px on a forty-message thread. They keep their words and lose
+  // their place, which is the same bug wearing a different hat.
+  //
+  // Where it is unsupported the option is ignored and the old behaviour stands,
+  // which is why it is passed rather than guarded on.
+  el.focus({ preventScroll: true });
 
   if (memo.start === null || typeof el.setSelectionRange !== "function") return true;
   try {

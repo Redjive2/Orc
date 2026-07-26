@@ -49,12 +49,97 @@ const ExitRestart = 75
 // supervisor forever, which is the classic way this design goes wrong.
 const supervisedEnv = "CQ_SUPERVISED"
 
-// supervise runs `cq serve` as a child and restarts it on request.
+// How a crash is told apart from a build that will not start.
 //
-// It returns when the child exits for any reason other than a restart, with that
-// child's exit code — so a server that fails to start does not leave a supervisor
-// spinning, and `cq serve` under systemd or a shell still behaves like one
-// process that either works or does not.
+// The distinction is time, because there is nothing else to go on: the exit codes
+// are the same, and a server that dies after a week of serving and one that dies
+// in 40ms are the same event to `wait`. A process that stayed up for a minute got
+// past its listener, its store, and its first requests — so whatever killed it
+// was a condition, not a defect in the build, and it is worth trying again.
+//
+// Five, because the backoff doubles: five quick failures is about six seconds of
+// trying, which is long enough to ride out a port still held by the last process
+// and short enough that a genuinely broken build is reported promptly rather than
+// after a minute of silence.
+const (
+	Healthy     = time.Minute
+	CrashGiveUp = 5
+)
+
+// What to do once a child has gone away.
+type supervision int
+
+const (
+	// stop: leave it down. Somebody decided that, and a supervisor that argued
+	// with a ^C would be a supervisor nobody could turn off.
+	stop supervision = iota
+	// relaunch: start the same binary again. A crash.
+	relaunch
+	// replace: start it again, then exec this process too. An upgrade.
+	replace
+	// giveUp: it will not stay up, and saying so is more use than trying again.
+	giveUp
+)
+
+// crashed reports whether an exit was a failure to recover from, as opposed to
+// something asked for.
+//
+// Split out because "was that a crash" is asked twice — once to count it and once
+// to decide — and two copies of this condition drifting apart is how a supervisor
+// ends up counting restarts as crashes or vice versa.
+func crashed(stopping bool, code int) bool {
+	return !stopping && code != 0 && code != ExitRestart
+}
+
+// decide is the whole policy, as a function of three facts.
+//
+// Pure, and separate from the loop, because the loop cannot be tested without
+// real processes and real signals — and the part worth being sure about is not
+// the plumbing but this: that a ^C stays down, that a clean exit stays down, that
+// a crash comes back, and that a build which will not start is eventually left
+// alone. Those are four sentences and they should be four assertions, not a test
+// that sends itself SIGTERM and hopes.
+func decide(stopping bool, code, crashes int) supervision {
+	switch {
+	case stopping:
+		// The child's code is its own business here: a server signalled
+		// mid-shutdown may exit non-zero, and that is not a failure of anything.
+		return stop
+	case code == 0:
+		// A clean exit is a decision. Something asked the server to stop and it
+		// did; bringing it back would override whoever asked.
+		return stop
+	case code == ExitRestart:
+		return replace
+	case crashes > CrashGiveUp:
+		return giveUp
+	default:
+		return relaunch
+	}
+}
+
+// supervise runs `cq serve` as a child and starts it again when it should be.
+//
+// Four outcomes, and the whole policy is telling them apart:
+//
+//   - **asked to stop** — a ^C or a SIGTERM reached this process. It returns, and
+//     the server stays down, because that is what was asked for.
+//   - **exited cleanly** — something told the server to stop and it did. Also a
+//     decision, also returns.
+//   - **asked to restart** — an upgrade. The child is started again, and the
+//     supervisor then replaces itself so nothing is left on the old build.
+//   - **crashed** — started again, with a backoff, up to CrashGiveUp consecutive
+//     quick failures.
+//
+// The last of those used to return instead, deferring to a service manager. That
+// is right where one is configured and leaves the site down where none is — and
+// none is, anywhere in this tree. A supervisor whose one job is keeping a server
+// up should not be the reason it stays down.
+//
+// What it still will not do is loop on a build that cannot start. That failure is
+// fast, and fast repeated failures are counted and given up on, with the child's
+// exit code passed up so a service manager — if there ever is one — sees a
+// process that plainly did not work.
 func (a App) supervise(exe string, args []string) error {
 	// Signals are forwarded rather than acted on. A supervisor that died on ^C
 	// while its child kept the port would be worse than no supervisor at all.
@@ -71,6 +156,18 @@ func (a App) supervise(exe string, args []string) error {
 		ceiling = 30 * time.Second
 	)
 	backoff := floor
+
+	// stopping records that the operator asked for this to end, so that a child
+	// exiting non-zero because it was signalled is not mistaken for one that
+	// crashed. Without it, ^C would bring the server straight back up — which is
+	// the most obvious way an auto-restarting supervisor becomes unusable.
+	stopping := false
+
+	// crashes counts consecutive *quick* failures. A child that ran a while and
+	// then died is a crash worth recovering from; one that dies immediately, again
+	// and again, is a build that cannot start, and coming back for ever would bury
+	// the reason under its own log.
+	crashes := 0
 
 	for {
 		started := time.Now()
@@ -92,6 +189,15 @@ func (a App) supervise(exe string, args []string) error {
 			case sig := <-signals:
 				// Passed straight through. The child owns the port and the
 				// shutdown; this only has to not get in the way.
+				//
+				// Except that it is noted first. A ^C or a `systemctl stop` means
+				// the operator wants the server *down*, and whatever exit code the
+				// child produces on its way out must not read as a crash to
+				// recover from. SIGHUP is not in that set: it is forwarded, and
+				// what the child makes of it is the child's business.
+				if sig == syscall.SIGINT || sig == syscall.SIGTERM {
+					stopping = true
+				}
 				_ = child.Process.Signal(sig)
 			case err := <-done:
 				code = exitCode(err)
@@ -99,22 +205,41 @@ func (a App) supervise(exe string, args []string) error {
 			}
 		}
 
-		if code != ExitRestart {
-			if code == 0 {
-				return nil
-			}
-			return exitStatus(code)
+		// A child that ran for a while is a healthy one, whatever it did next: an
+		// upgrade that asked to restart, or a crash after a week of serving. Either
+		// way the backoff and the crash count start again from nothing.
+		healthy := time.Since(started) > Healthy
+		if healthy {
+			backoff = floor
+			crashes = 0
 		}
 
-		// A child that ran for a while and then asked for a restart is a healthy
-		// upgrade; one that asks immediately is a loop. Only the second backs off.
-		if time.Since(started) > time.Minute {
-			backoff = floor
+		if crashed(stopping, code) {
+			crashes++
 		}
-		a.tell("cq: restarting into the new build")
+		switch decide(stopping, code, crashes) {
+		case stop:
+			return nil
+		case giveUp:
+			a.tell("cq: the server failed %d times without staying up; giving up", crashes)
+			return exitStatus(code)
+		case replace:
+			a.tell("cq: restarting into the new build")
+		case relaunch:
+			a.tell("cq: the server exited with status %d; restarting (%d of %d)",
+				code, crashes, CrashGiveUp)
+		}
+
 		time.Sleep(backoff)
 		if backoff < ceiling {
 			backoff *= 2
+		}
+
+		// Only an upgrade replaces the supervisor itself. A crash is the same
+		// binary failing, and exec'ing it would restart this process to no purpose
+		// — losing the crash count that is the only thing stopping a loop.
+		if code != ExitRestart {
+			continue
 		}
 
 		// And finally: become the new binary. `exec` rather than another loop

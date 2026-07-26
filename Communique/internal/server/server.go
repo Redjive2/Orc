@@ -235,6 +235,8 @@ func (s *Server) routes() {
 	s.route("GET /login", needNothing, s.getLogin)
 	s.route("POST /login", needNothing, s.postLogin)
 	s.route("GET /api/v1/health", needNothing, s.health)
+	// A browser asks for this on its own, with no session and no referrer.
+	s.route("GET /favicon.ico", needNothing, s.favicon)
 
 	// The agent's one endpoint.
 	s.route("POST /api/v1/sync", needToken, s.sync)
@@ -280,6 +282,7 @@ func (s *Server) routes() {
 	s.route("POST /api/v1/fleet/identities/{name}/fire", needSession, s.fireIdentity)
 	s.route("POST /api/v1/fleet/identities/{name}/poke", needSession, s.pokeIdentity)
 	s.route("POST /api/v1/fleet/identities/{name}/refresh", needSession, s.refreshIdentity)
+	s.route("POST /api/v1/fleet/identities/{name}/workspace", needSession, s.setWorkspace)
 	s.route("POST /api/v1/fleet/identities/{name}/grant", needSession, s.grantPermission)
 	s.route("POST /api/v1/fleet/identities/{name}/revoke", needSession, s.revokePermission)
 	s.route("DELETE /api/v1/fleet/identities/{name}", needSession, s.removeIdentity)
@@ -290,6 +293,21 @@ func (s *Server) routes() {
 	s.route("PATCH /api/v1/fleet/permissions/{name}", needSession, s.editPermission)
 	s.route("DELETE /api/v1/fleet/permissions/{name}", needSession, s.removePermission)
 	s.route("POST /api/v1/fleet/tend", needSession, s.tendFleet)
+
+	// The standing instructions. PUT rather than POST: each one replaces a whole
+	// layer, and the same body twice lands in the same place.
+	s.route("PUT /api/v1/instruct/system", needSession, s.setInstruct("system", false))
+	s.route("DELETE /api/v1/instruct/system", needSession, s.clearInstruct("system", false))
+	s.route("PUT /api/v1/instruct/roles/{name}", needSession, s.setInstruct("role", false))
+	s.route("DELETE /api/v1/instruct/roles/{name}", needSession, s.clearInstruct("role", false))
+	s.route("PUT /api/v1/instruct/identities/{name}", needSession, s.setInstruct("identity", false))
+	s.route("DELETE /api/v1/instruct/identities/{name}", needSession, s.clearInstruct("identity", false))
+	s.route("PUT /api/v1/instruct/wake", needSession, s.setInstruct("system", true))
+	s.route("DELETE /api/v1/instruct/wake", needSession, s.clearInstruct("system", true))
+	s.route("PUT /api/v1/instruct/wake/roles/{name}", needSession, s.setInstruct("role", true))
+	s.route("DELETE /api/v1/instruct/wake/roles/{name}", needSession, s.clearInstruct("role", true))
+	s.route("PUT /api/v1/instruct/wake/identities/{name}", needSession, s.setInstruct("identity", true))
+	s.route("DELETE /api/v1/instruct/wake/identities/{name}", needSession, s.clearInstruct("identity", true))
 
 	// Rebuilding and restarting the whole fleet. See upgrade.go for why this is
 	// one request that becomes one local upgrade plus one queued action each.

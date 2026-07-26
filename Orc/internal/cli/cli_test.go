@@ -95,9 +95,13 @@ func (r *rig) populate(s *store.Store, name user.Name, id string, m model.Model,
 		return fmt.Errorf("the session would not start")
 	}
 	r.populated[name.String()] = id
+	// The workspace is recorded because the real supervisor records it — it is
+	// `cmd.Dir`, the directory the session was actually started in, and the drift
+	// warning is built on the two being able to disagree.
 	return s.WriteSession(name, store.SessionState{
 		ID: id, Supervisor: os.Getpid(), Child: os.Getpid(),
 		Model: m.String(), Effort: e.String(), Started: clock.Format(epoch),
+		Workspace: s.WorkspaceDir(name),
 	})
 }
 

@@ -47,6 +47,7 @@ var loginPage = template.Must(template.New("login").Parse(`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>communiqué</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
 <style>{{.Style}}</style>
 <form method="post" action="/login">
   <h1>communiqué</h1>

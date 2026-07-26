@@ -31,8 +31,11 @@ type commandDoc struct {
 	summary string
 	// detail is the prose `cq help <command>` adds. It says what the command
 	// is *for* — the summary already says what it does.
-	detail   string
-	side     string // "server" or "agent", so it is obvious where it runs
+	detail string
+	// side is "server", "agent", or "either" — so it is obvious where a command
+	// runs. "either" is not a hedge: `workspace` does different work on each side
+	// and says which it did.
+	side     string
 	flags    []flagDoc
 	examples []string
 }
@@ -58,6 +61,8 @@ var commands = []commandDoc{
 			{"--supervise", "", "Run a supervisor so the server can restart itself", "on"},
 			{"--source", "<dir>", "Checkout `upgrade` pulls and builds", "$CQ_SOURCE"},
 			{"--bin", "<dir>", "Where `upgrade` installs binaries", "$CQ_BIN"},
+			{"--install-service", "", "Write a startup service for these flags, and exit", ""},
+			{"--force", "", "With --install-service, replace one already there", ""},
 		},
 		examples: []string{
 			"cq serve",
@@ -84,6 +89,7 @@ var commands = []commandDoc{
 			{"--user", "<name>", "The mailbox to mirror", "$CQ_USER, else orc's operator"},
 			{"--home", "<dir>", "Where the agent keeps its journal", "$CQ_HOME"},
 			{"--watch", "<duration>", "Repeat at this interval instead of once", "off"},
+			{"--for", "<duration>", "Stop watching after this long", "until stopped"},
 			{"--nudge", "", "Coalescing form; what Mailman calls after each action", ""},
 			{"--dry-run", "", "Collect and report, but send nothing", ""},
 			{"--admin", "", "Include the whole-Mailman view", "on"},
@@ -144,6 +150,43 @@ var commands = []commandDoc{
 			"cq queue drop 2c6f875a",
 			"cq queue clear",
 			"cq queue clear --all",
+		},
+	},
+	{
+		name: "workspace", args: "<identity> <path>", side: "either",
+		summary: "Move where an agent works",
+		detail: "The one fleet change somebody makes while sitting at the machine,\n" +
+			"having just moved a directory — so it is here rather than only in the\n" +
+			"browser.\n" +
+			"\n" +
+			"It runs on whichever side this machine is. On an agent machine\n" +
+			"($CQ_SERVER set) it runs `orc workspace` directly and prints what orc\n" +
+			"says: what was copied, what was left behind, and which Macmuffin\n" +
+			"worktree bindings followed the move. On the server ($CQ_STATE set) it\n" +
+			"queues the same action the website does, and the change leaves on the\n" +
+			"agent's next sync.\n" +
+			"\n" +
+			"With both set it refuses and asks which was meant. The two differ in\n" +
+			"when they take effect, and a command that picked one silently would be\n" +
+			"one nobody could script.\n" +
+			"\n" +
+			"By default the agent's files are copied to the new directory and the\n" +
+			"old one is left untouched. --adopt instead points it at a checkout\n" +
+			"that is already there and moves nothing.\n" +
+			"\n" +
+			"--from is where you believe it works now. The move is refused if that\n" +
+			"is not where orc says it works — somebody else moving it in between is\n" +
+			"exactly the case worth failing on.",
+		flags: []flagDoc{
+			{"--adopt", "", "Work in what is already there, moving nothing", ""},
+			{"--from", "<path>", "Where you believe it works now", ""},
+			{"--state", "<dir>", "Where the server keeps its state", "$CQ_STATE"},
+			{"--machine", "<id>", "Which fleet, when the server mirrors more than one", ""},
+		},
+		examples: []string{
+			"cq workspace ember /srv/trees/parser",
+			"cq workspace ember /srv/trees/parser --adopt",
+			"cq workspace ember /srv/trees/parser --from /srv/trees/old",
 		},
 	},
 	{

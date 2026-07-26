@@ -256,15 +256,211 @@ Worth stating plainly, because the failure modes are quiet:
 
 ## 6. Milestones
 
-| # | Delivers | Done when |
+| # | Delivers | State |
 |---|---|---|
-| 1 | `--worktree` honestly resolved: implemented, or struck from the help and the Reference. | The help does not advertise a flag that errors. |
-| 2 | Orc: stored workspace, `OpWorkspace`, `orc workspace` show/set, refusals, journal, `verify` on an unfinished migration. | An empty workspace field still resolves to the derived path; every refusal in §2.3 is a test; a killed relocate leaves both paths and a journal that names the authoritative one. |
-| 3 | Orc: the things that move with it — settings recompiled, session-cwd disagreement reported by `doctor`, affected `muff` bindings enumerated and rebound. | A relocate under a bound worktree leaves the hook enforcing, or names every binding it could not rebind. |
-| 4 | cq: `orc.workspace` op with `Workspace`/`From`, and the API route. | A stale `from` is refused and the queue says so; the op's idempotency case is written down with its reasoning. |
-| 5 | cq: the CLI command, both sides. | Agent side applies; server side enqueues; both set refuses. |
-| 6 | cq: the web UI row, the form, the queued and failed states, the cwd-disagreement warning. | An operator can move a workspace from the browser and see it land, and sees the refusal verbatim when it does not. |
+| 1 | `--worktree` honestly resolved. | **done** — struck from `orc help new` and the Reference. `orc workspace --adopt` is the real form of what it promised, so implementing it would have been two ways to do one thing. |
+| 2 | Orc: stored workspace, `OpWorkspace`, `orc workspace` show/adopt, refusals, journal. | **done** |
+| 3 | Orc: relocation (moving the files, crash-safely) and the things that move with it. | **done** — settings recompiled, session-cwd disagreement reported by `orc doctor`, affected `muff` bindings enumerated and rebound by `muff rebind`. |
+| 4 | cq: `orc.workspace` op with `Workspace`/`From`, and the API route. | **done** |
+| 5 | cq: the CLI command, both sides. | **done** — `cq workspace`, agent side and server side, refusing to guess between them. |
+| 6 | cq: the web screen. | **done** — `project → location`. |
 
-Milestone 1 is a five-minute decision that should not wait behind the rest of it, and
-milestones 4–6 are only worth starting once 2 and 3 exist — cq proxying a verb that
+Milestones 4–6 are only worth starting once 2 and 3 exist — cq proxying a verb that
 does not work would make the queue a place actions go to fail.
+
+---
+
+## 7. As built, so far
+
+**Milestone 1.** `--worktree` is struck from `orc help new` and from
+`Docs/Orc/Reference.md` rather than implemented. What it promised — a workspace that
+is a git worktree — is what `orc workspace <identity> <path> --adopt` does, from a
+verb that can also be used after creation. Implementing the flag as written would
+have been a second way to do one thing, and the worse of the two.
+
+**Milestone 2, except relocation.** `model.Identity` carries a `workspace`, empty
+meaning the derived path, so every journal written before this stays valid.
+`OpWorkspace` is its own event beside `OpModel`, for the same reason: where an agent
+works and whether it is working are different questions.
+
+The load-bearing decision was **where the stored value is honoured**. `WorkspaceDir`
+is asked in eight places, including the supervisor's `cmd.Dir` and the enforcement
+hook's path resolution — and `internal/hook/**` belongs to another stream. Threading
+the value through every caller would have meant editing their files and would have
+left eight chances for one of them to miss the exception, which is an agent working
+in one directory while its permissions are checked against another. Instead
+`WorkspaceDir` keeps its signature and consults the identity itself, falling back to
+the derived path when the identity will not load — which is the behaviour the hook
+needs anyway, since it fails open by design.
+
+**Relocation is refused rather than faked.** `orc workspace ember /new/path` with no
+directory there says the move is not built, and shows the two commands that do it by
+hand. Making an empty directory and calling it a move would leave the agent's work in
+the old one with nothing pointing at it.
+
+**Milestone 3, except two things.**
+
+*Relocation is built*, and the ordering in §2.5 changed. The plan said journal the
+intent first, on the tree's "record before you act" rule. That rule is for operations
+that **destroy**, and this one copies: copying first means a crash leaves the old
+directory untouched and the identity still pointing at it — a stray directory rather
+than an agent pointed at half a tree. Journalling first would have produced exactly
+the failure the rule exists to prevent, inverted. So: copy, verify, journal, and
+**never remove the old directory**. Orc does not delete an agent's work as a side
+effect of a settings change; the command says where the original is and leaves it.
+
+Symlinks are recreated rather than followed — a link to something large would be
+copied twice, and one pointing at its own tree would not terminate — and a target
+inside the source is refused as the loop it is.
+
+*The drift warning is built.* `store.SessionState` gained a `Workspace`, written by
+the supervisor from `cmd.Dir`, so "the running session is working somewhere else" is
+a fact rather than an inference. `orc workspace <identity>` reports it unasked, names
+where the session actually is, and says `orc refresh` moves it. A session recorded
+before the field existed says nothing: *cannot say* is not a disagreement.
+
+*The compiled settings needed no work at all*, which was worth checking rather than
+assuming. `session/prepare.go` compiles them from `store.WorkspaceDir` at every
+populate, so making that function honour the stored value made the settings follow a
+move for free. Verified live: after a move, `permissions.allow` reads
+`Read(<new>/**)` and `Write(<new>/Anno/**)`.
+
+**Left, and why:**
+
+- **The `doctor` check** for the same drift. `internal/cli/doctor.go` belongs to
+  stream C, and `orc workspace` already reports it, so this waits rather than
+  reaching into their file.
+- **The Macmuffin rebinding** (§2.4.3). Still the sharpest edge here: a relocate
+  under a bound worktree orphans the binding and the scope hook stops enforcing,
+  silently. It needs a verb on `muff`'s side to rebind by path, which is a change to
+  another tool rather than another line here.
+
+## 8. cq, as built
+
+**The op and the route.** `orc.workspace` carries `Workspace`, `From`, and `Adopt`.
+Both paths must be absolute and both are required — validated in the protocol, so a
+malformed action never reaches a queue. A relative path would mean a different
+directory depending on where the sync happened to run, and *the machine that applies
+a queued action is not the machine that wrote it*, which is the one thing a queue
+cannot let an operand depend on.
+
+`From` is checked on the agent side, in `source/orc.go`, by reading
+`orc workspace <identity>` before moving anything. Orc has no opinion about what a
+browser was looking at; this is the moment the two can be compared. A move against a
+stale view is refused with what changed, rather than silently overturning a decision
+made on the machine while the action sat in the queue.
+
+That guard makes this the only fleet verb that runs **two** commands, which the
+shared mapping test asserted against. The test now pins the command that *changes*
+something — the last one — rather than the count, since reading before writing is
+the design rather than an accident.
+
+**The screen is `project → location`**, not `manage → fleet`. Manage is about what an
+agent *is*; `project/code` and `project/docs` show what is in the repository; this
+shows which copy of it each agent has its hands on, which is the same question asked
+from the other side. It is its own file, `location.js`, so a tab with a form on it
+does not grow inside the file holding every other tab.
+
+It leads with **how many agents share a directory**. Two in one tree may be
+deliberate; two by accident is how a scope stops meaning anything, and it should not
+have to be worked out by reading down a column.
+
+The form offers two operations rather than a checkbox — *work in what is already
+there* and *move its files to the new directory* — because that is what they are. A
+tickbox would have made the more destructive of the two the unlabelled default.
+
+**Three totality guards caught this on the way in**, each asking the right question:
+every op needs valid arguments (protocol), every fleet verb needs a route or the
+browser cannot reach it (server), and every op must be classified idempotent or not
+with a reason (store). The third is the interesting one: a workspace move is two
+operations behind one verb, and it is classified by the half that is not idempotent
+and guarded the way the library's writes are.
+
+**Left in cq:** the CLI (milestone 5), and `.path` is unstyled — `app.css` was being
+edited by another agent at the time, and the site is monospace throughout, so the row
+reads correctly without a rule.
+
+
+---
+
+## 9. Milestones 3 and 5, as built
+
+Everything in §6 is now done.
+
+### `orc doctor` reports the drift
+
+`orc workspace <identity>` has always said when a running session is working
+somewhere its identity no longer names. Nobody runs that for every agent, so the
+question now has an answer on the screen people open when something is *already*
+suspected: a `workspace drift` guard that compares each live session's recorded cwd
+against its identity's workspace and names every disagreement, with
+`orc refresh <identity>` as the fix.
+
+It reads as **partial** rather than **absent** when it finds something, because the
+guard exists and is working — it is what it found that is wrong. A session recorded
+before the workspace field existed says nothing at all: "cannot say" is not a
+disagreement, and reporting it as one would make `doctor` cry wolf on every fleet
+that upgraded.
+
+### `muff rebind`, and Orc calling it
+
+§2.4.3's cross-tool step, and the one with the worst failure mode in the whole plan:
+a binding is keyed by a worktree's resolved path, the hook looks the session's
+directory up in it, and a moved directory leaves the lookup finding nothing. The hook
+then concludes no task is in force and enforces nothing — silently, looking exactly
+like an agent that never opted in.
+
+```
+muff rebind [--dry-run] <old> <new>
+```
+
+Every binding at or under `<old>` is rebound to the matching path under `<new>`.
+Four decisions worth keeping:
+
+- **`filepath.Rel`, not a string prefix.** `/a/bc` is not under `/a/b`, and a prefix
+  comparison that thought otherwise would point another tree's binding at a directory
+  that does not exist.
+- **Bind before Unbind.** A crash between them leaves a task bound to both
+  directories — a duplicate the next rebind resolves. The other order leaves it bound
+  to neither, which is the silence this command exists to prevent.
+- **What could not follow is named, with the command that restores it**, and the exit
+  is 6. A task whose binding did not survive has no scope enforcement anywhere; a
+  migration script needs to know that, and an operator needs the `muff worktree` line
+  rather than a list of failures to reconstruct paths from.
+- **Same authority as binding.** Rebinding *is* that operation, aimed at where the
+  directory went. An agent who may not bind a task may not quietly move where its
+  scope is enforced either.
+
+Orc runs it: `orc workspace` shells out to `muff rebind` after the identity is
+written, and relays what comes back verbatim. It shells out rather than editing
+Macmuffin's store, because one tool rewriting another's records is how two tools come
+to disagree about a file's format — Orc knows a directory moved, and only Macmuffin
+knows what a binding is. A muff that is not installed is not an error: most fleets do
+not run one, and a missing binary means there are no bindings to strand. A muff that
+*refuses* does not fail the move — the files are copied and the identity is written,
+so failing there would report a move that happened as one that did not.
+
+### `cq workspace`
+
+```
+cq workspace [--adopt] [--from <path>] [--state <dir>] [--machine <id>] <identity> <path>
+```
+
+The agent side runs `orc workspace` and prints orc's own words — what was copied,
+what was left behind, which bindings followed. There is nothing cq could usefully add
+to that, and summarising it would drop the parts a person needs.
+
+The server side queues the same action the browser does. Two things it decides rather
+than guesses:
+
+- **Which side it is on.** With both `$CQ_SERVER` and `$CQ_STATE` set it refuses and
+  asks, because the two differ in *when* the change takes effect — the part somebody
+  would not notice going wrong. An explicit `--state` is the operator answering, and
+  wins outright.
+- **What `from` is.** The protocol requires it, and unstated it is where the mirror
+  says the identity works — exactly what the browser sends, and what the operator was
+  looking at when they typed the command. An identity the mirror does not know is
+  refused with `--from` named, rather than queued for the agent machine to reject
+  hours later on a machine nobody is watching.
+
+`--adopt` and `--from` come before the identity, as the flag package requires.

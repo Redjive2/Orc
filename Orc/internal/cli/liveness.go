@@ -10,6 +10,7 @@ import (
 
 	"orc/common/fault"
 	"orc/common/user"
+	"orc/common/watch"
 	"orc/orc/internal/authz"
 	"orc/orc/internal/model"
 	"orc/orc/internal/session"
@@ -310,6 +311,11 @@ func (a App) tendLoop(interval time.Duration) error {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(stop)
 
+	// Recorded while it runs, so an upgrade can see this fleet has a backstop —
+	// and so this process picks up the new build when one arrives.
+	dog := a.watching(watch.Tend, interval, selfArgs())
+	defer dog.done()
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -330,6 +336,10 @@ func (a App) tendLoop(interval time.Duration) error {
 		} else {
 			failures = 0
 		}
+
+		// Between passes, never during one: reconciling a fleet is the last thing
+		// that should be interrupted by the process image changing underneath it.
+		dog.renew()
 
 		select {
 		case <-stop:

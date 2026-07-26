@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -49,6 +50,15 @@ type Identity struct {
 	// identity remembers what it was running rather than resetting it to the
 	// default — an agent that was deliberately put on opus should not quietly come
 	// back as a sonnet.
+	// workspace is where the agent works.
+	//
+	// Empty means the derived path — `$ORC_HOME/identities/<name>/workspace` —
+	// which is where every identity starts and where most of them stay. Storing
+	// only the exception keeps every journal written before this existed valid,
+	// and keeps the common case a fact about the layout rather than a value that
+	// could disagree with it.
+	workspace string
+
 	employed bool
 	model    Model
 	effort   Effort
@@ -186,8 +196,12 @@ func (i Identity) Employed() bool { return i.employed }
 // Model and Effort are the load the identity was employed at, remembered across a
 // `fire` so that re-employing does not silently downgrade it. Both are unset for
 // an identity that has never been employed.
-func (i Identity) Model() Model   { return i.model }
-func (i Identity) Effort() Effort { return i.effort }
+func (i Identity) Model() Model { return i.model }
+
+// Workspace is where the agent works, or empty for the derived path. Callers that
+// want the answer rather than the exception ask the store, which knows the layout.
+func (i Identity) Workspace() string { return i.workspace }
+func (i Identity) Effort() Effort    { return i.effort }
 
 // Load is what this identity's session costs, or zero when it is not employed.
 //
@@ -224,12 +238,18 @@ const (
 	// "start this now" are different intents, and one op for both would make the
 	// first quietly do the second.
 	OpModel IdentityOp = "model"
+	// OpWorkspace points an identity at a different working directory.
+	//
+	// Its own op for the same reason OpModel is: where an agent works and whether
+	// it is working are different questions, and one op for both would make a
+	// relocation employ somebody.
+	OpWorkspace IdentityOp = "workspace"
 )
 
 // Valid reports whether the op is one this build knows.
 func (o IdentityOp) Valid() bool {
 	switch o {
-	case OpRole, OpMove, OpGrant, OpRevoke, OpEmploy, OpFire, OpModel:
+	case OpRole, OpMove, OpGrant, OpRevoke, OpEmploy, OpFire, OpModel, OpWorkspace:
 		return true
 	default:
 		return false
@@ -238,7 +258,7 @@ func (o IdentityOp) Valid() bool {
 
 // IdentityOps lists the vocabulary, for tests that must be total.
 func IdentityOps() []IdentityOp {
-	return []IdentityOp{OpRole, OpMove, OpGrant, OpRevoke, OpEmploy, OpFire, OpModel}
+	return []IdentityOp{OpRole, OpMove, OpGrant, OpRevoke, OpEmploy, OpFire, OpModel, OpWorkspace}
 }
 
 // IdentityEvent is one line of an identity's journal.
@@ -251,7 +271,12 @@ type IdentityEvent struct {
 	grant  Grant
 	model  Model
 	effort Effort
+	// workspace is set on OpWorkspace only.
+	workspace string
 }
+
+// Workspace is the path an OpWorkspace event carries.
+func (e IdentityEvent) Workspace() string { return e.workspace }
 
 // AssignRole is `orc assign role <identity> <role>`. It replaces: an identity
 // holds exactly one role, so that its authority is a number rather than a
@@ -319,6 +344,28 @@ func Retune(by user.Name, at time.Time, m Model, e Effort) (IdentityEvent, error
 			"an effort level: low, medium, high, xhigh, or max (got %s)", e)}
 	}
 	return newIdentityEvent(IdentityEvent{op: OpModel, by: by, at: at, model: m, effort: e})
+}
+
+// SetWorkspace is `orc workspace <identity> <path>`: work somewhere else.
+//
+// The path is validated here only for being a path — absolute, clean, not empty.
+// Whether it exists, whether it is inside somebody else's workspace, and whether the
+// files should be moved to it are questions about a machine rather than about the
+// model, and they are answered where the machine is.
+func SetWorkspace(by user.Name, at time.Time, path string) (IdentityEvent, error) {
+	clean := strings.TrimSpace(path)
+	if clean == "" {
+		return IdentityEvent{}, fault.Usage{Reason: "a workspace needs a path"}
+	}
+	if !filepath.IsAbs(clean) {
+		return IdentityEvent{}, fault.Usage{Reason: fmt.Sprintf(
+			"a workspace must be an absolute path, and %q is relative; it would mean a "+
+				"different directory depending on where the command was run", clean)}
+	}
+	if got := filepath.Clean(clean); got != clean {
+		clean = got
+	}
+	return newIdentityEvent(IdentityEvent{op: OpWorkspace, by: by, at: at, workspace: clean})
 }
 
 // Fire is `orc fire <identity>`: take it off the worklist.
@@ -405,6 +452,9 @@ func (i Identity) With(e IdentityEvent) (Identity, error) {
 	case OpEmploy:
 		i.employed = true
 		i.model, i.effort = e.model, e.effort
+
+	case OpWorkspace:
+		i.workspace = e.workspace
 
 	case OpModel:
 		// Employment is untouched: this says what the identity thinks with, not

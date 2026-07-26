@@ -24,11 +24,18 @@ type fakeRun struct {
 	out   map[string]string
 	err   map[string]error
 	calls [][]string
+	// before runs just before a call is answered, while whatever the command was
+	// given still exists — a temporary file passed to `orc instruct --set` is gone
+	// by the time Apply returns, which is the point of it.
+	before func(args []string)
 }
 
 func (f *fakeRun) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	key := name + " " + strings.Join(args, " ")
 	f.calls = append(f.calls, append([]string{name}, args...))
+	if f.before != nil {
+		f.before(append([]string{name}, args...))
+	}
 	if err, ok := f.err[key]; ok {
 		return nil, err
 	}
@@ -47,6 +54,10 @@ func newFakeRun() *fakeRun {
 				 "convo":{"id":"000657671b272088-e1a36f21","title":"the parser","index":1},
 				 "read":false,"archived":false,"mine":false,"filed":true,
 				 "body":"It needs a rewrite."}]`,
+			// `orc workspace <identity>` is the read the workspace guard makes
+			// before it moves anything: it says where the identity works now, and
+			// the queued action's `from` is compared against it.
+			"orc workspace atlas": "atlas works in /old/workspace\n",
 			"mailman archive --json": `[
 				{"puid":1,"id":"000657671b2795b8-a141b6a5","sent":"2026-07-25T03:30:09.091Z",
 				 "from":"bob","to":["redjive"],"subject":"old news",

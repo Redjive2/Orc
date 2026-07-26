@@ -14,6 +14,7 @@ cq <command> <args...>
 | `admin operator` | Set or change the login password                  |
 | `admin token`    | Mint a sync token; printed once, stored hashed    |
 | `queue`          | What is waiting, and what did not work            |
+| `workspace`      | Move where an agent works — either side           |
 | `upgrade`        | Rebuild and restart every tool, everywhere        |
 
 ## §1.1 Flags
@@ -24,6 +25,7 @@ cq <command> <args...>
 | `sync`   | `--server` `--machine` `--user` `--home` `--watch` `--nudge` `--dry-run` `--admin` `--admin-bodies` |
 | `status` | `--home`                                                                                            |
 | `queue`  | `--state` `--json`                                                                                  |
+| `workspace` | `--adopt` `--from` `--state` `--machine`                                                         |
 
 `cq serve` refuses to start until a password and a token are set. Nothing on the
 site is visible without logging in.
@@ -111,6 +113,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `POST fleet/identities/<n>/fire`       | `orc fire --yes`                         |
 | `POST fleet/identities/<n>/poke`       | `orc poke [message]`                     |
 | `POST fleet/identities/<n>/refresh`    | `orc refresh`                            |
+| `POST fleet/identities/<n>/workspace`  | `orc workspace <path> [--adopt]`†        |
 | `POST fleet/identities/<n>/grant`      | `orc grant permission [--until]`         |
 | `POST fleet/identities/<n>/revoke`     | `orc revoke permission`                  |
 | `DELETE fleet/identities/<n>`          | `orc remove identity --yes`              |
@@ -121,6 +124,11 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `PATCH fleet/permissions/<n>`          | `orc edit permission <name> --floor …`   |
 | `DELETE fleet/permissions/<n>`         | `orc remove permission [--from] --yes`   |
 | `POST fleet/tend`                      | `orc tend`                               |
+| `PUT instruct/system`                  | `orc instruct system --set`              |
+| `PUT instruct/roles/<n>`               | `orc instruct role <n> --set`            |
+| `PUT instruct/identities/<n>`          | `orc instruct identity <n> --set`        |
+| `PUT instruct/wake[/roles/<n>\|/identities/<n>]` | `orc instruct wake … --set`   |
+| `DELETE` on any of the five above      | `orc instruct … --clear`                 |
 | `POST upgrade`                         | pull, rebuild, restart — here and queued out |
 | `GET admin/state`                      | `admin mail` — the whole store           |
 | `GET library`                          | the repository's structure, no text      |
@@ -131,6 +139,14 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 
 Every `POST` queues rather than sends, and answers `202` with its place in the
 queue. It leaves on the next sync.
+
+† `workspace` requires a `from`: the directory the browser was showing when
+somebody clicked. A snapshot is minutes old by the time it is acted on, and a
+workspace is the one fleet value whose old location still exists on disk
+afterwards — so the agent machine compares `from` against where the identity
+works *now* and refuses a move made against a stale view, rather than silently
+overturning one somebody made in between. It is the same protection the library's
+writes get from a digest.
 
 ## Driving Macmuffin
 
