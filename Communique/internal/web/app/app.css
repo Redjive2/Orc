@@ -1,0 +1,599 @@
+/* communiqué — a terminal, rendered in a browser.
+ *
+ * Two rules the rest of this file follows:
+ *   1. The page is --text on --canvas. An accent appears only where it carries
+ *      state; nothing is coloured for decoration.
+ *   2. Everything sits on a character grid. Widths are in `ch`, so columns line
+ *      up exactly as they do in `anno index`.
+ * Colours come from /assets/theme.css, generated from the shared scheme. */
+
+* { box-sizing: border-box; }
+
+html { color-scheme: dark; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas);
+  color: var(--text);
+  font: 14px/1.7 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-variant-ligatures: none;
+}
+
+/* --- chrome ------------------------------------------------------------ */
+
+#chrome { padding: 1.5rem 1.5rem 0; }
+.frame { color: var(--frame); white-space: pre; overflow: hidden; }
+
+#nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 2ch;
+  align-items: baseline;
+  padding: 0 1ch;
+}
+
+#nav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0 .5ch;
+}
+#nav a:hover { color: var(--text); }
+#nav a[aria-current="page"] { color: var(--title); font-weight: 600; }
+#nav .count { color: var(--success); }
+#nav .spacer { flex: 1; }
+
+/* --- main -------------------------------------------------------------- */
+
+main { flex: 1; padding: 1.25rem 1.5rem 2rem; }
+
+.rows { display: grid; gap: .1rem; }
+
+.row {
+  display: grid;
+  grid-template-columns: 2ch 4ch 6ch 12ch minmax(20ch, 1fr) auto;
+  gap: 0 1ch;
+  align-items: baseline;
+  padding: .15rem 1ch;
+  border: 1px solid transparent;
+  color: inherit;
+  text-decoration: none;
+}
+.row:hover { border-color: var(--frame); }
+.row .flag { color: var(--success); }
+.row .puid { color: var(--muted); text-align: right; }
+.row .when { color: var(--muted); }
+.row .who { color: var(--primary); }
+.row .subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .convo { color: var(--secondary); }
+.row.read .subject { color: var(--muted); }
+
+/* --- cards ------------------------------------------------------------- */
+
+.card { border: 1px solid var(--frame); padding: 0; margin-top: 1rem; }
+.card > h2 {
+  margin: 0;
+  padding: .4rem 1ch;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--title);
+  border-bottom: 1px solid var(--frame);
+}
+.card > .meta {
+  padding: .3rem 1ch;
+  color: var(--muted);
+  border-bottom: 1px solid var(--frame);
+}
+.card > .body { padding: .75rem 1ch; }
+
+.body p { margin: 0 0 .8rem; }
+.body p:last-child { margin-bottom: 0; }
+.body pre {
+  background: var(--panel);
+  padding: .6rem 1ch;
+  overflow-x: auto;
+  border-left: 2px solid var(--frame);
+}
+.body code { color: var(--tertiary); }
+.body a { color: var(--info); }
+.body ul { margin: 0 0 .8rem; padding-left: 3ch; }
+
+/* --- compose ----------------------------------------------------------- */
+
+form.compose { border-top: 1px solid var(--frame); padding: .75rem 1ch; }
+form.compose label { display: block; color: var(--muted); margin-bottom: .2rem; }
+form.compose input, form.compose textarea, form.compose select {
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--frame);
+  padding: .4rem .7ch;
+  font: inherit;
+  margin-bottom: .6rem;
+}
+form.compose textarea { min-height: 7rem; resize: vertical; }
+form.compose input:focus, form.compose textarea:focus, form.compose select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* The validation line holds no space until it has something to say, so the
+   form does not shift under the writer's hands when it appears. */
+form.compose p.error:empty { display: none; }
+form.compose p.error { margin: 0 0 .6rem; }
+
+button {
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  padding: .3rem 2ch;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: var(--primary); color: var(--canvas); }
+button:disabled { color: var(--muted); border-color: var(--frame); cursor: default; }
+button:disabled:hover { background: transparent; color: var(--muted); }
+button.quiet { color: var(--muted); border-color: var(--frame); }
+button.quiet:hover { background: var(--frame); color: var(--text); }
+
+/* --- pending and failed ------------------------------------------------ */
+
+/* A queued action looks queued until a sync says otherwise. Colour is never
+ * the only signal: the word is there too, for a monochrome screen and for
+ * anyone who cannot tell warning from success. */
+.pending { color: var(--warning); }
+.pending .body { opacity: .75; }
+.failed { color: var(--danger); }
+.badge {
+  border: 1px solid currentColor;
+  padding: 0 1ch;
+  font-size: .85em;
+  white-space: nowrap;
+}
+
+/* --- status bar -------------------------------------------------------- */
+
+footer {
+  padding: .5rem 1.5rem 1rem;
+  color: var(--muted);
+  display: flex;
+  gap: 2ch;
+  flex-wrap: wrap;
+}
+footer .stale { color: var(--accent); }
+footer .very-stale { color: var(--danger); }
+footer .machine { color: var(--secondary); }
+
+.muted { color: var(--muted); }
+.error { color: var(--danger); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .row, button { transition: opacity 120ms linear; }
+}
+
+/* --- the task board ----------------------------------------------------- */
+
+.board { display: grid; gap: .1rem; margin-top: .5rem; }
+
+.task {
+  display: grid;
+  /* The name is capped rather than given 1fr: a table that stretches to the
+     viewport stops being a table. The trailing column absorbs the slack. */
+  grid-template-columns: 2ch minmax(22ch, 44ch) 12ch 3ch 3ch 16ch 18ch 1fr;
+  gap: 0 1ch;
+  align-items: baseline;
+  padding: .15rem 1ch;
+  border: 1px solid transparent;
+  color: inherit;
+  text-decoration: none;
+}
+.task:hover { border-color: var(--frame); }
+.task.head { color: var(--muted); border-bottom: 1px solid var(--frame); }
+.task.head:hover { border-color: transparent; border-bottom-color: var(--frame); }
+.task .num { text-align: right; color: var(--muted); }
+/* A row is one line. A long name is cut rather than wrapped, because a wrapped
+   cell pushes every column out of alignment for the rows below it. */
+.task .name, .task .who {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task .who { color: var(--primary); }
+.task.draft { opacity: .6; }
+.task.draft .name { color: var(--muted); }
+
+.meter .filled { color: var(--success); }
+.meter .empty { color: var(--frame); }
+
+.ok { color: var(--success); }
+
+.scope { display: grid; gap: .1rem; }
+.scope div { color: var(--tertiary); }
+.scope .muted { color: var(--muted); }
+
+/* --- task controls ------------------------------------------------------ */
+
+/* Every Macmuffin verb, grouped by what it is about. The rows wrap rather than
+ * scroll: this is the screen most likely to be read on a phone, and a row of
+ * buttons that runs off the side is a row whose last button nobody finds. */
+
+.row-actions { display: flex; flex-wrap: wrap; gap: 1ch; align-items: center; margin-bottom: 1rem; }
+
+.task-controls { margin-top: 1rem; display: grid; gap: .5rem; }
+.task-controls .muted { min-width: 7ch; }
+.task-controls > p { margin: 0; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 1ch; align-items: center; }
+
+/* The status a task is already in is marked, so the four buttons read as a
+ * setting rather than as four things that have not happened. */
+button.on { background: var(--primary); color: var(--canvas); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+button.danger:hover { background: var(--danger); color: var(--canvas); }
+
+.subtasks { display: grid; gap: .2rem; margin-top: .75rem; }
+.subtask { display: flex; gap: 1ch; align-items: center; flex-wrap: wrap; }
+/* A finished step stays legible: struck through, not faded to nothing, because
+ * "what did we already do" is a question people ask of a finished list. */
+.subtask .done { text-decoration: line-through; color: var(--muted); }
+.subtask button { padding: 0 1ch; font-size: .85em; }
+
+/* --- the fleet ---------------------------------------------------------- */
+
+/* An identity, a role, or a permission: a head line of facts, then what it may
+   do, then what can be done to it. Rows wrap rather than scroll — this is a
+   panel people open on a phone when something has gone wrong. */
+.agent { border-top: 1px solid var(--frame); padding: .5rem 0; display: grid; gap: .3rem; }
+.agent:first-of-type { border-top: none; }
+
+.agent-head { display: flex; flex-wrap: wrap; gap: 0 2ch; align-items: baseline; }
+.agent-head .name { color: var(--title); }
+/* The indent is significant whitespace — it is the boss chain — so it must not
+   collapse the way flex text otherwise would. */
+.agent-head .name { white-space: pre; }
+
+.clauses { display: flex; flex-wrap: wrap; gap: .2rem 1ch; }
+.clause {
+  border: 1px solid var(--frame);
+  padding: 0 1ch;
+  color: var(--secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 1ch;
+}
+.clause button { border: none; padding: 0; color: var(--muted); }
+.clause button:hover { background: transparent; color: var(--danger); }
+
+.grants { display: grid; gap: .15rem; }
+.grant { display: flex; flex-wrap: wrap; gap: 0 2ch; align-items: baseline; }
+.grant button { padding: 0 1ch; font-size: .85em; }
+
+/* --- admin grids -------------------------------------------------------- */
+
+.grid { display: grid; gap: .1rem 2ch; align-items: baseline; margin-bottom: 1rem; }
+.grid:last-child { margin-bottom: 0; }
+.grid.users { grid-template-columns: 16ch; }
+.grid.traffic { grid-template-columns: 12ch 20ch 1fr 24ch; }
+.grid.queue { grid-template-columns: 8ch 16ch 12ch 1fr; }
+.grid > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.card > .h2 .badge, .meta .badge { margin-left: 1ch; }
+.name .badge { margin-left: 1ch; color: var(--muted); }
+
+/* --- the library ------------------------------------------------------- */
+
+/* A fold is a row, not a widget: the whole line is the control, and it looks
+   like the text it sits among rather than like a button. */
+button.fold {
+  display: flex;
+  gap: 1ch;
+  width: 100%;
+  padding: .15rem 1ch;
+  padding-left: calc(1ch + var(--depth, 0) * 2ch);
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.fold:hover { background: var(--panel); }
+button.fold .twist { color: var(--muted); width: 1ch; }
+button.fold .note { margin-left: auto; padding-left: 2ch; }
+
+.warn { color: var(--warning); }
+.dir { color: var(--primary); }
+.file { color: var(--text); }
+.sect { color: var(--accent); }
+.annot { color: var(--accent); }
+
+/* Wide content scrolls inside its own box. A long line of code must not make
+   the whole page scroll sideways. */
+pre.code {
+  margin: .3rem 0 .6rem;
+  padding: .5rem 1ch;
+  background: var(--panel);
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.45;
+}
+
+.folded > .inner { border-left: 1px solid var(--frame); margin-left: 1ch; }
+
+/* --- the editor --------------------------------------------------------- */
+
+/* It sits over the page rather than in it, because it is outside the container
+   the application redraws — which is what stops a sync replacing the textarea
+   somebody is typing into. */
+#editor, #dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: color-mix(in srgb, var(--canvas) 92%, black);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+#editor[hidden], #dialog[hidden] { display: none; }
+
+/* The dialog sits above the editor, because the only time both exist is when
+   something asked a question about the file being edited. */
+#dialog { z-index: 11; }
+
+#editor .sheet {
+  width: min(80rem, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--frame);
+  background: var(--canvas);
+  padding: .75rem 1ch;
+}
+#editor h2, #dialog h2 { margin: 0 0 .25rem; font-size: 1em; color: var(--title); }
+#editor p, #dialog p { margin: 0 0 .5rem; }
+
+/* --- the dialog --------------------------------------------------------- */
+
+/* Narrower than the editor: this asks for a name, not for a file. It is framed
+   the same way, so a question and an edit read as the same program. */
+#dialog .sheet {
+  width: min(44rem, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  border: 1px solid var(--frame);
+  background: var(--canvas);
+  padding: .75rem 1ch;
+}
+
+/* Label above box rather than beside it: the labels are different lengths, and a
+   column wide enough for "difficulty" puts "to" a long way from its input. */
+.field { display: grid; gap: .15rem; margin-bottom: .6rem; }
+.field > span:first-child { color: var(--heading); }
+.field .hint { font-size: .9em; }
+
+#dialog input, #dialog select {
+  background: var(--inset);
+  color: var(--text);
+  border: 1px solid var(--frame);
+  padding: .35rem 1ch;
+  font: inherit;
+  width: 100%;
+}
+#dialog input:focus, #dialog select:focus { outline: 1px solid var(--primary); }
+
+/* The complaint sits where the eye already is — under the fields, above the
+   button somebody just pressed — rather than in a second modal on top. */
+.trouble { color: var(--danger); }
+.trouble p { margin: 0 0 .5rem; }
+
+/* No wrapping, for the same reason a code block does not wrap: a wrapped line is
+   a line whose indentation lies about its depth. It scrolls instead. */
+#editor textarea {
+  flex: 1;
+  min-height: 40vh;
+  width: 100%;
+  background: var(--inset);
+  color: var(--text);
+  border: 1px solid var(--frame);
+  padding: .5rem 1ch;
+  font: inherit;
+  white-space: pre;
+  overflow: auto;
+  resize: none;
+  tab-size: 4;
+}
+#editor textarea:focus { outline: none; border-color: var(--primary); }
+#editor .controls { padding: .5rem 0 0; align-items: center; }
+
+/* --- syntax ------------------------------------------------------------- */
+
+/* Four colours, from the same scheme as everything else. Comments recede
+   because they are the part a reader skims; a string is the one token whose
+   extent matters, so it is the one that stands out. */
+.t-comment { color: var(--muted); }
+.t-string  { color: var(--success); }
+.t-word    { color: var(--accent); }
+.t-number  { color: var(--tertiary); }
+
+pre.code code { font: inherit; color: inherit; }
+
+/* --- editing ------------------------------------------------------------- */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1ch;
+  padding: .4rem 1ch .6rem;
+}
+/* A destructive control looks destructive before it is pressed, not after. */
+button.danger { color: var(--danger); border-color: var(--danger); }
+button.danger:hover { background: var(--danger); color: var(--canvas); }
+
+/* --- the survey ---------------------------------------------------------- */
+
+/* Five columns: what it is, how many files, how many lines, its share drawn,
+   and that share as a number. The name grows and the numbers do not, because a
+   digit that moved column to column would be unreadable down a list. */
+.survey {
+  display: grid;
+  grid-template-columns: minmax(12ch, 1fr) 5ch 7ch auto 5ch;
+  gap: 0 1ch;
+  align-items: baseline;
+  margin: .25rem 0 1rem;
+}
+.survey .num { text-align: right; }
+.survey .dir { color: var(--primary); }
+.survey .file { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .body h3 {
+  margin: .75rem 0 .25rem;
+  font-size: 1em;
+  font-weight: 600;
+  color: var(--muted);
+}
+.card .body h3:first-child { margin-top: 0; }
+
+/* --- narrow screens ---------------------------------------------------- */
+
+/* The site is read from a phone as often as from a desk — that is what it is
+ * for — and a terminal that scrolls sideways is not a terminal, it is a
+ * spreadsheet. Everything below turns a line of columns into a stack of lines
+ * without dropping a fact: a truncated fact is a wrong fact, and that rule does
+ * not stop applying because the screen got smaller.
+ *
+ * 40rem, not a device. A narrow desktop window deserves the same layout, and a
+ * breakpoint named after a phone lies the moment somebody resizes. */
+@media (max-width: 40rem) {
+  /* A phone is mostly margin at 1.5rem a side. */
+  #chrome { padding: .75rem .5rem 0; }
+  main { padding: .75rem .5rem 1.5rem; }
+
+  /* The box-drawn rules are decoration, and decoration that forces a sideways
+     scroll costs more than it gives. */
+  .frame { display: none; }
+
+  /* Tap targets. A link with no vertical padding is a 20px-high target, which is
+     half what a thumb needs and the reason a phone user hits the wrong tab.
+     44px is the smaller of the two platform guidelines, so it is the one that
+     satisfies both; it is set as a height rather than guessed at with padding,
+     because padding that happens to add up is padding that stops adding up the
+     next time the font changes. */
+  #nav { gap: 0 1.5ch; padding: 0; }
+  #nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    padding: 0 .5ch;
+  }
+  #nav .spacer { display: none; }
+
+  button, button.quiet, button.fold {
+    min-height: 44px;
+  }
+  /* 16px is not a taste: below it, iOS zooms the whole page when the field takes
+     focus, and the reader is left scrolled sideways in a layout that was fitting
+     a moment earlier. The rest of the page stays at 14. */
+  form.compose input, form.compose select, form.compose textarea {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  /* The editor is the one place somebody types at length on a phone, so it gets
+     the whole screen and the same 16px that stops iOS zooming on focus. */
+  #editor { padding: 0; }
+  #editor .sheet { height: 100%; border: none; }
+  #editor textarea { font-size: 16px; min-height: 0; }
+  /* A row is a link too, and the whole block is the target. */
+  .row { min-height: 44px; align-content: center; }
+
+  /* A message becomes two lines: what it is, then who and when. It is still one
+     grid row, so the tap target stays the whole block.
+     `:not(.task)` because a task row carries both classes. */
+  .row:not(.task) {
+    grid-template-columns: 2ch auto auto auto 1fr;
+    grid-template-areas:
+      "flag subject subject subject subject"
+      ".    puid    when    who     convo";
+    gap: 0 1ch;
+    padding: .5rem .5ch;
+  }
+  .row:not(.task) .flag    { grid-area: flag; }
+  .row:not(.task) .puid    { grid-area: puid; }
+  .row:not(.task) .when    { grid-area: when; }
+  .row:not(.task) .who     { grid-area: who; }
+  .row:not(.task) .convo   { grid-area: convo; justify-self: end; }
+  .row:not(.task) .subject {
+    grid-area: subject;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* The second line is context, so it recedes the way a note does. */
+  .row:not(.task) .puid,
+  .row:not(.task) .when,
+  .row:not(.task) .convo { color: var(--muted); font-size: .9em; }
+  .row:not(.task) .who { font-size: .9em; }
+
+  /* The board keeps a task's name and how it is going on the first line, and
+     folds owner, scores and progress onto the second. Nothing is dropped: the
+     scores are how a task is chosen, and hiding them would make the board a
+     list of names. Children are addressed by position because two of them
+     share a class. */
+  .task {
+    grid-template-columns: 2ch auto auto auto 1fr;
+    grid-template-areas:
+      "glyph name name name status"
+      ".     who  prio diff prog";
+    gap: 0 1ch;
+    padding: .5rem .5ch;
+    row-gap: .1rem;
+  }
+  /* The header row is the legend for the two bare scores, and hiding it would
+     leave "4 3" meaning nothing. So the labels move onto the numbers
+     themselves — the same information, in the space a phone has. */
+  .task.head { display: none; }
+  .task > :nth-child(4)::before,
+  .task > :nth-child(5)::before {
+    color: var(--muted);
+    font-size: .9em;
+  }
+  .task > :nth-child(4)::before { content: "p"; }
+  .task > :nth-child(5)::before { content: "d"; }
+  .task > :nth-child(1) { grid-area: glyph; }
+  .task > :nth-child(2) { grid-area: name; }
+  .task > :nth-child(3) { grid-area: who; font-size: .9em; }
+  .task > :nth-child(4) { grid-area: prio; }
+  .task > :nth-child(5) { grid-area: diff; }
+  .task > :nth-child(6) { grid-area: prog; justify-self: end; }
+  .task > :nth-child(7) { grid-area: status; justify-self: end; }
+  .task > :nth-child(8) { display: none; }
+
+  /* Cards and code give up their side padding rather than their content. */
+  .card > .body, .card > .meta, form.compose { padding-left: .5ch; padding-right: .5ch; }
+  pre.code { padding: .5rem .5ch; }
+
+  /* A fold's indent is a luxury three levels down a repository, so it shrinks
+     rather than pushing the name off the screen. */
+  button.fold {
+    gap: .5ch;
+    padding-left: calc(.5ch + var(--depth, 0) * .75ch);
+    padding-top: .4rem;
+    padding-bottom: .4rem;
+  }
+  .folded > .inner { margin-left: .5ch; }
+  button.fold .note { font-size: .85em; }
+
+  /* An account list of one column needs no fixed width. */
+  .grid.users { grid-template-columns: 1fr; }
+
+  /* The survey drops its drawn bar on a phone and keeps the number: the bar is
+     the comparison and the percentage is the fact, and there is only room for
+     one of them beside a name. */
+  .survey { grid-template-columns: 1fr 4ch 6ch 4ch; }
+  .survey .meter { display: none; }
+}
+
+/* Nothing may scroll the page sideways, at any width. A long path, a long
+ * subject, or a wide code block scrolls inside its own box instead. */
+html, body { max-width: 100%; overflow-x: hidden; }
+.row, .task, .card, .body { min-width: 0; }

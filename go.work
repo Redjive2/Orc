@@ -1,0 +1,18 @@
+go 1.26.1
+
+// Orc's modules, so a change to a shared one is picked up without a version
+// bump. Each module also carries a `replace` directive for what it depends on,
+// so `go build` from inside a single module still works without this file —
+// the workspace is a convenience for developing across modules, never a
+// requirement for building one.
+use (
+	./Anno
+	./Common
+	./Dock
+	./Communique
+	./Macmuffin
+	./Mailman
+	./Orc
+	./Orcprobe
+	./Theme
+)

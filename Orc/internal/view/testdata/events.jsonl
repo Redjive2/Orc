@@ -1,0 +1,8 @@
+{"at":"2026-07-25T14:22:02.100Z","session":"9f2c7a10-0000-4000-8000-000000000001","event":"SessionStart","transcript":"/tmp/orc-fixture/transcript.jsonl"}
+{"at":"2026-07-25T14:22:04.000Z","session":"9f2c7a10-0000-4000-8000-000000000001","event":"UserPromptSubmit","turn":1,"reason":"move the account verifier into Common"}
+{"at":"2026-07-25T14:22:09.220Z","session":"9f2c7a10-0000-4000-8000-000000000001","event":"PreToolUse","tool":"Read","path":"Common/user/user.go","turn":1,"verdict":"allow"}
+{"at":"2026-07-25T14:22:09.400Z","session":"9f2c7a10-0000-4000-8000-000000000001","event":"PostToolUse","tool":"Read","path":"Common/user/user.go","turn":1}
+{"at":"2026-07-25T14:22:11.010Z","session":"9f2c7a10-0000-4000-8000-000000000001","event":"PreToolUse","tool":"Read","path":"Common/identity/identity.go","turn":1,"verdict":"allow"}
+{"at":"2026-07-25T14:22:14.880Z","session":"9f2c7a10-0000-4000-8000-000000000001","event":"PreToolUse","tool":"Edit","path":"Common/account/account.go","turn":1,"verdict":"block","reason":"Common/account is outside write(Macmuffin/**)"}
+{"at":"2026-07-25T14:22:31.500Z","session":"9f2c7a10-0000-4000-8000-000000000001","event":"PreToolUse","tool":"Bash","path":"","turn":1,"verdict":"allow"}
+{"at":"2026-07-25T14:23:02.750Z","session":"9f2c7a10-0000-4000-8000-000000000001","event":"Stop","turn":1}

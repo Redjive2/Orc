@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+#
+# Build, install, and put the install directory on PATH — for good.
+#
+#   sh/push              build, install, and add the directory to your shell profile
+#   sh/push --dry-run    show the edit and make none
+#   sh/push --undo       take the block back out again
+#   sh/push --to DIR     use a different install directory
+#   sh/push --profile F  edit a different file
+#
+# This is the one script in the tree that edits a file outside it. sh/build
+# refuses to, on purpose: where a PATH line belongs is a decision about somebody's
+# shell. This script exists so that decision can be made once, out loud, rather
+# than by a build step making it quietly every time it runs.
+#
+# So it behaves like every other irreversible thing here:
+#
+#   - it shows the exact edit before making it, and asks;
+#   - it needs --yes when stdin is not a terminal, which for an agent is always;
+#   - it writes a marked block, so --undo removes exactly what it added and
+#     nothing a person put there themselves;
+#   - it keeps a timestamped backup of the file it touched;
+#   - running it twice changes nothing the second time.
+
+set -euo pipefail
+
+# The scripts live in sh/, so the tree is one level up from them.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+target="${ORC_BIN:-$HOME/.local/bin}"
+profile=""
+dry_run=false
+undo=false
+assume_yes=false
+skip_build=false
+
+open_marker="# >>> orc >>>"
+close_marker="# <<< orc <<<"
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--to) target="$2"; shift 2 ;;
+	--to=*) target="${1#--to=}"; shift ;;
+	--profile) profile="$2"; shift 2 ;;
+	--profile=*) profile="${1#--profile=}"; shift ;;
+	--dry-run) dry_run=true; shift ;;
+	--undo) undo=true; shift ;;
+	--yes) assume_yes=true; shift ;;
+	--no-build) skip_build=true; shift ;;
+	-h | --help) sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	*) echo "sh/push: unknown option $1" >&2; exit 1 ;;
+	esac
+done
+
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+	bold=$'\033[1m'; dim=$'\033[2m'; green=$'\033[32m'; red=$'\033[31m'; yellow=$'\033[33m'; off=$'\033[0m'
+else
+	bold=""; dim=""; green=""; red=""; yellow=""; off=""
+fi
+
+# profile_for picks the file a shell reads, by the shell's own convention. A
+# shell it does not recognise is not guessed at: printing the line to add is
+# help, and editing the wrong file is a mess somebody else has to find.
+profile_for() {
+	local shell_name
+	shell_name="$(basename "${SHELL:-}")"
+	case "$shell_name" in
+	zsh) printf '%s/.zshrc' "$HOME" ;;
+	bash)
+		if [[ -f "$HOME/.bash_profile" ]]; then
+			printf '%s/.bash_profile' "$HOME"
+		else
+			printf '%s/.bashrc' "$HOME"
+		fi ;;
+	fish) printf '%s/.config/fish/config.fish' "$HOME" ;;
+	*) printf '' ;;
+	esac
+}
+
+[[ -n "$profile" ]] || profile="$(profile_for)"
+
+if [[ -z "$profile" ]]; then
+	printf '%ssh/push: this shell (%s) is not one I know how to edit safely.%s\n' \
+		"$red" "${SHELL:-unknown}" "$off" >&2
+	printf 'add this line to whatever your shell reads at startup:\n\n' >&2
+	printf '  export PATH="%s:$PATH"\n' "$target" >&2
+	exit 1
+fi
+
+# The block, written whole so --undo can take it back out whole. fish has its
+# own idea of everything, including PATH.
+block() {
+	printf '%s\n' "$open_marker"
+	printf '# Added by %s/sh/push. Remove with `sh/push --undo`, or by hand.\n' "$root"
+	if [[ "$(basename "${SHELL:-}")" == "fish" ]]; then
+		printf 'fish_add_path %s\n' "$target"
+	else
+		printf 'export PATH="%s:$PATH"\n' "$target"
+	fi
+	printf '%s\n' "$close_marker"
+}
+
+has_block() {
+	[[ -f "$profile" ]] && grep -qF "$open_marker" "$profile"
+}
+
+backup() {
+	local stamp
+	stamp="$(date +%Y%m%d-%H%M%S)"
+	cp "$profile" "$profile.orc-backup-$stamp"
+	printf '  %skept a backup at %s.orc-backup-%s%s\n' "$dim" "$profile" "$stamp" "$off"
+}
+
+confirm() {
+	local prompt="$1"
+	$assume_yes && return 0
+	if [[ ! -t 0 ]]; then
+		printf '%ssh/push: this edits %s; pass --yes to confirm%s\n' "$red" "$profile" "$off" >&2
+		exit 1
+	fi
+	printf '%s' "$prompt"
+	local answer
+	read -r answer
+	case "$answer" in
+	y | Y | yes | YES) return 0 ;;
+	*) printf 'left alone\n'; exit 0 ;;
+	esac
+}
+
+# --- undo ------------------------------------------------------------------
+
+if $undo; then
+	if ! has_block; then
+		printf '%s✓%s nothing to undo: %s has no orc block\n' "$green" "$off" "$profile"
+		exit 0
+	fi
+
+	printf '%swill remove from %s:%s\n\n' "$bold" "$profile" "$off"
+	sed -n "/^${open_marker}$/,/^${close_marker}$/p" "$profile" | sed 's/^/  /'
+	echo
+
+	$dry_run && { printf '%sdry run: nothing was changed%s\n' "$dim" "$off"; exit 0; }
+	confirm "remove it? [y/N] "
+
+	backup
+	# The block is deleted by its markers, so nothing a person wrote around it
+	# is touched.
+	tmp="$(mktemp)"
+	sed "/^${open_marker}$/,/^${close_marker}$/d" "$profile" >"$tmp"
+	mv "$tmp" "$profile"
+	printf '%s✓%s removed. open a new shell, or run: %shash -r%s\n' "$green" "$off" "$bold" "$off"
+	exit 0
+fi
+
+# --- push ------------------------------------------------------------------
+
+if ! $skip_build; then
+	"$root/sh/build" --to "$target"
+	echo
+fi
+
+if has_block; then
+	printf '%s✓%s %s already has the orc block\n' "$green" "$off" "$profile"
+	case ":${PATH}:" in
+	*":$target:"*) printf '  %sand %s is on this shell'\''s PATH%s\n' "$dim" "$target" "$off" ;;
+	*) printf '  %sbut this shell was started before it; open a new one%s\n' "$yellow" "$off" ;;
+	esac
+	exit 0
+fi
+
+printf '%swill add to %s:%s\n\n' "$bold" "$profile" "$off"
+block | sed 's/^/  /'
+echo
+
+$dry_run && { printf '%sdry run: nothing was changed%s\n' "$dim" "$off"; exit 0; }
+confirm "add it? [y/N] "
+
+[[ -f "$profile" ]] && backup || mkdir -p "$(dirname "$profile")"
+
+# Appended, never rewritten: whatever else is in that file is somebody's, and a
+# script that reformats a shell profile is a script nobody runs twice.
+{
+	[[ -s "$profile" ]] && printf '\n'
+	block
+} >>"$profile"
+
+printf '%s✓%s added to %s\n' "$green" "$off" "$profile"
+printf '  %sthis shell has not read it yet. start a new one, or run:%s\n' "$dim" "$off"
+printf '    %ssource %s%s\n' "$bold" "$profile" "$off"

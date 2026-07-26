@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+#
+# Build every Orc tool, and put the binaries where a shell can find them.
+#
+# Each module is built from inside its own directory, deliberately: the tree's
+# whole arrangement — a `replace` directive per module rather than a workspace
+# requirement — exists so that any one tool builds on its own. Building them
+# from the root through go.work would hide the day that stops being true.
+#
+#   sh/build              build and install everything to ~/.local/bin
+#   sh/build --to DIR     install somewhere else
+#   sh/build --check      build only; install nothing
+#   sh/build mailman anno build only the tools named
+#
+# It never edits a shell profile. If the install directory is not on PATH it
+# says so and prints the line to add — where that line belongs is a decision
+# about someone's shell, not a build step.
+
+set -euo pipefail
+
+# The scripts live in sh/, so the tree is one level up from them.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+target="${ORC_BIN:-$HOME/.local/bin}"
+check_only=false
+wanted=()
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--to)
+		[[ $# -ge 2 ]] || { echo "sh/build: --to needs a directory" >&2; exit 1; }
+		target="$2"; shift 2 ;;
+	--to=*) target="${1#--to=}"; shift ;;
+	--check) check_only=true; shift ;;
+	-h | --help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	-*) echo "sh/build: unknown option $1" >&2; exit 1 ;;
+	*) wanted+=("$1"); shift ;;
+	esac
+done
+
+# Colour, on the same terms as every tool: a terminal, and no NO_COLOR.
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+	bold=$'\033[1m'; dim=$'\033[2m'; green=$'\033[32m'; red=$'\033[31m'; off=$'\033[0m'
+else
+	bold=""; dim=""; green=""; red=""; off=""
+fi
+
+# modules_with_commands lists every directory holding a go.mod and a cmd/.
+# Common and Theme are libraries and produce nothing to install, so they are
+# built but never looked for in cmd/.
+modules() {
+	local dir
+	for dir in "$root"/*/; do
+		[[ -f "$dir/go.mod" ]] || continue
+		basename "$dir"
+	done
+}
+
+# lower is spelled with tr rather than ${var,,} because macOS ships bash 3.2,
+# where the shorter form is a syntax error rather than a missing feature.
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+wants() {
+	local name want
+	name="$(lower "$1")"
+	[[ ${#wanted[@]} -eq 0 ]] && return 0
+	for want in "${wanted[@]}"; do
+		[[ "$(lower "$want")" == "$name" ]] && return 0
+	done
+	return 1
+}
+
+built=()
+failed=()
+installed=()
+
+for module in $(modules); do
+	wants "$module" || continue
+	dir="$root/$module"
+
+	printf '%s%-12s%s ' "$bold" "$module" "$off"
+
+	# Built from inside the module, with the workspace off: this is the check
+	# that each tool still stands alone.
+	if ! output=$(cd "$dir" && GOWORK=off go build ./... 2>&1); then
+		printf '%sbuild failed%s\n%s\n' "$red" "$off" "$output"
+		failed+=("$module")
+		continue
+	fi
+
+	if [[ ! -d "$dir/cmd" ]]; then
+		printf '%sok%s %s(library)%s\n' "$green" "$off" "$dim" "$off"
+		built+=("$module")
+		continue
+	fi
+
+	names=()
+	for command in "$dir"/cmd/*/; do
+		[[ -d "$command" ]] || continue
+		name="$(basename "$command")"
+		names+=("$name")
+
+		if $check_only; then
+			(cd "$dir" && GOWORK=off go build -o /dev/null "./cmd/$name")
+			continue
+		fi
+		if ! mkdir -p "$target" 2>/dev/null; then
+			printf '%scannot write to %s%s\n' "$red" "$target" "$off" >&2
+			exit 1
+		fi
+		(cd "$dir" && GOWORK=off go build -o "$target/$name" "./cmd/$name")
+		installed+=("$name")
+	done
+
+	printf '%sok%s %s%s%s\n' "$green" "$off" "$dim" "${names[*]}" "$off"
+	built+=("$module")
+done
+
+echo
+# A name that matched nothing is a typo, not a build of nothing. Reporting
+# success for zero modules is exactly the kind of quiet no-op this tree refuses
+# everywhere else.
+if [[ ${#wanted[@]} -gt 0 && ${#built[@]} -eq 0 && ${#failed[@]} -eq 0 ]]; then
+	printf '%sno module matches:%s %s\n' "$red" "$off" "${wanted[*]}"
+	printf '  %sknown:%s %s\n' "$dim" "$off" "$(modules | tr '\n' ' ')"
+	exit 1
+fi
+
+if [[ ${#failed[@]} -gt 0 ]]; then
+	printf '%s%d module(s) failed:%s %s\n' "$red" "${#failed[@]}" "$off" "${failed[*]}"
+	exit 1
+fi
+
+if $check_only; then
+	printf '%s✓%s %d module(s) build on their own; nothing was installed\n' "$green" "$off" "${#built[@]}"
+	exit 0
+fi
+
+printf '%s✓%s installed %d binaries to %s\n' "$green" "$off" "${#installed[@]}" "$target"
+
+# PATH is checked, never edited. Saying what to add is help; adding it is a
+# change to someone's shell that a build script has no business making.
+case ":${PATH}:" in
+*":$target:"*)
+	printf '  %s%s is on your PATH%s\n' "$dim" "$target" "$off" ;;
+*)
+	printf '  %s%s is not on your PATH.%s add it with:\n' "$red" "$target" "$off"
+	printf '    %sexport PATH="%s:$PATH"%s\n' "$bold" "$target" "$off" ;;
+esac

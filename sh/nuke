@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+#
+# Remove every trace of state the Orc tools keep, for a genuinely fresh start.
+#
+#   sh/nuke                what would go, and nothing else
+#   sh/nuke --yes          remove it
+#   sh/nuke orc mailman    only those; names as listed below
+#   sh/nuke --list         the targets and where they resolve to
+#
+# It shows before it does, always. A preview that has to be asked for is a preview
+# nobody sees, and this is the one script in the tree that cannot be undone.
+#
+# Two rules keep it from being a footgun:
+#
+#   Every target has a marker — a file or directory that only that store has — and
+#   a path without its marker is refused rather than removed. `~/.mailman` with no
+#   `version` file in it is somebody else's directory that happens to share a name.
+#
+#   Live sessions are stopped first. A supervisor whose store vanishes underneath
+#   it keeps a claude process alive, spending money, writing nowhere.
+#
+# It does not touch: the repository, the built binaries (`sh/build --to` decides
+# where those live), or your shell profile. State is what this removes.
+
+set -euo pipefail
+
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+	bold=$'\033[1m'; dim=$'\033[2m'; green=$'\033[32m'; yellow=$'\033[33m'
+	red=$'\033[31m'; off=$'\033[0m'
+else
+	bold=""; dim=""; green=""; yellow=""; red=""; off=""
+fi
+
+confirmed=false
+list_only=false
+wanted=()
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--yes) confirmed=true; shift ;;
+	--list) list_only=true; shift ;;
+	-h | --help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	-*) echo "sh/nuke: unknown option $1" >&2; exit 1 ;;
+	*) wanted+=("$1"); shift ;;
+	esac
+done
+
+# config_dir is what Go's os.UserConfigDir returns, which is where cq keeps its
+# state. It is not the XDG data directory the other tools use, and getting that
+# wrong would mean nuking nothing while reporting success.
+config_dir() {
+	case "$(uname -s)" in
+	Darwin) printf '%s/Library/Application Support' "$HOME" ;;
+	*) printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}" ;;
+	esac
+}
+
+# The targets, resolved the way each tool resolves its own root: the tool's own
+# variable first, then the shared XDG one, then the dot-directory.
+#
+# Fields: name | path | markers | what it holds
+#
+# Markers are names that must exist inside the path. `@sockets` is the one structural
+# marker: a socket directory has no file with a fixed name in it, so what identifies it
+# is that everything inside is a socket. There is no "take it on trust" form — a path
+# this script cannot identify is a path it refuses.
+targets() {
+	local data state cfg
+	data="${XDG_DATA_HOME:-}"
+	state="${XDG_STATE_HOME:-}"
+	cfg="$(config_dir)"
+
+	printf '%s\n' \
+		"orc|${ORC_HOME:-${data:+$data/orc}}|version identities|the fleet: identities, keys, workspaces, session state" \
+		"orc|${ORC_HOME:-$HOME/.orc}|version identities|the fleet: identities, keys, workspaces, session state" \
+		"mailman|${MAILMAN_HOME:-${data:+$data/mailman}}|version users|every mailbox, message, and receipt" \
+		"mailman|${MAILMAN_HOME:-$HOME/.mailman}|version users|every mailbox, message, and receipt" \
+		"macmuffin|${MACMUFFIN_HOME:-${data:+$data/macmuffin}}|version tasks|every task and its journal" \
+		"macmuffin|${MACMUFFIN_HOME:-$HOME/.macmuffin}|version tasks|every task and its journal" \
+		"cq|${CQ_HOME:-$cfg/cq}|cursor.json|cq's agent state: what has been applied, and the cursor" \
+		"cq|${CQ_STATE:-$cfg/cq-server}|version operator.json|cq's server state: machines, tokens, sessions, queue" \
+		"orcprobe|${ORCPROBE_HOME:-${data:+$data/orcprobe}}|probes|every probe, and every checkpoint in them" \
+		"orcprobe|${ORCPROBE_HOME:-$HOME/.orcprobe}|probes|every probe, and every checkpoint in them" \
+		"sockets|/tmp/orc-$(id -u)|@sockets|session sockets, when the store's own path was too long for one" \
+		"cq|${state:+$state/cq}|cursor.json|cq's agent state, when XDG_STATE_HOME is set"
+}
+
+field() { printf '%s' "$1" | cut -d'|' -f"$2"; }
+
+# selected reports whether a target was asked for. With no names, everything is.
+selected() {
+	[[ ${#wanted[@]} -eq 0 ]] && return 0
+	local name="$1" candidate
+	for candidate in "${wanted[@]}"; do
+		[[ "$candidate" == "$name" ]] && return 0
+	done
+	return 1
+}
+
+# recognised reports whether a path really is the store it claims to be.
+#
+# This is the whole safety of the script. `~/.macmuffin` containing a `version` file
+# and a `tasks` directory is Macmuffin's; the same path containing somebody's
+# holiday photos is not, and the difference has to be checked rather than assumed
+# from the name.
+#
+# `@sockets` is structural rather than by name: `/tmp/orc-<uid>` holds sockets named
+# after a hash of the store path, so there is nothing fixed to look for. What makes it
+# ours is that it contains sockets and nothing else — a directory with a stray file in
+# it is somebody else's, and gets refused.
+recognised() {
+	local path="$1" markers="$2" marker entry found=false
+
+	if [[ "$markers" == "@sockets" ]]; then
+		shopt -s nullglob dotglob
+		for entry in "$path"/*; do
+			[[ -S "$entry" ]] || { shopt -u nullglob dotglob; return 1; }
+			found=true
+		done
+		shopt -u nullglob dotglob
+		[[ "$found" == "true" ]]
+		return
+	fi
+
+	for marker in $markers; do
+		[[ -e "$path/$marker" ]] || return 1
+	done
+	return 0
+}
+
+# why_not is the refusal, in the same words a person would use. The marker list is
+# machine-readable and the reason should not be.
+why_not() {
+	local name="$1" markers="$2"
+	if [[ "$markers" == "@sockets" ]]; then
+		printf 'it holds something that is not a session socket, so it is not orc-only'
+	else
+		printf 'no %s in it, so it is not %s'"'"'s store' "$markers" "$name"
+	fi
+}
+
+# refuse_dangerous stops the two paths that would be catastrophic however they were
+# arrived at. A variable set to an empty string resolves to a suspiciously short
+# path, and that is exactly when a script like this does the most damage.
+refuse_dangerous() {
+	local path="$1"
+	case "$path" in
+	"" | "/" | "$HOME" | "$HOME/") return 1 ;;
+	esac
+	[[ "$path" != /* ]] && return 1
+	return 0
+}
+
+size_of() {
+	local path="$1"
+	if command -v du >/dev/null 2>&1; then
+		du -sh "$path" 2>/dev/null | cut -f1 | tr -d '[:space:]'
+	else
+		printf '?'
+	fi
+}
+
+# stop_sessions ends every supervisor the fleet knows about, before its store goes.
+#
+# The pids come out of each session's own state file rather than from a process
+# search: `pkill -f orc-session` would also match another user's fleet, somebody's
+# editor with the word in a buffer, and this script's own command line.
+stop_sessions() {
+	local fleet="$1" state pid alive pids=()
+
+	shopt -s nullglob
+	for state in "$fleet"/identities/*/session/session.json; do
+		pid="$(sed -n 's/.*"supervisor"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$state" | head -1)"
+		[[ -n "$pid" && "$pid" -gt 0 ]] || continue
+		kill -0 "$pid" 2>/dev/null || continue
+
+		# TERM first: a supervisor's own handler ends its session properly, which
+		# lets the claude process flush the transcript it was writing.
+		kill -TERM "$pid" 2>/dev/null || true
+		pids+=("$pid")
+	done
+	shopt -u nullglob
+
+	[[ ${#pids[@]} -eq 0 ]] && return 0
+
+	printf '  %sstopping%s %d supervisor(s)' "$yellow" "$off" "${#pids[@]}"
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		sleep 0.5
+		printf '.'
+		alive=false
+		for pid in "${pids[@]}"; do
+			kill -0 "$pid" 2>/dev/null && alive=true
+		done
+		[[ "$alive" == "false" ]] && break
+	done
+	printf '\n'
+
+	# Anything still holding on after the grace period is killed: this script's whole
+	# purpose is that nothing survives it. By pid and never by pattern — a `pkill -f
+	# orc-session` would also end supervisors belonging to a fleet nobody selected,
+	# which is the opposite of what a targeted nuke is for.
+	for pid in "${pids[@]}"; do
+		kill -KILL "$pid" 2>/dev/null || true
+	done
+}
+
+# Gather the work: one line per target that exists, de-duplicated by path.
+plan=()
+refused=()
+seen=""
+while IFS= read -r entry; do
+	name="$(field "$entry" 1)"
+	path="$(field "$entry" 2)"
+	markers="$(field "$entry" 3)"
+	what="$(field "$entry" 4)"
+
+	[[ -z "$path" ]] && continue
+	selected "$name" || continue
+	[[ -d "$path" ]] || continue
+	case ":$seen:" in *":$path:"*) continue ;; esac
+	seen="$seen:$path"
+
+	if ! refuse_dangerous "$path"; then
+		refused+=("$name|$path|that path is too dangerous to remove")
+		continue
+	fi
+	if ! recognised "$path" "$markers"; then
+		refused+=("$name|$path|$(why_not "$name" "$markers")")
+		continue
+	fi
+	plan+=("$name|$path|$markers|$what")
+done < <(targets)
+
+if [[ "$list_only" == "true" ]]; then
+	printf '%stargets%s\n' "$bold" "$off"
+	listed=""
+	while IFS= read -r entry; do
+		name="$(field "$entry" 1)"
+		path="$(field "$entry" 2)"
+		[[ -z "$path" ]] && continue
+		case ":$listed:" in *":$path:"*) continue ;; esac
+		listed="$listed:$path"
+		state="$dim(not there)$off"
+		[[ -d "$path" ]] && state="$green(exists)$off"
+		printf '  %-10s %-58s %s\n' "$name" "$path" "$state"
+	done < <(targets)
+	exit 0
+fi
+
+if [[ ${#plan[@]} -eq 0 && ${#refused[@]} -eq 0 ]]; then
+	printf '%s✓%s nothing to remove — no orc state on this machine\n' "$green" "$off"
+	exit 0
+fi
+
+# The preview. Always, before anything.
+if [[ ${#plan[@]} -gt 0 ]]; then
+	printf '%sgoing%s\n' "$bold" "$off"
+	for entry in "${plan[@]}"; do
+		name="$(field "$entry" 1)"
+		path="$(field "$entry" 2)"
+		what="$(field "$entry" 4)"
+		printf '  %s%-10s%s %s  %s%s%s\n' "$red" "$name" "$off" "$path" \
+			"$dim" "$(size_of "$path")" "$off"
+		printf '             %s%s%s\n' "$dim" "$what" "$off"
+	done
+fi
+
+if [[ ${#refused[@]} -gt 0 ]]; then
+	printf '\n%srefused%s\n' "$bold" "$off"
+	for entry in "${refused[@]}"; do
+		printf '  %s%-10s%s %s\n' "$yellow" "$(field "$entry" 1)" "$off" "$(field "$entry" 2)"
+		printf '             %s%s%s\n' "$dim" "$(field "$entry" 3)" "$off"
+	done
+fi
+
+if [[ "$confirmed" != "true" ]]; then
+	printf '\n%snothing was removed.%s pass %s--yes%s to go ahead\n' "$dim" "$off" "$bold" "$off"
+	printf '%sthe mail is the part nobody can get back — archive anything you want first%s\n' "$dim" "$off"
+	exit 0
+fi
+
+if [[ ${#plan[@]} -eq 0 ]]; then
+	printf '\n%s✗%s nothing removable\n' "$red" "$off"
+	exit 1
+fi
+
+printf '\n'
+for entry in "${plan[@]}"; do
+	name="$(field "$entry" 1)"
+	path="$(field "$entry" 2)"
+
+	# Sessions before the fleet they belong to, so no supervisor outlives its store.
+	[[ "$name" == "orc" ]] && stop_sessions "$path"
+
+	if rm -rf "$path"; then
+		printf '  %sremoved%s   %-10s %s\n' "$green" "$off" "$name" "$path"
+	else
+		printf '  %sfailed%s    %-10s %s\n' "$red" "$off" "$name" "$path"
+		exit 1
+	fi
+done
+
+printf '\n%s✓%s state removed. %sorc bootstrap%s starts again from nothing\n' \
+	"$green" "$off" "$bold" "$off"

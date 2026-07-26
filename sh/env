@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+#
+# Every environment variable the Orc tools read, in one place.
+#
+#   sh/env            what is set, what is missing, and what each one is for
+#   sh/env check      the same; --strict exits non-zero if anything required is missing
+#   sh/env auto       work out every value from the machine, for eval
+#   sh/env export     export lines for what is set now, for eval or a profile
+#   sh/env template   a fill-in-the-blanks profile, with every variable
+#
+# `auto` is the one that fills things in rather than reporting them:
+#
+#     eval "$(sh/env auto)"
+#
+# It finds the fleet, reads the operator out of it, points the stores at the paths
+# the tools would resolve anyway, and puts the built binaries on PATH. What it cannot
+# invent — a cq token, an API key — it names on stderr and leaves alone.
+#
+# The catalogue below is checked against the tree by `sh/env audit`, which
+# greps the Go source for variables this file does not mention. A list of
+# settings that quietly falls behind the code is worse than no list, because it
+# is the one people trust.
+#
+# Secrets are masked everywhere except `export`, which exists to be eval'd and
+# says so on stderr.
+
+set -euo pipefail
+
+# The scripts live in sh/, so the tree is one level up from them.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+	bold=$'\033[1m'; dim=$'\033[2m'; green=$'\033[32m'; yellow=$'\033[33m'
+	red=$'\033[31m'; blue=$'\033[34m'; off=$'\033[0m'
+else
+	bold=""; dim=""; green=""; yellow=""; red=""; blue=""; off=""
+fi
+
+# The catalogue: group | variable | need | secret | what it is
+#
+# need is one of:
+#   required  the tool it belongs to does not work without it
+#   optional  has a sensible default
+#   probe     orcprobe sets it; you never set it by hand
+#   session   orc sets it inside a session; you never set it by hand
+#   ambient   the terminal or the OS sets it
+settings=(
+	"identity|ORC_USER|required||the mailbox to act as; mailman and muff check it on every command"
+	"identity|ORC_KEY|required|secret|the key that proves it"
+
+	"stores|MAILMAN_HOME|optional||the mail store (default ~/.mailman)"
+	"stores|MACMUFFIN_HOME|optional||the task store (default ~/.macmuffin)"
+	"stores|CQ_HOME|optional||cq's agent state (default ~/.cq)"
+	"stores|XDG_DATA_HOME|optional||where mailman and muff look before the dot-directories"
+	"stores|XDG_STATE_HOME|optional||where cq looks before ~/.cq"
+
+	"macmuffin|MUFF_TASK|optional||the task a hook should enforce scope for"
+
+	"orc|ORC_HOME|optional||the fleet's store (default \$XDG_DATA_HOME/orc, else ~/.orc)"
+	"orc|ORC_CLAUDE_BIN|optional||the binary a session runs (default: claude)"
+	"orc|ORC_SESSION_BIN|optional||the binary a session spawns, for tests and odd installs"
+	"orc|ORC_IDENTITY|session||orc sets it inside a session: whose session this is"
+	"orc|ORC_SESSION|session||orc sets it inside a session: which session this is"
+	"orc|ANTHROPIC_API_KEY|optional|secret|passed through to a session, when set"
+	"orc|ANTHROPIC_BASE_URL|optional||passed through to a session, when set"
+	"orc|CLAUDE_CODE_USE_BEDROCK|optional||passed through to a session, when set"
+
+	"cq|CQ_SERVER|required||the server to sync against"
+	"cq|CQ_TOKEN|required|secret|the sync token, minted by cq admin token"
+	"cq|CQ_USER|required||the mailbox cq mirrors"
+	"cq|CQ_KEY|optional|secret|that mailbox's own credential, when cq has one"
+	"cq|CQ_MACHINE|optional||this machine's name in the machine list (default: hostname)"
+	"cq|CQ_STATE|optional||the server's state directory, for cq serve"
+	"cq|CQ_PASSWORD|optional|secret|the operator password, for cq admin operator"
+	"cq|CQ_LIBRARY|optional||a repository to mirror for reading"
+	"cq|CQ_BIN|optional||what to run when a nudge spawns cq (default: cq)"
+	"cq|ORC_NO_NUDGE|optional||set to stop mailman and muff spawning cq sync"
+
+	"orcprobe|ORCPROBE_HOME|optional||where probes live (default ~/.orcprobe)"
+	"orcprobe|ORCPROBE_ACTIVE|probe||the probe this shell is inside; the tools' guard keys off it"
+	"orcprobe|ORCPROBE_DIR|probe||that probe's directory"
+	"orcprobe|ORCPROBE_NAME|probe||that probe's name"
+	"orcprobe|ORCPROBE_PROMPT|probe||what a probe shell's prompt should say"
+	"orcprobe|CLAUDE_CONFIG_DIR|probe||the probe's copied hooks"
+	"orcprobe|GIT_CONFIG_GLOBAL|probe||the probe's git config: no credentials, no identity"
+
+	"colour|ORC_THEME|optional||macchiato, mocha, frappe, latte, or none"
+	"colour|ORC_AGENT|optional||set for agents: output is always plain"
+	"colour|NO_COLOR|optional||the no-color.org convention, honoured by presence"
+	"colour|CLICOLOR_FORCE|optional||colour even when the stream is not a terminal"
+	"colour|TERM|ambient||dumb means no colour"
+	"colour|COLORTERM|ambient||truecolor advertises 24-bit support"
+)
+
+mask() {
+	local value="$1"
+	if [[ ${#value} -le 4 ]]; then
+		printf '••••'
+	else
+		printf '••••%s' "${value: -4}"
+	fi
+}
+
+field() { printf '%s' "$1" | cut -d'|' -f"$2"; }
+
+check() {
+	local strict="${1:-false}"
+	local missing=0 group="" last=""
+
+	if [[ -n "${ORCPROBE_ACTIVE:-}" ]]; then
+		printf '%s! this shell is inside probe %s%s%s — the values below are the probe'\''s%s\n\n' \
+			"$yellow" "$bold" "${ORCPROBE_NAME:-${ORCPROBE_ACTIVE}}" "$off$yellow" "$off"
+	fi
+
+	for entry in "${settings[@]}"; do
+		group="$(field "$entry" 1)"
+		name="$(field "$entry" 2)"
+		need="$(field "$entry" 3)"
+		secret="$(field "$entry" 4)"
+		what="$(field "$entry" 5)"
+
+		if [[ "$group" != "$last" ]]; then
+			[[ -n "$last" ]] && echo
+			printf '%s%s%s\n' "$bold" "$group" "$off"
+			last="$group"
+		fi
+
+		value="${!name-}"
+		if [[ -n "${value+set}" && -n "${!name+isset}" ]]; then
+			shown="$value"
+			[[ -n "$secret" ]] && shown="$(mask "$value")"
+			[[ -z "$shown" ]] && shown="(set, empty)"
+			printf '  %s%-18s%s %s%s%s\n' "$green" "$name" "$off" "$dim" "$shown" "$off"
+		else
+			case "$need" in
+			required)
+				printf '  %s%-18s%s %sunset%s %s— %s%s\n' "$red" "$name" "$off" "$red" "$off" "$dim" "$what" "$off"
+				missing=$((missing + 1)) ;;
+			probe | session)
+				printf '  %s%-18s%s %sunset%s %s— %s%s\n' "$blue" "$name" "$off" "$dim" "$off" "$dim" "$what" "$off" ;;
+			*)
+				printf '  %s%-18s%s %sunset%s %s— %s%s\n' "$dim" "$name" "$off" "$dim" "$off" "$dim" "$what" "$off" ;;
+			esac
+		fi
+	done
+
+	echo
+	if [[ $missing -eq 0 ]]; then
+		printf '%s✓%s everything required is set\n' "$green" "$off"
+		return 0
+	fi
+	printf '%s✗%s %d required variable(s) unset — the tools that need them will refuse to run\n' \
+		"$red" "$off" "$missing"
+	# Two hints rather than one, because they cover different variables. `auto` fills
+	# what the machine can answer for — the fleet, the identity, the stores — and says on
+	# stderr what it cannot: a cq token and an API key come from elsewhere, and a script
+	# that pretended otherwise would send somebody looking for a bug in the tool.
+	printf '  %swhat this machine can answer for:%s sh/env auto\n' "$dim" "$off"
+	printf '  %sthe rest, from a blank profile:%s   sh/env template\n' "$dim" "$off"
+	[[ "$strict" == "true" ]] && return 1
+	return 0
+}
+
+# auto works every value out from the machine, rather than asking for them.
+#
+# `check` and `template` both put the work on the reader: one says what is missing, the
+# other gives them a form to fill in. This does it — a fleet has an operator, an operator
+# has a key, the stores have resolvable defaults, and the binaries are wherever sh/build
+# put them. Everything it prints, it printed because it found it.
+#
+# The chicken-and-egg is worth naming: this reads the operator's key **out of the store**
+# rather than asking `orc env` for it, because `orc env` authenticates first and there is
+# nothing to authenticate with until this has run. The file is ours, at 0600, inside a
+# 0700 directory — the same file `orc bootstrap` printed once.
+#
+# It refuses inside a probe. A probe has its own env file, written by orcprobe, and
+# filling a probe shell from the real fleet is exactly the mix-up the probe exists to
+# prevent.
+emit_auto() {
+	if [[ -n "${ORCPROBE_ACTIVE:-}" ]]; then
+		printf '%s! this shell is inside probe %s%s\n' "$yellow" "${ORCPROBE_NAME:-$ORCPROBE_ACTIVE}" "$off" >&2
+		printf '  a probe has its own environment, and filling one from the real fleet is the\n' >&2
+		printf '  mix-up probes exist to prevent. source the probe'"'"'s own file instead:\n' >&2
+		printf '    %s\n' "${ORCPROBE_DIR:+$ORCPROBE_DIR/env}" >&2
+		return 1
+	fi
+
+	# The fleet. ORC_HOME wins, then an XDG directory that exists, then the dot-directory
+	# — the same order orc itself resolves, so this cannot point somewhere orc would not.
+	local fleet
+	if [[ -n "${ORC_HOME:-}" ]]; then
+		fleet="$ORC_HOME"
+	elif [[ -n "${XDG_DATA_HOME:-}" && -d "$XDG_DATA_HOME/orc" ]]; then
+		fleet="$XDG_DATA_HOME/orc"
+	else
+		fleet="$HOME/.orc"
+	fi
+
+	if [[ ! -f "$fleet/operator" ]]; then
+		printf '%s✗%s no fleet at %s\n' "$red" "$off" "$fleet" >&2
+		printf '  %sorc bootstrap%s makes one; set ORC_HOME first if it belongs elsewhere\n' "$bold" "$off" >&2
+		return 1
+	fi
+
+	# Who, and what proves it. ORC_USER is honoured when set, so `auto` in an agent's
+	# shell fills that agent's environment rather than quietly promoting it to operator.
+	local who key
+	who="${ORC_USER:-$(tr -d '[:space:]' < "$fleet/operator")}"
+	if [[ -n "${ORC_KEY:-}" ]]; then
+		key="$ORC_KEY"
+	elif [[ -r "$fleet/identities/$who/key" ]]; then
+		key="$(tr -d '[:space:]' < "$fleet/identities/$who/key")"
+	else
+		printf '%s✗%s no key for %s in %s\n' "$red" "$off" "$who" "$fleet" >&2
+		printf '  %sorc env %s%s prints one, if you can already authenticate as somebody\n' "$bold" "$who" "$off" >&2
+		return 1
+	fi
+
+	printf '%s! this output holds a real key in the clear. eval it; do not keep it.%s\n' "$yellow" "$off" >&2
+
+	printf '# Written by sh/env auto from this machine, for %s.\n' "$who"
+	printf '# It contains a secret in the clear: it is meant for eval, not for a repo.\n'
+	printf 'export ORC_HOME=%q\n' "$fleet"
+	printf 'export ORC_USER=%q\n' "$who"
+	printf 'export ORC_KEY=%q\n' "$key"
+
+	# The stores. Set explicitly rather than left to default, so a shell says where it
+	# is pointed; the tools create these on first use, so naming one that does not exist
+	# yet is not a mistake.
+	#
+	# Resolved the way the tools resolve them — XDG first, then the dot-directory — and
+	# **never printed empty**. An empty value is not the same as an unset one: mailman
+	# refuses a MAILMAN_HOME that is set and blank rather than falling back, so a line
+	# like `export MAILMAN_HOME=''` would break mail on a machine with no XDG_DATA_HOME.
+	# The first version of this did exactly that.
+	local data="${XDG_DATA_HOME:-}"
+	local mail task
+	mail="${MAILMAN_HOME:-${data:+$data/mailman}}"
+	mail="${mail:-$HOME/.mailman}"
+	task="${MACMUFFIN_HOME:-${data:+$data/macmuffin}}"
+	task="${task:-$HOME/.macmuffin}"
+	printf 'export MAILMAN_HOME=%q\n' "$mail"
+	printf 'export MACMUFFIN_HOME=%q\n' "$task"
+
+	# The binaries, if sh/build has run. Prepended only when it is not already there,
+	# so sourcing this twice does not grow PATH without bound.
+	local bin="${ORC_BIN:-$HOME/.local/bin}"
+	if [[ -x "$bin/orc" ]]; then
+		case ":$PATH:" in
+		*":$bin:"*) : ;;
+		*) printf 'export PATH=%q\n' "$bin:$PATH" ;;
+		esac
+	else
+		printf '%s·%s no orc binary in %s — run %ssh/build%s\n' "$dim" "$off" "$bin" "$bold" "$off" >&2
+	fi
+
+	# cq mirrors one mailbox, and it is this one. Only worth setting when a server is
+	# configured: without one, nothing nudges and the variables are noise.
+	if [[ -n "${CQ_SERVER:-}" ]]; then
+		printf 'export CQ_SERVER=%q\n' "$CQ_SERVER"
+		printf 'export CQ_USER=%q\n' "${CQ_USER:-$who}"
+		printf 'export CQ_KEY=%q\n' "${CQ_KEY:-$key}"
+		[[ -n "${CQ_TOKEN:-}" ]] && printf 'export CQ_TOKEN=%q\n' "$CQ_TOKEN"
+		[[ -n "${CQ_MACHINE:-}" ]] && printf 'export CQ_MACHINE=%q\n' "$CQ_MACHINE"
+		if [[ -z "${CQ_TOKEN:-}" ]]; then
+			printf '%s·%s CQ_SERVER is set but CQ_TOKEN is not — %scq admin token%s mints one\n' \
+				"$dim" "$off" "$bold" "$off" >&2
+		fi
+	else
+		printf '%s·%s cq not configured; set CQ_SERVER and re-run to include it\n' "$dim" "$off" >&2
+	fi
+
+	# What it will not invent. An API key is a credential from somewhere else, and a
+	# script that guessed at one would send an agent to the wrong endpoint.
+	[[ -z "${ANTHROPIC_API_KEY:-}" ]] && printf '%s·%s ANTHROPIC_API_KEY unset; a session uses your claude login unless you set it\n' "$dim" "$off" >&2
+
+	printf '%s✓%s filled from %s as %s\n' "$green" "$off" "$fleet" "$who" >&2
+	return 0
+}
+
+emit_export() {
+	# The warning goes first, and to stderr. Last would be tidier to read and
+	# wrong: a caller piping this through `head` would never see it, and the one
+	# thing they must not miss is that the next few lines are real keys.
+	printf '%s! this output holds real keys in the clear. eval it; do not keep it.%s\n' "$yellow" "$off" >&2
+
+	printf '# Written by sh/env from the current environment.\n'
+	printf '# It contains secrets in the clear: it is meant for eval, not for a repo.\n'
+	for entry in "${settings[@]}"; do
+		name="$(field "$entry" 2)"
+		[[ -n "${!name+isset}" ]] || continue
+		printf 'export %s=%q\n' "$name" "${!name}"
+	done
+}
+
+emit_template() {
+	local group="" last=""
+	printf '# Every variable the Orc tools read. Fill in what you need.\n'
+	for entry in "${settings[@]}"; do
+		group="$(field "$entry" 1)"
+		name="$(field "$entry" 2)"
+		need="$(field "$entry" 3)"
+		what="$(field "$entry" 5)"
+
+		if [[ "$group" != "$last" ]]; then
+			printf '\n# %s\n' "$group"
+			last="$group"
+		fi
+		case "$need" in
+		probe)
+			printf '# %-18s %s (orcprobe sets this; never set it by hand)\n' "$name" "$what" ;;
+		session)
+			printf '# %-18s %s (orc sets this; never set it by hand)\n' "$name" "$what" ;;
+		ambient)
+			printf '# %-18s %s (your terminal sets this)\n' "$name" "$what" ;;
+		required)
+			printf 'export %s=%s  # %s\n' "$name" "''" "$what" ;;
+		*)
+			printf '# export %s=%s  # %s\n' "$name" "''" "$what" ;;
+		esac
+	done
+}
+
+# audit greps the tree for variables the catalogue above does not mention. The
+# catalogue is hand-written, so the only thing keeping it true is something that
+# complains when it stops being.
+audit() {
+	local found missing=0
+	found=$(grep -rhoE '"(ORC|MAILMAN|MACMUFFIN|CQ|ORCPROBE|MUFF|XDG|CLAUDE|ANTHROPIC|GIT_CONFIG|NO_COLOR|CLICOLOR|COLORTERM)[A-Z_]*"' \
+		--include="*.go" "$root"/*/ 2>/dev/null |
+		tr -d '"' | grep -vE '_TEST_|^MUFF_TEST|^MAILMAN_TEST' | sort -u)
+
+	for name in $found; do
+		if ! printf '%s\n' "${settings[@]}" | cut -d'|' -f2 | grep -qx "$name"; then
+			printf '%s✗%s %s is read somewhere in the tree and is not in this catalogue\n' "$red" "$off" "$name"
+			missing=$((missing + 1))
+		fi
+	done
+
+	if [[ $missing -eq 0 ]]; then
+		printf '%s✓%s the catalogue covers every variable the tree reads\n' "$green" "$off"
+		return 0
+	fi
+	return 1
+}
+
+case "${1:-check}" in
+check | "")
+	strict=false
+	[[ "${2:-}" == "--strict" ]] && strict=true
+	check "$strict" ;;
+auto) emit_auto ;;
+export) emit_export ;;
+template) emit_template ;;
+audit) audit ;;
+-h | --help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+*) echo "sh/env: unknown command ${1}; try check, auto, export, template, or audit" >&2; exit 1 ;;
+esac

@@ -1,0 +1,27 @@
+# Build output.
+#
+# `sh/build --to <dir>` is how binaries are meant to be produced, and it puts them
+# where you ask. A bare `go build` in a module leaves one beside its source named
+# after the command, and those are what these patterns catch — several megabytes
+# each, rebuilt from source in seconds, and never the same twice across platforms.
+/*/cmd/*/[a-z]*
+!/*/cmd/*/*.go
+!/*/cmd/*/*.md
+
+# `go build` in a module root, which names the binary after the module directory.
+/Orc/orc
+/Anno/anno
+/Dock/dock
+/Mailman/mailman
+/Macmuffin/muff
+/Orcprobe/orcprobe
+/Communique/cq
+
+# What a session leaves behind: a curl cookie jar, and the log of a server started
+# with nohup. Both are one operator's afternoon rather than part of the tree.
+cookies.txt
+*.log
+
+# Go's own.
+*.test
+*.out

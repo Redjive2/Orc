@@ -1,0 +1,275 @@
+package source
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+
+	"orc/common/nudge"
+
+	"orc/cq/internal/fault"
+	"orc/cq/internal/protocol"
+)
+
+// Orc answers the two questions cq cannot answer for itself: who the operator of
+// this machine's fleet is, and — when nobody is around to say — what their
+// credential is.
+//
+// It exists so that a freshly bootstrapped machine syncs without being configured
+// twice. Orc already knows the account whose mailbox this machine's mirror is
+// *for*; making the operator copy that name into `$CQ_USER` is asking them to
+// repeat something the machine can look up.
+//
+// The lookup is only ever used to *agree with* Orc, never to override it. Nothing
+// here can make cq mirror an account Orc does not call the operator, which is the
+// property that keeps an agent-triggered sync from publishing the agent's mailbox
+// as the machine's.
+type Orc struct {
+	// Command is the orc executable, "orc" by default.
+	Command string
+	// Env is the environment every orc child runs with. Empty means the ambient
+	// one, plus the nudge suppression.
+	//
+	// It exists because the two users of this adapter need opposite things. Working
+	// out *whose* mailbox this machine mirrors must run under whatever credential
+	// is ambient — that is the input to Orc's own decision about who is asking, and
+	// clearing it would be cq quietly asking to be treated as the owner. Reading
+	// and changing the fleet must run as the *mirrored account*, so a sync an agent
+	// triggered still shows and changes the operator's fleet rather than the
+	// agent's narrower view of it.
+	Env []string
+	// Run executes a command; it exists so tests can drive this without Orc
+	// installed. Defaults to running the real thing.
+	Run func(ctx context.Context, name string, args ...string) ([]byte, error)
+}
+
+// NewOrc returns an adapter over the usual command.
+func NewOrc() *Orc { return &Orc{Command: "orc"} }
+
+func (o *Orc) command() string {
+	if o.Command == "" {
+		return "orc"
+	}
+	return o.Command
+}
+
+// Operator is the name of the fleet's operator.
+//
+// It runs under whatever credential is ambient, because every identity may ask
+// who the operator is — that is public within a fleet, and an agent needs the
+// answer to know that it is *not* them.
+func (o *Orc) Operator(ctx context.Context) (string, error) {
+	out, err := o.run(ctx, "introspect", "--only", "operator")
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "" {
+		return "", fault.IO{Op: "read", Subject: o.command() + " introspect --only operator",
+			Err: fmt.Errorf("it printed nothing")}
+	}
+	return name, nil
+}
+
+// OwnerCredential is the operator's name and key, from Orc's own keyring.
+//
+// This succeeds in exactly one situation, and Orc decides it rather than cq: the
+// caller presented no credential at all, and the fleet is private to this unix
+// user. In an agent's session — where `$ORC_USER` is always set — Orc resolves
+// that identity instead and refuses to hand over somebody else's key, so this
+// cannot become a way for a session to reach the operator's credential.
+//
+// The key is a secret. It is returned to be put in a child's environment and must
+// not be logged, printed, or written to the agent's state.
+func (o *Orc) OwnerCredential(ctx context.Context) (user, key string, err error) {
+	out, err := o.run(ctx, "owner", "env")
+	if err != nil {
+		return "", "", err
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		name, value, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "export "), "=")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(name) {
+		case OrcUser:
+			user = strings.TrimSpace(value)
+		case OrcKey:
+			key = strings.TrimSpace(value)
+		}
+	}
+	if user == "" || key == "" {
+		// Not a fault of the operator's, and not something a retry fixes: cq and
+		// Orc disagree about the shape of a block cq is parsing.
+		return "", "", fault.Parse{Where: o.command() + " owner env",
+			Reason: "no " + OrcUser + " and " + OrcKey + " in the output"}
+	}
+	return user, key, nil
+}
+
+// Fleet reads the whole Orc store, as Orc derives it.
+//
+// `orc status --json` and nothing else: the shape it prints is the derived fleet
+// — authority already capped by the boss chain, permissions already intersected —
+// and cq carries that rather than the raw records. A second derivation in the
+// browser would be a second opinion about who may do what, and the wrong one
+// would be the one on screen.
+//
+// A machine with no fleet, or an orc that refuses, is not a failed sync. It is a
+// machine that runs no agents, and the mirror says so in one line rather than
+// showing an empty panel that reads as a broken one.
+func (o *Orc) Fleet(ctx context.Context) protocol.Fleet {
+	out, err := o.run(ctx, "status", "--json")
+	if err != nil {
+		return protocol.Fleet{Unreachable: oneLine(err)}
+	}
+	var fleet protocol.Fleet
+	if err := decodeJSON(out, &fleet, o.command()+" status"); err != nil {
+		return protocol.Fleet{Unreachable: oneLine(err)}
+	}
+	// A fleet is the caller's own branch, so an agent's sync would mirror less
+	// than the operator's. That is Orc's rule and cq does not work around it; what
+	// it does do is refuse to publish a partial fleet as the whole one, which is
+	// what the operator's name being absent would mean.
+	if fleet.Operator == "" && len(fleet.Identities) == 0 {
+		return protocol.Fleet{Unreachable: "orc reported no fleet"}
+	}
+	return fleet
+}
+
+func (o *Orc) environment() []string {
+	if len(o.Env) > 0 {
+		return o.Env
+	}
+	return os.Environ()
+}
+
+// oneLine flattens an error into something that fits on a line of a panel.
+func oneLine(err error) string {
+	text := strings.TrimSpace(err.Error())
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		text = strings.TrimSpace(text[:i]) + " …"
+	}
+	if len(text) > 400 {
+		text = text[:400] + "…"
+	}
+	return text
+}
+
+// Apply performs one queued fleet action by running the Orc command it names.
+//
+// One operation, one command, exactly as the Mailman and Macmuffin halves work.
+// cq mirrors Orc's API rather than reimplementing the model: a verb invented here
+// would be a rule about authority that Orc does not have, and authority is the one
+// thing in this tree that must have a single source.
+//
+// `--yes` goes on every command that asks for it. Orc requires it whenever stdin
+// is not a terminal, which for a queued action is always, and the confirmation
+// happened in the browser — hours ago and on another machine.
+func (o *Orc) Apply(ctx context.Context, action protocol.Action) error {
+	a := action.Args
+
+	var args []string
+	switch action.Op {
+	case protocol.OpOrcNewIdentity:
+		args = []string{"new", "identity", a.Identity}
+	case protocol.OpOrcNewRole:
+		args = []string{"new", "role", a.Role, strconv.Itoa(a.Authority), a.Description}
+	case protocol.OpOrcNewPermission:
+		args = append([]string{"new", "permission", a.Permission, strconv.Itoa(a.Floor)}, a.Patterns...)
+	case protocol.OpOrcAssignRole:
+		args = []string{"assign", "role", a.Identity, a.Role}
+	case protocol.OpOrcAssignAuthority:
+		args = []string{"assign", "authority", a.Role, strconv.Itoa(a.Authority)}
+	case protocol.OpOrcAssignPerm:
+		args = []string{"assign", "permission", a.Role, a.Permission}
+	case protocol.OpOrcRemoveIdentity:
+		args = []string{"remove", "identity", a.Identity, "--yes"}
+	case protocol.OpOrcRemoveRole:
+		args = []string{"remove", "role", a.Role, "--yes"}
+	case protocol.OpOrcRemovePerm:
+		// With a role it narrows that one role; without, it deletes the permission
+		// outright. Two different commands, and the queue shows which.
+		args = []string{"remove", "permission", a.Permission}
+		if a.Role != "" {
+			args = append(args, "--from", a.Role)
+		}
+		args = append(args, "--yes")
+	case protocol.OpOrcGrant:
+		args = []string{"grant", "permission", a.Identity, a.Permission}
+		if a.Until != "" {
+			args = append(args, "--until", a.Until)
+		}
+	case protocol.OpOrcRevoke:
+		args = []string{"revoke", "permission", a.Identity, a.Permission}
+	case protocol.OpOrcMove:
+		args = []string{"move", a.Identity, a.Boss}
+	case protocol.OpOrcEmploy:
+		args = []string{"employ", a.Identity}
+		if a.Model != "" {
+			args = append(args, "--model", a.Model)
+		}
+		if a.Effort != "" {
+			args = append(args, "--effort", a.Effort)
+		}
+	case protocol.OpOrcFire:
+		args = []string{"fire", a.Identity, "--yes"}
+	case protocol.OpOrcBudget:
+		args = []string{"budget", a.Role, strconv.Itoa(a.Load)}
+	case protocol.OpOrcPoke:
+		args = []string{"poke", a.Identity}
+		if a.Message != "" {
+			args = append(args, a.Message)
+		}
+	case protocol.OpOrcRefresh:
+		args = []string{"refresh", a.Identity}
+	case protocol.OpOrcTend:
+		args = []string{"tend"}
+	default:
+		return fault.Internal{Where: "source.Orc.Apply", Detail: "no command for operation " + string(action.Op)}
+	}
+
+	_, err := o.run(ctx, args...)
+	return err
+}
+
+// run invokes orc and returns its standard output.
+//
+// The environment is inherited untouched apart from the nudge suppression: what
+// `$ORC_USER` says is precisely the input to Orc's own decision about who is
+// asking, and clearing it here would be cq quietly asking to be treated as the
+// owner.
+func (o *Orc) run(ctx context.Context, args ...string) ([]byte, error) {
+	if o.Run != nil {
+		return o.Run(ctx, o.command(), args...)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, o.command(), args...)
+	// ORC_AGENT forces plain output, so nothing cq parses carries escapes.
+	cmd.Env = append(o.environment(), nudge.Suppress+"=1", "ORC_AGENT=1")
+	var out, errOut bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+
+	err := cmd.Run()
+	if ctx.Err() != nil {
+		return nil, fault.IO{Op: "run", Subject: o.command(), Err: fmt.Errorf("timed out after %s", Timeout)}
+	}
+	if err != nil {
+		detail := strings.TrimSpace(errOut.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		failure := fault.IO{Op: "run", Subject: o.command() + " " + strings.Join(args, " "),
+			Err: fmt.Errorf("%s", detail)}
+		return nil, withCause{err: failure, cause: err}
+	}
+	return out.Bytes(), nil
+}
