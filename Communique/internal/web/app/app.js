@@ -6,6 +6,7 @@
 
 import { api, setCSRF, ApiError } from "./api.js";
 import { mount, h } from "./dom.js";
+import * as focus from "./focus.js";
 import * as views from "./views.js";
 import * as library from "./library.js";
 import { digest } from "./digest.js";
@@ -32,6 +33,13 @@ let state = {
   // `picked` is the one row whose controls are on screen. A tree with a button
   // under every line is a tree nobody can read.
   library: null, files: {}, open: {}, picked: null,
+  // What somebody has typed and not yet queued, keyed by which form it is in.
+  //
+  // Drafts are state for the same reason open folds are: the view is redrawn on
+  // every sync, and a sync happens while somebody is typing. Text that lives
+  // only in the DOM is gone when that happens — the failure the editor avoids
+  // by living outside the redraw, which a form in the page flow cannot.
+  drafts: {},
   detail: null, admin: null, error: null,
 };
 
@@ -40,7 +48,26 @@ function set(patch) {
   draw();
 }
 
+// stash records state without redrawing.
+//
+// It exists for one caller: a keystroke. Drafts have to survive a sync, so they
+// belong in state — but redrawing on every letter would replace the field under
+// the cursor as it was being typed into, which is the bug this is fixing rather
+// than a different shape of it. So the draft is kept, and the screen is left
+// exactly as the writer has it.
+function stash(patch) {
+  state = Object.freeze({ ...state, ...patch });
+}
+
+// draw renders the route.
+//
+// Focus and the caret are carried across the re-mount. Restoring a draft's text
+// without them would still lose somebody's place: a sync landing mid-sentence
+// would leave the words on screen and the cursor at the end of them, or gone
+// altogether. What is remembered is the field's name, which is unique within a
+// view, so the reader lands back where they were.
 function draw() {
+  const place = focus.remember(typeof document !== "undefined" ? document.activeElement : null);
   const route = location.hash.slice(1) || "/inbox";
   mount(nav, views.nav(state, route));
   mount(statusBar, views.status(state));
@@ -72,6 +99,8 @@ function draw() {
   } else {
     mount(view, views.mailbox(state, { box: "inbox" }, actions));
   }
+
+  focus.restore(view, place);
 }
 
 // --- actions ------------------------------------------------------------
@@ -81,6 +110,19 @@ function draw() {
 // assumed it would.
 
 const actions = {
+  // draft records a keystroke. It does not redraw: see stash.
+  draft(key, field, value) {
+    const kept = state.drafts[key] || {};
+    stash({ drafts: { ...state.drafts, [key]: { ...kept, [field]: value } } });
+  },
+  // forget drops a draft once what it held has been queued. It does not redraw
+  // either — the action that queued it refetches, and that redraw is what
+  // empties the form.
+  forget(key) {
+    const { [key]: gone, ...rest } = state.drafts;
+    if (gone === undefined) return;
+    stash({ drafts: rest });
+  },
   async reply(m, subject, body) {
     if (!body.trim()) return;
     await run(() => api.reply(m.puid, m.machine, subject, body));
@@ -269,8 +311,9 @@ const actions = {
         { name: "name", label: "name" },
         { name: "floor", label: "floor", kind: "number", value: 1, min: 1, max: 100,
           hint: "the least authority that may hold it" },
-        { name: "patterns", label: "clauses", kind: "clauses",
-          hint: "space separated", placeholder: "read(Anno/**) spawn(24)" },
+        { name: "patterns", label: "clauses", kind: "clauses", words: f.vocabulary,
+          hint: "one clause per set of parentheses",
+          placeholder: "read(Anno/** Dock/**) write(** except Docs/**)" },
       ],
     });
     if (!got) return;
@@ -289,9 +332,9 @@ const actions = {
       fields: [
         { name: "floor", label: "floor", kind: "number", value: permission.floor,
           min: 1, max: 100, hint: "the least authority that may hold it" },
-        { name: "patterns", label: "clauses", kind: "clauses",
+        { name: "patterns", label: "clauses", kind: "clauses", words: f.vocabulary,
           value: (permission.patterns || []).join(" "),
-          hint: "space separated", cheatsheet: false },
+          hint: "one clause per set of parentheses", cheatsheet: false },
       ],
     });
     if (!got) return;

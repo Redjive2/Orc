@@ -281,11 +281,15 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   border: 1px solid var(--frame);
   padding: 0 1ch;
   color: var(--secondary);
-  display: inline-flex;
-  align-items: center;
-  gap: 1ch;
+  /* Inline-block, not flex. A chip used to hold one string and a button, and flex
+     with a gap spaced those two. It now holds a clause drawn part by part, and a
+     flex container drops the whitespace between its items — which is how
+     `read(Anno/** Dock/**)` came out as `read(Anno/**Dock/**)`. Inline layout
+     keeps the spaces somebody typed; the button spaces itself. */
+  display: inline-block;
+  white-space: pre;
 }
-.clause button { border: none; padding: 0; color: var(--muted); }
+.clause button { border: none; padding: 0; margin-left: 1ch; color: var(--muted); }
 .clause button:hover { background: transparent; color: var(--danger); }
 
 /* Clauses, coloured by kind. The kind carries the state — what this lets an
@@ -302,18 +306,30 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .cl-paren { color: var(--subtle); }
 .cl-bad { color: var(--danger); text-decoration: underline wavy; }
 
+/* What a clause takes back out. The keyword carries the accent and the terms
+   after it are dimmed rather than coloured: they are the part of the clause that
+   does *not* apply, and reading them as brightly as the rest is how somebody
+   comes away thinking `write(** except Docs/**)` covers Docs. */
+.cl-except { color: var(--accent); font-style: italic; }
+.cl-deny { color: var(--muted); text-decoration: line-through; }
+/* A word that parses and controls nothing. Marked, not refused — Orc accepts it. */
+.cl-idle { text-decoration: underline dotted; text-underline-offset: .2em; }
+
 /* The mirror under a clause input. It sits in the same grid column and the same
    font as the box above it, so a clause lines up with itself. */
 .clause-mirror {
   min-height: 1.7em;
-  padding: 0 1ch;
+  /* The same horizontal padding as the input above it, so a clause lines up with
+     itself rather than sitting a character to the right of what was typed. */
+  padding: .1rem 1ch;
   border: 1px solid var(--frame);
   border-top: none;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .clause-trouble { display: grid; gap: .1rem; }
-.clause-trouble p { margin: 0; color: var(--warning); }
+.clause-trouble p { margin: 0; color: var(--muted); }
+.clause-trouble p.warn { color: var(--warning); }
 
 .cheatsheet { border: 1px solid var(--frame); padding: .25rem 1ch; }
 .cheatsheet summary { cursor: pointer; color: var(--muted); }
@@ -321,6 +337,9 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .cheatsheet .cheat { border-collapse: collapse; margin: .4rem 0 .2rem; }
 .cheatsheet .cheat td { padding: 0 2ch .1rem 0; vertical-align: baseline; }
 .cheatsheet .hint { margin: 0; }
+/* A sheet inside a sheet: the words one kind takes. Indented so the nesting is
+   visible when both are open, and quiet when closed, which is most of the time. */
+.cheatsheet .inner { border: none; border-left: 1px solid var(--frame); margin: .4rem 0 0 1ch; }
 
 .grants { display: grid; gap: .15rem; }
 .grant { display: flex; flex-wrap: wrap; gap: 0 2ch; align-items: baseline; }

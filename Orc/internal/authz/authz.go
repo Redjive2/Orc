@@ -724,6 +724,16 @@ func (f Fleet) Holds(name user.Name, permission model.Name) bool {
 	if !ok {
 		return false
 	}
+	// The floor first, and not only as a shortcut. Containment is by clause, which
+	// is right for paths — an identity that may write everything may hand on a
+	// permission to write one directory — but a clause is a spelling, and a wide
+	// enough spelling reaches anything of its kind: `tool(**)` covers
+	// `tool(upgrade)` however low the floor of the permission it was written into.
+	// A floor is the one part of a permission that is not a pattern, so it is the
+	// one thing a pattern cannot argue its way past.
+	if effective, _ := f.Authority(name); !effective.AtLeast(p.Floor()) {
+		return false
+	}
 	mine := f.derived[name.String()].clauses
 	for _, want := range p.Patterns() {
 		covered := false

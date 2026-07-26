@@ -877,9 +877,11 @@ func (a App) editPermission(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Editing is what `new` and `remove` are: the same verb class, so the same
-	// gate. An identity that may not make policy may not rewrite it either.
-	if err := s.mayRunVerb("new"); err != nil {
+	// Its own verb rather than borrowing `new`'s. Rewriting a permission every role
+	// already holds is not the same act as making one nobody has yet — the first
+	// changes what agents may do right now — and a fleet that wants to let somebody
+	// create policy without rewriting the policy in force has to be able to say so.
+	if err := s.mayRunVerb("edit"); err != nil {
 		return err
 	}
 

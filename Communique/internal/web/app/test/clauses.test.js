@@ -30,7 +30,8 @@ test("every kind orc knows parses", () => {
 test("the parts come apart", () => {
   const got = clauses.read("read(Anno/internal/**)");
   assert.equal(got.kind, "read");
-  assert.equal(got.arg, "Anno/internal/**");
+  assert.deepEqual(got.terms, ["Anno/internal/**"]);
+  assert.deepEqual(got.excepts, []);
 });
 
 test("a clause without a shape is refused", () => {
@@ -70,9 +71,9 @@ test("a glob cannot leave the workspace", () => {
   assert.equal(clauses.read("read(Anno/..hidden/**)").error, null);
 });
 
-test("orc and tool name exactly one thing", () => {
+test("orc and tool name words, not paths", () => {
   assert.equal(clauses.read("orc(assign)").error, null);
-  assert.ok(clauses.read("orc(assign role)").error);
+  assert.equal(clauses.read("orc(assign grant)").error, null);
   assert.ok(clauses.read("tool(anno/index)").error);
 });
 
@@ -128,4 +129,130 @@ test("the cheat sheet shows every kind, and its examples are valid", () => {
     assert.ok(sheet.textContent.includes(k.example), `${k.example} missing`);
     assert.equal(clauses.read(k.example).error, null);
   }
+});
+
+// --- lists, exceptions, and the words a clause may name ---------------------
+
+test("a clause is a list", () => {
+  const got = clauses.read("read(Anno/** Dock/**)");
+  assert.equal(got.error, null);
+  assert.deepEqual(got.terms, ["Anno/**", "Dock/**"]);
+});
+
+test("an exception is the second half of the same clause", () => {
+  const got = clauses.read("write(** except Docs/** .git/**)");
+  assert.equal(got.error, null);
+  assert.deepEqual(got.terms, ["**"]);
+  assert.deepEqual(got.excepts, ["Docs/**", ".git/**"]);
+});
+
+test("except is read whatever its case", () => {
+  assert.deepEqual(clauses.read("read(** EXCEPT a/**)").excepts, ["a/**"]);
+});
+
+test("the shapes an except cannot take", () => {
+  for (const bad of ["read(except a/**)", "read(a/** except)", "read(a/** except b/** except c/**)"]) {
+    assert.ok(clauses.read(bad).error, `${bad} should not read`);
+  }
+});
+
+// A budget is a number, and the message has to say so — "invalid" would leave
+// somebody trying spawn(24 48) with nowhere to go.
+test("a budget is not a list and says why", () => {
+  const got = clauses.read("spawn(24 48)");
+  assert.ok(got.error);
+  assert.match(got.error, /number/);
+  assert.ok(clauses.read("spawn(** except 4)").error);
+});
+
+test("verbs and capabilities glob too", () => {
+  assert.equal(clauses.read("orc(** except remove)").error, null);
+  assert.equal(clauses.read("tool(**)").error, null);
+  assert.equal(clauses.read("orc(re*)").error, null);
+});
+
+// Splitting on parentheses rather than whitespace: a clause has spaces in it now,
+// and splitting on those would make four unparseable fragments out of two clauses.
+test("a line splits into clauses, not into words", () => {
+  assert.deepEqual(
+    clauses.split("read(a/** b/**) write(** except Docs/**)"),
+    ["read(a/** b/**)", "write(** except Docs/**)"]);
+  assert.deepEqual(clauses.split("  read(a)   spawn(2) "), ["read(a)", "spawn(2)"]);
+  assert.deepEqual(clauses.split("read"), ["read"]);
+});
+
+test("highlighting still keeps every character, spaces inside a clause included", () => {
+  for (const line of [
+    "read(Anno/** Dock/**) write(** except Docs/**)",
+    "  orc(new  assign)  ",
+    "read(broken spawn(2)",
+    "read(a/** except)",
+  ]) {
+    assert.equal(text(clauses.highlight(line)), line);
+  }
+});
+
+test("an exception is drawn as the part that does not apply", () => {
+  const nodes = clauses.highlight("write(** except Docs/**)");
+  const classes = nodes.map((n) => n.className || "");
+  assert.ok(classes.some((c) => c.includes("cl-except")), classes.join("|"));
+  assert.ok(classes.some((c) => c.includes("cl-deny")), classes.join("|"));
+});
+
+const WORDS = {
+  verbs: [{ word: "new", does: "create an identity" }, { word: "assign", does: "give a role" }],
+  tools: [{ word: "upgrade", does: "rebuild everything", in: "cq" }],
+};
+
+// The difference between a refusal and a remark. Orc accepts `orc(policy)`; what
+// it does with it is nothing, and that is worth saying without blocking the queue.
+test("a word nothing checks is a note, not an error", () => {
+  const got = clauses.read("orc(policy)", WORDS);
+  assert.equal(got.error, null);
+  assert.equal(got.notes.length, 1);
+  assert.match(got.notes[0], /controls nothing/);
+  assert.equal(clauses.read("orc(new)", WORDS).notes.length, 0);
+});
+
+test("a glob is not a word, so it is not reported as an unknown one", () => {
+  assert.deepEqual(clauses.read("orc(** except new)", WORDS).notes, []);
+});
+
+test("notes and problems are counted separately across a line", () => {
+  const line = "orc(policy) read(/etc/**)";
+  assert.equal(clauses.problems(line, WORDS).length, 1);
+  assert.equal(clauses.notes(line, WORDS).length, 1);
+});
+
+test("the cheat sheet offers the fleet's own words", () => {
+  const sheet = clauses.cheatsheet(WORDS);
+  for (const want of ["orc(new)", "orc(assign)", "tool(upgrade)", "checked by cq"]) {
+    assert.ok(sheet.textContent.includes(want), `${want} missing from the sheet`);
+  }
+});
+
+// A fleet from an older Orc carries no vocabulary. The sheet still has to draw.
+test("a fleet with no vocabulary still gets a sheet", () => {
+  const sheet = clauses.cheatsheet(undefined);
+  assert.ok(sheet.textContent.includes("what orc() takes"));
+  assert.ok(sheet.textContent.includes("upgrade"));
+});
+
+test("every example in the sheet is a clause that parses", () => {
+  for (const k of clauses.KINDS) {
+    assert.equal(clauses.read(k.example).error, null, `${k.example} does not parse`);
+  }
+});
+
+// A sheet that marked its own words as unknown would be advising against itself.
+test("the sub-sheet does not mark its own words idle", () => {
+  const only = { verbs: [{ word: "wake", does: "nudge quiet sessions" }], tools: [] };
+  const sheet = clauses.cheatsheet(only);
+  const idle = [];
+  const walk = (n) => {
+    if ((n.className || "").includes("cl-idle")) idle.push(n.textContent);
+    for (const k of n.childNodes || []) walk(k);
+  };
+  walk(sheet);
+  assert.deepEqual(idle, []);
 });

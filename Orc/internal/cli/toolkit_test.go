@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"orc/common/fault"
+	"orc/orc/internal/model"
 	"orc/orc/internal/store"
 )
 
@@ -170,16 +171,17 @@ func TestOrcReadNarrows(t *testing.T) {
 // permission naming an unchecked one would read like a control and be nothing —
 // the worst kind of entry in a list people trust.
 //
-// The list is written out because a Go switch is not introspectable; it is the
-// same list as the `mayRunVerb` calls across this package.
+// The vocabulary is the list, and vocabulary_test.go is what keeps *it* honest by
+// walking the package for the calls. This asks the narrower question: that the
+// batteries shipped with every fleet are spelled in words that vocabulary knows.
 func TestEveryOrcClauseIsAVerbThatIsChecked(t *testing.T) {
 	checked := map[string]bool{
-		"new": true, "assign": true, "remove": true, "grant": true, "revoke": true,
-		"move": true, "employ": true, "fire": true, "attach": true, "poke": true,
-		"refresh": true,
 		// `orc-read`'s clause is the exception, and deliberate: its effect is the
 		// narrowing, not the allowance. See store/builtin.go.
 		"introspect": true,
+	}
+	for _, verb := range model.OrcVerbNames() {
+		checked[verb] = true
 	}
 
 	got, err := store.Toolkit()
@@ -191,9 +193,11 @@ func TestEveryOrcClauseIsAVerbThatIsChecked(t *testing.T) {
 			if clause.Kind().String() != "orc" {
 				continue
 			}
-			if !checked[clause.Arg()] {
-				t.Errorf("%s names orc(%s), which no command checks — it controls nothing",
-					p.Name, clause.Arg())
+			for _, verb := range append(clause.Terms(), clause.Excepts()...) {
+				if !checked[verb] {
+					t.Errorf("%s names orc(%s), which no command checks — it controls nothing",
+						p.Name, verb)
+				}
 			}
 		}
 	}

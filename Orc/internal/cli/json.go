@@ -87,13 +87,45 @@ type jsonPermission struct {
 	Created  string   `json:"created"`
 }
 
+// jsonVocabulary is the words `orc(...)` and `tool(...)` may be written with.
+//
+// It travels with the fleet because the only other way for cq's browser to offer
+// them is to keep its own copy, and a copy of a privilege list is a copy that goes
+// stale silently — offering a verb this build stopped checking, or omitting one it
+// started. The fleet a browser is looking at is the authority on what it accepts.
+type jsonWord struct {
+	Word string `json:"word"`
+	Does string `json:"does"`
+	// In names the tool that checks it, and is empty for an orc verb: orc checks
+	// its own.
+	In string `json:"in,omitempty"`
+}
+
+type jsonVocabulary struct {
+	Verbs []jsonWord `json:"verbs"`
+	Tools []jsonWord `json:"tools"`
+}
+
 type jsonFleet struct {
 	Root        string           `json:"root"`
 	Operator    string           `json:"operator"`
 	Identities  []jsonIdentity   `json:"identities"`
 	Roles       []jsonRole       `json:"roles"`
 	Permissions []jsonPermission `json:"permissions"`
+	Vocabulary  jsonVocabulary   `json:"vocabulary"`
 	Problems    []string         `json:"problems,omitempty"`
+}
+
+// vocabulary renders the two lists this build knows.
+func vocabulary() jsonVocabulary {
+	out := jsonVocabulary{}
+	for _, v := range model.OrcVerbs() {
+		out.Verbs = append(out.Verbs, jsonWord{Word: v.Verb, Does: v.Does})
+	}
+	for _, t := range model.Tools() {
+		out.Tools = append(out.Tools, jsonWord{Word: t.Name, Does: t.Does, In: t.In})
+	}
+	return out
 }
 
 // emitJSON writes a value as indented JSON with a trailing newline.
@@ -115,9 +147,10 @@ func (a App) emitIdentityJSON(s caller, who user.Name) error {
 
 func (a App) emitFleetJSON(s caller) error {
 	out := jsonFleet{
-		Root:     s.store.Root(),
-		Operator: s.fleet.Operator().String(),
-		Problems: s.fleet.Problems(),
+		Root:       s.store.Root(),
+		Operator:   s.fleet.Operator().String(),
+		Vocabulary: vocabulary(),
+		Problems:   s.fleet.Problems(),
 	}
 	for _, name := range s.fleet.Subtree(s.who) {
 		shape, err := s.identityJSON(name)

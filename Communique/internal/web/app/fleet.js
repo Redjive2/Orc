@@ -153,7 +153,7 @@ function identities(f, state, actions) {
       h("span", { class: "muted" },
         id.has_spawn_budget ? `may employ ${id.spawn_budget}` : "no budget"),
     ),
-    clauses(id),
+    clauses(id, f.vocabulary),
     grants(id, f, actions),
     actions ? h("div", { class: "controls" },
       h("button", { class: "quiet", onclick: () => actions.assignRole(f, id) }, "role…"),
@@ -171,7 +171,7 @@ function identities(f, state, actions) {
 
 // The clauses an identity actually has, which is the answer to "why can it not
 // edit that file". A capped one shows what it asked for beside what it got.
-function clauses(id) {
+function clauses(id, words) {
   const list = id.clauses || [];
   if (list.length === 0) {
     return h("div", { class: "clauses" }, h("span", { class: "muted" }, "no clauses"));
@@ -179,7 +179,7 @@ function clauses(id) {
   // Coloured the same way as the ones in the permission editor, so the clause an
   // agent turned out to have looks like the clause somebody wrote.
   return h("div", { class: "clauses" }, ...list.map((c) => h("span", { class: "clause" },
-    ...clause.highlight(`${c.kind}(${c.arg})`),
+    ...clause.highlight(`${c.kind}(${c.arg})`, words),
     c.capped ? h("span", { class: "pending" }, ` ‡ asked ${c.asked}`) : null,
     c.source === "grant" ? h("span", { class: "muted" }, ` · granted${c.lapses ? `, ${c.lapses}` : ""}`) : null,
   )));
@@ -259,7 +259,7 @@ function permissions(f, actions) {
           held.length ? `held by ${held.join(", ")}` : "held by nothing"),
       ),
       h("div", { class: "clauses" },
-        ...(p.patterns || []).map((c) => clause.chip(c))),
+        ...(p.patterns || []).map((c) => clause.chip(c, f.vocabulary))),
       actions ? h("div", { class: "controls" },
         h("button", { class: "quiet", onclick: () => actions.editPermission(f, p) }, "edit…"),
         h("button", { class: "quiet danger", onclick: () => actions.removePermission(f, p) }, "delete"),

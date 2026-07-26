@@ -136,16 +136,19 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
         mirror = h("div", { class: "clause-mirror", "aria-hidden": "true" });
         const trouble = h("div", { class: "clause-trouble" });
         const redraw = () => {
-          mount(mirror, ...clauses.highlight(input.value));
-          const bad = clauses.problems(input.value);
-          // Orc has the final say, so this reports rather than refuses: a clause
-          // this cannot read is still queued, because being unable to explain
-          // something is not grounds for refusing it.
-          mount(trouble, ...bad.map((b) => h("p", { class: "muted" }, b)));
+          mount(mirror, ...clauses.highlight(input.value, f.words));
+          // Two kinds of remark, told apart because they mean different things.
+          // A problem is a clause Orc will refuse; a note is one it will accept
+          // and that does nothing — `orc(policy)` names no verb anybody checks.
+          // Both report rather than refuse: Orc has the final say, and being
+          // unable to explain something is not grounds for refusing it.
+          mount(trouble,
+            ...clauses.problems(input.value, f.words).map((b) => h("p", { class: "warn" }, b)),
+            ...clauses.notes(input.value, f.words).map((n) => h("p", { class: "muted" }, n)));
         };
         input.addEventListener("input", redraw);
         redraw();
-        extras = [mirror, trouble, clauses.cheatsheet(f.cheatsheet !== false)];
+        extras = [mirror, trouble, clauses.cheatsheet(f.words, f.cheatsheet !== false)];
       } else {
         input = h("input", {
           type: f.kind === "number" ? "number" : "text",

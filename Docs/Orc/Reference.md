@@ -179,7 +179,8 @@ replaces every binary on every machine in the fleet.
 clause is governed by the structural rules alone; one with any is additionally held
 to them. Only the verbs that *change* something consult that gate — `status`,
 `list`, `introspect`, `verify`, `doctor`, `tend`, and `budget` never do — so every
-clause above names a verb that is actually checked. `orc-read` is the odd one and
+clause above names a verb that is actually checked, and `orc help` prints the list.
+`orc-read` is the odd one and
 worth understanding before handing it out: its clause allows nothing anybody
 lacked, and its effect is the narrowing. Holding it bars every orc verb that
 changes anything.
@@ -188,9 +189,14 @@ changes anything.
 by clause rather than by name — an identity that may write everything may hand on a
 permission to write one directory — which is right for paths and wrong for a
 capability meaning "may run this privileged action". With a path clause, anybody
-holding `write-all` at floor 70 would reach a permission whose floor is 90, and the
-floor would mean nothing. `tool(upgrade)` is covered by `tool(upgrade)` and by
-nothing else.
+holding `write-all` at floor 70 would reach a permission whose floor is 90. No path
+glob covers `tool(upgrade)`.
+
+A wide enough clause of the *same* kind still does — `tool(**)` covers every
+capability, as `read(**)` covers every file — so the floor is checked as well as the
+clause: an identity below a permission's floor does not hold it, however its clauses
+are spelled. The floor is the one part of a permission that is not a pattern, which
+makes it the one thing a pattern cannot argue its way past.
 
 `check-permission` is how another tool asks. It answers with an exit code, the way
 `check-control` does, so the tool that needs the answer never holds a copy of the
@@ -208,6 +214,36 @@ verbs, and `tool` over a named capability in another Orc tool. `Auth_Perm_Role.m
 names the first three; `orc` and `tool` are this build's reading of "any number of
 specific commands or command patterns".
 
+The argument is a list, and it may take things back out:
+
+| Written                            | Means                                          |
+|------------------------------------|------------------------------------------------|
+| `read(Anno/**)`                     | one thing                                      |
+| `read(Anno/** Dock/**)`             | several, space separated                       |
+| `write(** except Docs/**)`          | everything but these                           |
+| `orc(new assign)`                   | two verbs                                      |
+| `orc(** except remove)`             | every verb but one                             |
+| `tool(**)`                          | every named capability                         |
+| `spawn(24)`                         | a budget, which is none of the above           |
+
+Every kind but `spawn` takes both halves, and every term of every kind is a glob:
+`orc(re*)` is a pattern over verbs exactly as `read(Anno/*)` is one over paths. A
+budget is a number, so `spawn(24 48)` is refused rather than resolved.
+
+An exception always wins over a term, whatever order they are written in. Terms are
+sorted and de-duplicated on the way in, so two people who typed the same set in
+different orders wrote the same permission and `edit permission` given what is
+already there changes nothing.
+
+Containment stays conservative, and exceptions are the same rule pointed the other
+way: a clause is provably wider than another only if every one of its own
+exceptions is already beyond that other's reach. `read(** except .git/**)` covers
+`read(Anno/**)`, because `.git` and `Anno` diverge at their first segment and no
+path is in both. `read(** except Anno/internal/**)` does not.
+
+Quote a clause with a space in it. `orc` puts a clause the shell split back
+together where it can, but an unclosed one is an error rather than a guess.
+
 Nothing effective is stored. An identity's authority is the lower of its role's
 and its boss's, and its permissions are its role's plus its grants, intersected
 with its boss's — so `move` changes what a whole subtree may do without editing
@@ -216,7 +252,7 @@ anything but one line.
 `status` shows both numbers whenever they differ, and says which one capped the
 other.
 
-## §1.3.0 Keeping a fleet moving
+## §1.4 Keeping a fleet moving
 
 An agent finishes a turn and stops. Nothing is wrong with it — Claude has said its
 piece and is waiting for the next thing somebody says — but in a fleet nobody is
@@ -244,7 +280,7 @@ The cycle's memory lives in the running process, not the store — a wake is a f
 about this cycle's last pass rather than about the fleet, so a restarted cycle looks
 at a quiet fleet with fresh eyes.
 
-## §1.3.1 Changing what an agent runs on
+## §1.5 Changing what an agent runs on
 
 `model` and `effort` are set when an identity is employed and can be changed after
 with `orc model`. They are the two halves of load — a session costs its model weight
@@ -261,7 +297,7 @@ costs its context, which is not a decision a settings change should make on the
 operator's behalf. `--now` is how to ask for it, and `orc refresh` does the same
 thing by hand.
 
-## §1.4 Load
+## §1.6 Load
 
 `spawn(<n>)` is a budget in units of thinking. A session's load is its model
 weight times its effort weight, and a fleet is charged for being a fleet:
@@ -298,7 +334,7 @@ derivation takes the largest, so adding a second would not decide the answer.
 Setting a budget is the operator's alone — it is authority over machine time, and
 an agent that could raise its own would have no budget at all.
 
-## §1.5 Sessions
+## §1.7 Sessions
 
 A populated identity is a `claude` process Orc owns, in a pty, whose session id
 Orc minted.
@@ -319,7 +355,7 @@ identity's permissions, enforced by a Claude hook on every tool call, and the
 `Agent` tool is off for every identity — all parallelism goes through `employ`,
 so the work list is the whole picture of what is running.
 
-## §1.6 Platforms
+## §1.8 Platforms
 
 Orc runs on macOS, Linux, and Windows 11 — every part of it on the first two,
 and everything but session supervision on the third.
@@ -343,7 +379,7 @@ attached at until the operator detaches and returns; and stopping a detached
 process is abrupt, because Windows has no polite equivalent for one that shares
 no console.
 
-## §1.7 Control
+## §1.9 Control
 
 `check-control <agent>` exits `0` if the caller is above the agent in the tree
 and `8` if not. It is what `muff assign` calls, so Macmuffin holds no opinion
@@ -353,7 +389,7 @@ Acting on your own subagents — `move`, `fire`, `employ`, `poke`, `refresh`,
 `attach` — needs no permission, only ancestry. Adding load to the work list needs
 `spawn`.
 
-## §1.8 Exit codes
+## §1.10 Exit codes
 
 Shared with every Orc tool, so a script or hook branches on them uniformly:
 
@@ -368,7 +404,7 @@ root it was measured against, or a session reaching for the keyring. An identity
 outside the caller's subtree is `2`, not `8`: saying "you may not" would confirm
 it exists.
 
-## §1.9 Colour
+## §1.11 Colour
 
 Catppuccin, Macchiato by default, shared with every Orc tool.
 `ORC_THEME=macchiato|mocha|frappe|latte|none`; `NO_COLOR` disables it, and

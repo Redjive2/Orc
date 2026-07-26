@@ -22,12 +22,13 @@ import (
 
 // Fleet is the whole of one machine's Orc store, as of the snapshot.
 type Fleet struct {
-	Root        string      `json:"root"`
-	Operator    string      `json:"operator"`
-	Identities  []FleetID   `json:"identities,omitempty"`
-	Roles       []FleetRole `json:"roles,omitempty"`
-	Permissions []FleetPerm `json:"permissions,omitempty"`
-	Problems    []string    `json:"problems,omitempty"`
+	Root        string          `json:"root"`
+	Operator    string          `json:"operator"`
+	Identities  []FleetID       `json:"identities,omitempty"`
+	Roles       []FleetRole     `json:"roles,omitempty"`
+	Permissions []FleetPerm     `json:"permissions,omitempty"`
+	Vocabulary  FleetVocabulary `json:"vocabulary,omitzero"`
+	Problems    []string        `json:"problems,omitempty"`
 	// Unreachable says why there is no fleet here, when there is a reason worth
 	// telling apart from "this machine runs no agents". An orc that is not
 	// installed and an orc that refused are different problems with different
@@ -104,6 +105,28 @@ type FleetPerm struct {
 	Name     string   `json:"name"`
 	Floor    int      `json:"floor"`
 	Patterns []string `json:"patterns,omitempty"`
+}
+
+// FleetWord is one word a clause may name: an orc verb, or a capability in
+// another tool.
+type FleetWord struct {
+	Word string `json:"word"`
+	Does string `json:"does,omitempty"`
+	// In names the tool that checks it, and is empty for an orc verb.
+	In string `json:"in,omitempty"`
+}
+
+// FleetVocabulary is what `orc(…)` and `tool(…)` may be written with.
+//
+// It rides along with the fleet so that the browser's clause editor can offer the
+// words rather than keep its own copy. A copy of a privilege list goes stale
+// silently — offering a verb the fleet stopped checking, or omitting one it
+// started — and the fleet somebody is looking at is the authority on what it
+// accepts. A fleet from an older Orc carries none, and the editor falls back to
+// its syntax without the words.
+type FleetVocabulary struct {
+	Verbs []FleetWord `json:"verbs,omitempty"`
+	Tools []FleetWord `json:"tools,omitempty"`
 }
 
 // Validate checks the fleet is one cq can draw.

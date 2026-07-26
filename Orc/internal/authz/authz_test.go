@@ -584,3 +584,52 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// A floor is the one part of a permission that is not a pattern, and Holds checks
+// it as well as the clauses.
+//
+// Containment is by clause, which is right for paths — an identity that may write
+// everything may hand on a permission to write one directory — but a wide enough
+// clause reaches anything of its own kind. `tool(**)` covers `tool(upgrade)`
+// exactly as `read(**)` covers every file, so without the floor an identity could
+// write itself a low-floor permission whose clause happens to cover a high-floor
+// one and hand that on. The clause is a spelling; the floor is not.
+func TestAFloorIsNotSomethingAClauseCanReachPast(t *testing.T) {
+	f := newBuild(t).
+		id("boss", "", "").
+		id("hand", "boss", "middling").
+		role("middling", 70, "everything", "upgrade").
+		perm("everything", 10, "tool(**)").
+		perm("upgrade", 90, "tool(upgrade)").
+		must()
+
+	hand := mustUser(t, "hand")
+	if !f.Holds(hand, mustName(t, "everything")) {
+		t.Error("an identity above the floor does not hold a permission its clauses cover")
+	}
+	if f.Holds(hand, mustName(t, "upgrade")) {
+		t.Error("authority 70 holds a permission with a floor of 90, reached through tool(**)")
+	}
+}
+
+// The operator is above every floor by construction, and the shortcut for it must
+// not have been broken by the check.
+func TestTheOperatorHoldsEverything(t *testing.T) {
+	f := newBuild(t).
+		id("boss", "", "").
+		perm("upgrade", 90, "tool(upgrade)").
+		must()
+
+	if !f.Holds(mustUser(t, "boss"), mustName(t, "upgrade")) {
+		t.Error("the operator does not hold a floor-90 permission")
+	}
+}
+
+func mustName(t *testing.T, raw string) model.Name {
+	t.Helper()
+	n, err := model.ParseName(raw)
+	if err != nil {
+		t.Fatalf("name %q: %v", raw, err)
+	}
+	return n
+}

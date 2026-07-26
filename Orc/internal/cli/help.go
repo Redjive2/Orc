@@ -117,12 +117,32 @@ func usage(p style.Palette) string {
 	line("")
 
 	line("%s", p.Header("patterns"))
-	line("  %s      a path glob; ** crosses directories", p.Value("read(Anno/**)"))
-	line("  %s   the same, for editing", p.Value("write(Anno/internal/**)"))
-	line("  %s              how much thinking may be employed at once (see below)", p.Value("spawn(24)"))
-	line("  %s            narrows which orc verbs a role may run", p.Value("orc(assign)"))
-	line("  %s        a named capability in another tool", p.Value("tool(upgrade)"))
+	// Padded from the widest example rather than by hand: the column is what makes
+	// five one-line definitions readable as a table, and a hand-counted gap goes
+	// wrong the first time an example changes.
+	for _, row := range [][2]string{
+		{"read(Anno/**)", "a path glob; ** crosses directories"},
+		{"write(Anno/internal/**)", "the same, for editing"},
+		{"spawn(24)", "how much thinking may be employed at once (see below)"},
+		{"orc(assign)", "narrows which orc verbs a role may run"},
+		{"tool(upgrade)", "a named capability in another tool"},
+	} {
+		line("  %s%s%s", p.Value(row[0]), strings.Repeat(" ", 25-theme.Width(row[0])), row[1])
+	}
 	line("  kinds: %s", p.Muted(kindList()))
+	line("")
+	line("  one clause, several things: %s", p.Value("read(Anno/** Dock/**)"))
+	line("  and what it does not cover:  %s", p.Value("write(** except Docs/**)"))
+	line("  every kind but %s takes both, and every term is a glob — %s and",
+		p.Value("spawn"), p.Value("orc(re*)"))
+	line("  %s are patterns in the sense %s is. quote a clause with a", p.Value("tool(**)"), p.Value("read(Anno/**)"))
+	line("  space in it, or the shell hands it over in halves.")
+	line("")
+	line("  %s %s", p.Setting("orc verbs:"), p.Muted(strings.Join(model.OrcVerbNames(), " ")))
+	line("  %s %s", p.Setting("tools:    "), p.Muted(strings.Join(model.ToolNames(), " ")))
+	line("  a clause naming anything else parses and controls nothing, which is what")
+	line("  %s is built on: its clause allows nothing, and holding it bars", p.Value("orc-read"))
+	line("  every verb above.")
 	line("")
 
 	line("%s", p.Header("the toolkit"))

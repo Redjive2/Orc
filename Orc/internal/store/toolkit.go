@@ -87,9 +87,10 @@ var toolkit = []struct {
 	{"read-docs", FloorRead, []string{"read(Docs/**)"},
 		"read the specifications and nothing else"},
 
-	// Writing. There is no `write-code`, because a clause cannot say "everything
-	// except Docs" — patterns include, they do not subtract. A fleet that wants
-	// that names the directories it does mean.
+	// Writing. `write-code` is expressible now that a clause can subtract —
+	// `write(** except Docs/**)` — but it is not here, because "code" is a
+	// different set in every tree and a builtin that guesses wrong is worse than
+	// no builtin. The syntax is in the help; a fleet writes its own.
 	{"write-docs", FloorWriteDocs, []string{"read(Docs/**)", "write(Docs/**)"},
 		"edit the specifications"},
 	{"write-all", FloorWriteAll, []string{"read(**)", "write(**)"},
@@ -112,11 +113,10 @@ var toolkit = []struct {
 	{"orc-read", FloorRead, []string{"orc(introspect)"},
 		"confine to reading — holding this bars every orc verb that changes anything"},
 	{"orc-agents", FloorAgents, []string{
-		"orc(new)", "orc(move)", "orc(employ)", "orc(fire)",
-		"orc(attach)", "orc(poke)", "orc(refresh)",
+		"orc(new move employ fire attach poke refresh wake model)",
 	}, "hire agents, direct them, and put them on the work list"},
 	{"orc-policy", FloorPolicy, []string{
-		"orc(assign)", "orc(grant)", "orc(revoke)", "orc(remove)",
+		"orc(assign edit grant revoke remove)",
 	}, "hand out roles, permissions, and authority"},
 
 	// Capabilities that live in another tool. `tool(...)` rather than a path
