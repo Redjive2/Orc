@@ -295,6 +295,14 @@ annotations — a statement about the fleet made from a fact about one machine.
 
 ## Upgrading
 
+An upgrade pulls with `--ff-only`, and refuses before it starts when the checkout
+cannot be pulled at all: a branch with no upstream, a branch the remote does not
+have, or a detached head. Each refusal names the branch and the one command that
+resolves it, because git's own advice is written for somebody at a terminal and
+this one arrives in a server log hours later. It never sets an upstream or
+switches branches itself — that is a change to a checkout on a machine nobody is
+logged into, which is the same thing `--ff-only` exists to refuse.
+
 `cq upgrade --yes`, the **rebuild everything** button in the admin panel, and
 `POST /api/v1/upgrade` are the same request. It pulls the tree, rebuilds every Orc
 tool, and restarts — on the machine serving the site *and* on every agent machine.

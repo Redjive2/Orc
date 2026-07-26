@@ -113,12 +113,21 @@ func (o Options) Upgrade(ctx context.Context) (Report, error) {
 		report.Before = trim(string(out))
 	}
 
+	// A branch with no upstream cannot be pulled, and the failure git gives for it
+	// is four lines of advice about `--set-upstream-to` that arrive inside a server
+	// log. Asked first, so the refusal names the actual condition — a checkout on a
+	// branch the remote does not have is the usual cause, and it is nothing like
+	// "local commits".
+	if why := o.checkUpstream(ctx, source); why != "" {
+		return report, fault.IO{Op: "pull", Subject: source, Err: fmt.Errorf("%s", why)}
+	}
+
 	// `--ff-only` on purpose. A merge commit made by a server nobody is watching,
 	// on a machine nobody is logged into, is a repository state somebody has to
 	// come and untangle by hand. Refusing is the kinder failure.
-	if _, err := step("pull", source, "git", "pull", "--ff-only"); err != nil {
+	if out, err := step("pull", source, "git", "pull", "--ff-only"); err != nil {
 		return report, fault.IO{Op: "pull", Subject: source,
-			Err: fmt.Errorf("%v — the checkout may have local commits or changes", err)}
+			Err: fmt.Errorf("%v — %s", err, o.whyPullFailed(ctx, source, string(out)))}
 	}
 
 	if out, err := step("the revision after", source, "git", "rev-parse", "--short", "HEAD"); err == nil {
@@ -168,6 +177,72 @@ func isToolName(s string) bool {
 		}
 	}
 	return true
+}
+
+// checkUpstream reports why this checkout cannot be pulled, or "" if it can.
+//
+// `git pull --ff-only` with no arguments pulls the current branch's upstream, and a
+// branch that has none fails with advice written for somebody at a terminal. On a
+// server that advice lands in a log, hours later, under a message about the upgrade
+// failing — so the condition is diagnosed here instead, in the words of what to do
+// about it.
+//
+// It does not fix anything. Setting an upstream or switching branches on a machine
+// nobody is logged into is the same class of thing `--ff-only` exists to refuse: a
+// repository state somebody has to come and untangle. Saying exactly what is wrong,
+// and the one command that resolves it, is the useful half.
+func (o Options) checkUpstream(ctx context.Context, source string) string {
+	branch := o.git(ctx, source, "rev-parse", "--abbrev-ref", "HEAD")
+	if branch == "" || branch == "HEAD" {
+		// Detached, or not on a branch at all. Nothing to pull into.
+		return "the checkout is not on a branch, so there is nothing to pull into; " +
+			"`git switch <branch>` in " + source
+	}
+	if up := o.git(ctx, source, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); up != "" {
+		return ""
+	}
+
+	// No upstream. Which of the two shapes is it — a branch the remote has under
+	// the same name, or a branch the remote has never heard of?
+	if o.git(ctx, source, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch) != "" {
+		return fmt.Sprintf("the branch %s has no upstream, so `git pull` does not know what to merge; "+
+			"`git branch --set-upstream-to=origin/%s %s` in %s", branch, branch, branch, source)
+	}
+
+	where := "origin"
+	if head := o.git(ctx, source, "rev-parse", "--abbrev-ref", "origin/HEAD"); head != "" {
+		where = head
+	} else if o.git(ctx, source, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main") != "" {
+		where = "origin/main"
+	}
+	return fmt.Sprintf("the checkout is on %s, which %s does not have — so there is nothing to pull; "+
+		"`git switch %s` in %s puts it on the branch the remote does have",
+		branch, where, strings.TrimPrefix(where, "origin/"), source)
+}
+
+// whyPullFailed turns a fast-forward refusal into the reason for it.
+//
+// The old text blamed "local commits or changes" whatever had happened, which sent
+// somebody looking through a clean checkout for edits that were not there.
+func (o Options) whyPullFailed(ctx context.Context, source, output string) string {
+	if strings.Contains(output, "Not possible to fast-forward") ||
+		strings.Contains(output, "not possible to fast-forward") {
+		return "the checkout has commits the remote does not; it cannot fast-forward"
+	}
+	if dirty := o.git(ctx, source, "status", "--porcelain"); dirty != "" {
+		return "the checkout has uncommitted changes"
+	}
+	return "the pull was refused; the output above is git's own"
+}
+
+// git runs one read-only git command and returns its trimmed output, or "" if it
+// failed. Every caller here is asking a question whose failure *is* an answer.
+func (o Options) git(ctx context.Context, dir string, args ...string) string {
+	out, err := o.run(ctx, dir, "git", args...)
+	if err != nil {
+		return ""
+	}
+	return trim(string(out))
 }
 
 func (o Options) run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {

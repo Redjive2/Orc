@@ -49,6 +49,15 @@ func (r *recorder) run(_ context.Context, dir, name string, args ...string) ([]b
 			return []byte(out), nil
 		}
 	}
+	// A healthy checkout by default: on a branch, with an upstream. Without these
+	// every test would exercise the refusal path for a checkout that cannot be
+	// pulled, which is not what any of them is about.
+	switch {
+	case strings.Contains(joined, "--abbrev-ref --symbolic-full-name @{u}"):
+		return []byte("origin/main\n"), nil
+	case strings.Contains(joined, "rev-parse --abbrev-ref HEAD"):
+		return []byte("main\n"), nil
+	}
 	return nil, nil
 }
 
@@ -174,8 +183,8 @@ func TestAFailedPullDoesNotBuild(t *testing.T) {
 	if err == nil {
 		t.Fatal("a failed pull was reported as a success")
 	}
-	if !strings.Contains(err.Error(), "local commits or changes") {
-		t.Errorf("the failure does not say what --ff-only refuses: %v", err)
+	if !strings.Contains(err.Error(), "refused") {
+		t.Errorf("the failure does not say the pull was refused: %v", err)
 	}
 	for _, call := range r.calls {
 		if strings.Contains(strings.Join(call, " "), "sh/build") {
@@ -213,4 +222,87 @@ func flatten(calls [][]string) []string {
 		out = append(out, strings.Join(c, " "))
 	}
 	return out
+}
+
+// TestACheckoutThatCannotBePulledSaysWhy.
+//
+// `git pull --ff-only` with no arguments pulls the current branch's upstream, and a
+// branch with none fails with four lines of advice written for somebody at a
+// terminal. On a server that advice lands in a log, hours later, under a message
+// about the upgrade failing — and the reason cq gave was "the checkout may have
+// local commits or changes", which is not what happened and sends somebody looking
+// through a clean tree for edits that are not there.
+func TestUpgradeNamesWhyItCannotPull(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		// git answers, by the fragment of the command that asks the question.
+		out  map[string]string
+		want []string
+	}{
+		{
+			what: "a branch the remote has, with no upstream set",
+			out: map[string]string{
+				// An empty answer stands for the command failing, which is how git
+				// reports that a branch has no upstream.
+				"@{u}":                        "",
+				"rev-parse --abbrev-ref HEAD": "main\n",
+				"rev-parse --verify --quiet refs/remotes/origin/main": "0123456\n",
+			},
+			want: []string{"no upstream", "--set-upstream-to=origin/main main"},
+		},
+		{
+			what: "a branch the remote has never heard of",
+			out: map[string]string{
+				"@{u}":                               "",
+				"rev-parse --abbrev-ref HEAD":        "master\n",
+				"rev-parse --abbrev-ref origin/HEAD": "origin/main\n",
+			},
+			want: []string{"master", "origin/main does not have", "git switch main"},
+		},
+		{
+			what: "a detached head",
+			out:  map[string]string{"rev-parse --abbrev-ref HEAD": "HEAD\n"},
+			want: []string{"not on a branch"},
+		},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			r := &recorder{out: tc.out}
+			_, err := upgrade.Options{Source: checkout(t), Run: r.run}.Upgrade(t.Context())
+			if err == nil {
+				t.Fatal("a checkout that cannot be pulled was upgraded")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q:\n%v", want, err)
+				}
+			}
+			// And it stopped before doing anything: half an upgrade is worse than
+			// none, and nothing here was going to work.
+			for _, call := range r.calls {
+				joined := strings.Join(call, " ")
+				if strings.Contains(joined, "git pull") || strings.Contains(joined, "sh/build") {
+					t.Errorf("it carried on regardless: %v", r.calls)
+				}
+			}
+		})
+	}
+}
+
+// A tree with commits of its own is the case the old message described, and it
+// still says so — from git's own words rather than from a guess.
+func TestUpgradeSaysWhenItCannotFastForward(t *testing.T) {
+	r := &recorder{failAt: "git pull", out: map[string]string{
+		"pull --ff-only": "fatal: Not possible to fast-forward, aborting.",
+	}}
+	// The recorder answers `out` before it fails, so the pull returns that text
+	// *and* an error, which is what git does here.
+	r.failAt = "git pull"
+
+	_, err := upgrade.Options{Source: checkout(t), Run: r.run}.Upgrade(t.Context())
+	if err == nil {
+		t.Fatal("a refused pull was reported as a success")
+	}
+	if !strings.Contains(err.Error(), "refused") && !strings.Contains(err.Error(), "fast-forward") {
+		t.Errorf("the failure does not say why:\n%v", err)
+	}
 }

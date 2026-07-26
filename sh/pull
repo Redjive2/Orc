@@ -120,7 +120,18 @@ fi
 upstream="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
 if [[ -z "$upstream" ]]; then
 	say "${yellow}$branch tracks nothing,${off} ${dim}so there is nothing to pull${off}"
-	say "  ${dim}git branch --set-upstream-to origin/$branch${off}"
+	# Which advice depends on whether the remote has a branch of this name. A
+	# checkout left on `master` after the remote moved to `main` has no
+	# `origin/master` to track, and telling it to track one is advice that fails
+	# the same way the pull just did.
+	if git rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null; then
+		say "  ${dim}git branch --set-upstream-to origin/$branch${off}"
+	else
+		remote_head="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null || true)"
+		[[ -z "$remote_head" ]] && remote_head="origin/main"
+		say "  ${dim}origin has no $branch; the branch it does have is${off} ${bold}$remote_head${off}"
+		say "  ${dim}git switch ${remote_head#origin/}${off}"
+	fi
 	incoming=""
 else
 	incoming="$(git log --oneline "HEAD..@{upstream}" 2>/dev/null || true)"
