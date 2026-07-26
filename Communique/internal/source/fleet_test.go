@@ -69,6 +69,8 @@ func TestOrcApplyRunsTheRightCommand(t *testing.T) {
 		protocol.OpOrcRefresh: {
 			protocol.Args{Identity: "atlas"}, []string{"orc", "refresh", "atlas"}},
 		protocol.OpOrcTend: {protocol.Args{}, []string{"orc", "tend"}},
+		protocol.OpOrcToolkit: {protocol.Args{Identity: "boss"},
+			[]string{"orc", "bootstrap", "--as", "boss"}},
 		// The only verb that runs two commands: it reads where the identity works
 		// before it moves it, because `from` is a claim about a snapshot and this
 		// is where that claim is checked against the machine.

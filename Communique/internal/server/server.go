@@ -293,6 +293,7 @@ func (s *Server) routes() {
 	s.route("PATCH /api/v1/fleet/permissions/{name}", needSession, s.editPermission)
 	s.route("DELETE /api/v1/fleet/permissions/{name}", needSession, s.removePermission)
 	s.route("POST /api/v1/fleet/tend", needSession, s.tendFleet)
+	s.route("POST /api/v1/fleet/toolkit", needSession, s.installToolkit)
 
 	// The standing instructions. PUT rather than POST: each one replaces a whole
 	// layer, and the same body twice lands in the same place.

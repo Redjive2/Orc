@@ -525,6 +525,21 @@ const actions = {
         : layers.map(([heading, text]) => `# ${heading}\n\n${text}`).join("\n\n"),
     });
   },
+  // installToolkit adds the permissions every fleet is made with.
+  //
+  // The confirmation names them, because the operator is agreeing to a set they
+  // cannot otherwise see the whole of — and says what it will not do, since "this
+  // installs permissions" reads as though it might overwrite the ones already here.
+  async installToolkit(f, absent) {
+    if (!await dialog.confirm({
+      title: `add ${absent.length === 1 ? "a permission" : `${absent.length} permissions`} to ${f.machine}`,
+      body: `${absent.map((t) => t.name).join(", ")} — nothing holds them until you assign them to a role, ` +
+        "and permissions already in this fleet are left exactly as they are.",
+      submit: "install",
+      danger: false,
+    })) return;
+    await run(() => api.installToolkit(f.machine, f.operator));
+  },
   async grant(f, id) {
     const got = await dialog.ask({
       title: `grant to ${id.name}`,

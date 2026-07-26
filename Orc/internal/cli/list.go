@@ -10,6 +10,7 @@ import (
 	"orc/common/user"
 	"orc/orc/internal/model"
 	"orc/orc/internal/render"
+	"orc/orc/internal/store"
 	"orc/orc/internal/style"
 )
 
@@ -267,6 +268,23 @@ func (a App) listPermissions(s caller, asJSON bool) error {
 		return a.emitJSON(out)
 	}
 
+	// Which of these are the toolkit's, and which of the toolkit's are absent. A
+	// fleet made before a toolkit permission existed simply does not have it, and
+	// until something says so the only symptom is a list missing rows nobody knew
+	// to expect.
+	kit, err := store.Toolkit()
+	if err != nil {
+		return err
+	}
+	builtin := map[string]bool{}
+	for _, p := range kit {
+		builtin[p.Name.String()] = true
+	}
+	present := map[string]bool{}
+	for _, p := range permissions {
+		present[p.Name().String()] = true
+	}
+
 	rows := make([][]render.Cell, 0, len(permissions))
 	for _, p := range permissions {
 		roles, granted := s.fleet.UsesPermission(p.Name())
@@ -284,8 +302,14 @@ func (a App) listPermissions(s caller, asJSON bool) error {
 			use = render.Painted("nothing", style.Palette.Warn)
 		}
 
+		kind := render.Painted("yours", style.Palette.Muted)
+		if builtin[p.Name().String()] {
+			kind = render.Painted("toolkit", style.Palette.Value)
+		}
+
 		rows = append(rows, []render.Cell{
 			render.Painted(p.Name().String(), style.Palette.Permission),
+			kind,
 			render.Painted(p.Floor().String(), style.Palette.Authority),
 			render.Painted(strings.Join(model.PatternStrings(p.Patterns()), " "), style.Palette.Value),
 			use,
@@ -293,8 +317,22 @@ func (a App) listPermissions(s caller, asJSON bool) error {
 	}
 
 	var notes []string
+	var missing []string
+	for _, p := range kit {
+		if !present[p.Name.String()] {
+			missing = append(missing, p.Name.String())
+		}
+	}
+	if len(missing) > 0 {
+		// Named rather than counted, and with the command that installs them: a
+		// fleet cannot be told what it is missing by a number, and `orc bootstrap`
+		// is safe to run again precisely so that this has an answer.
+		notes = append(notes, fmt.Sprintf(
+			"this fleet does not have %s — `orc bootstrap` adds what is missing and changes nothing else",
+			strings.Join(missing, ", ")))
+	}
 	for _, row := range rows {
-		if row[3].Text == "nothing" {
+		if row[4].Text == "nothing" {
 			notes = append(notes, "a permission held by nothing does nothing; "+
 				"`orc assign permission <role> <name>` puts it to work")
 			break
@@ -306,6 +344,7 @@ func (a App) listPermissions(s caller, asJSON bool) error {
 		Note:  fmt.Sprintf("%d permission%s", len(rows), plural(len(rows))),
 		Columns: []render.Column{
 			{Header: "permission", Align: render.Left, Min: 12},
+			{Header: "from", Align: render.Left},
 			{Header: "floor", Align: render.Right},
 			{Header: "clauses", Align: render.Left, Grow: true, Min: 20},
 			{Header: "held by", Align: render.Left, Min: 14},

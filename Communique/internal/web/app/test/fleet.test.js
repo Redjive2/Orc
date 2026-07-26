@@ -146,3 +146,62 @@ test("counts say agents, and count agents", () => {
   assert.match(said(fleetView.running(withFleet, null)), /1 of 2 agents employed/);
   assert.match(said(fleetView.tree(withFleet, null)), /2 agents/);
 });
+
+// TestTheToolkitIsVisibleEvenWhenAbsent. A fleet made before a toolkit permission
+// existed does not have it, and a screen that draws what exists can never show that
+// — which is exactly how somebody comes to believe their fleet has a toolkit it does
+// not have.
+test("permissions the fleet is missing from the toolkit are named", () => {
+  const f = {
+    machine: "sandy", operator: "boss",
+    roles: [], permissions: [{ name: "edit-docs", floor: 40, patterns: ["read(**)"] }],
+    toolkit: [
+      { name: "edit-docs", floor: 40, patterns: ["read(**)"], why: "…", have: true },
+      { name: "instruct", floor: 70, patterns: ["tool(instruct)"],
+        why: "write the standing instructions agents run under", have: false },
+    ],
+  };
+  const drawn = fleetView.permissionList({ fleet: [f] }, { newPermission() {}, installToolkit() {} });
+  const body = drawn.map((n) => n.textContent).join("\n");
+
+  assert.match(body, /instruct/, body);
+  // With what it would be, since a name alone is not something anybody can weigh.
+  assert.match(body, /floor 70/);
+  assert.match(body, /standing instructions/);
+  // And a way to get it.
+  assert.ok(buttons(drawn).some((label) => /install/.test(label)), buttons(drawn).join(" "));
+});
+
+test("a fleet with the whole toolkit says nothing about it", () => {
+  const f = {
+    machine: "sandy", operator: "boss", roles: [],
+    permissions: [{ name: "instruct", floor: 70, patterns: ["tool(instruct)"] }],
+    toolkit: [{ name: "instruct", floor: 70, patterns: ["tool(instruct)"], why: "…", have: true }],
+  };
+  const drawn = fleetView.permissionList({ fleet: [f] }, { newPermission() {}, installToolkit() {} });
+  const body = drawn.map((n) => n.textContent).join("\n");
+
+  assert.doesNotMatch(body, /not in this fleet/);
+  // The row still says where it came from: which of these somebody invented is the
+  // question a permission list is read with.
+  assert.match(body, /toolkit/);
+});
+
+test("a permission the fleet invented is not claimed by the toolkit", () => {
+  const f = {
+    machine: "sandy", operator: "boss", roles: [],
+    permissions: [{ name: "mine", floor: 40, patterns: ["read(**)"] }],
+    toolkit: [{ name: "instruct", floor: 70, patterns: ["tool(instruct)"], why: "…", have: false }],
+  };
+  const drawn = fleetView.permissionList({ fleet: [f] }, { newPermission() {}, installToolkit() {} });
+  assert.match(drawn.map((n) => n.textContent).join("\n"), /yours/);
+});
+
+// An older agent machine mirrors no toolkit at all. That is not a fleet missing
+// every permission — it is a fleet that cannot say — and guessing would put a
+// twelve-row warning on a screen that is fine.
+test("a mirror with no toolkit block claims nothing", () => {
+  const f = { machine: "sandy", operator: "boss", roles: [], permissions: [] };
+  const drawn = fleetView.permissionList({ fleet: [f] }, { newPermission() {}, installToolkit() {} });
+  assert.doesNotMatch(drawn.map((n) => n.textContent).join("\n"), /not in this fleet/);
+});

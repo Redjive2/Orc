@@ -230,7 +230,7 @@ func (o Op) Idempotent() bool {
 		// refused rather than repeated.
 		return false
 	case OpOrcAssignRole, OpOrcAssignAuthority, OpOrcAssignPerm, OpOrcMove,
-		OpOrcBudget, OpOrcTend, OpOrcFire, OpOrcRevoke, OpOrcEditPermission,
+		OpOrcBudget, OpOrcTend, OpOrcToolkit, OpOrcFire, OpOrcRevoke, OpOrcEditPermission,
 		OpOrcInstructSet, OpOrcInstructClear:
 		// Each sets a state to what was asked for rather than stepping it. An
 		// identity already under that boss stays there; a role already at that

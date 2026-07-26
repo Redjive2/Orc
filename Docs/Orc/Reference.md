@@ -150,6 +150,14 @@ Every fleet is made with these. A fresh fleet used to have no permissions at all
 so the first thing anybody did was invent a vocabulary — and invent it differently
 each time, so two fleets could not be discussed in the same words.
 
+`orc bootstrap` installs them and is safe to run again: it creates only what is
+absent and never rewrites a permission, so a fleet that redefined one keeps its
+own. That is how a fleet made before one of these existed gets it — and because
+an absence is otherwise invisible, `orc list permissions` marks which rows are the
+toolkit's and names any that are missing, and `orc status --json` carries the whole
+toolkit with a `have` flag so cq's browser can show a permission the fleet has not
+got.
+
 | Permission   | Floor | Clauses                          | Is                                          |
 |--------------|-------|----------------------------------|---------------------------------------------|
 | `read-all`   | 1     | `read(**)`                       | read every file in the workspace            |

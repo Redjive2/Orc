@@ -122,8 +122,10 @@ function ccForm(state, m, actions) {
   const key = draftKey("cc", m.convo.uid);
   const draft = drafted(state, key);
 
+  // Singular, because this form takes one name and says so if given two. Same
+  // reasoning as the compose field: a format rather than somebody's name.
   const who = h("input", {
-    name: "cc", placeholder: "carol", autocomplete: "off",
+    name: "cc", placeholder: "name", autocomplete: "off",
     value: draft.cc ?? "",
     oninput: (e) => actions.draft(key, "cc", e.target.value),
   });
@@ -293,8 +295,13 @@ export function compose(state, actions) {
   const key = draftKey("compose");
   const draft = drafted(state, key);
 
+  // The placeholder is a format, not an example. It used to be two invented
+  // names, which read as real accounts on a fleet where the recipients *are*
+  // people and agents with short names — and a hint somebody might try to send to
+  // is worse than no hint. What it has to convey is the only thing the old one
+  // actually did: that this field takes more than one, separated by commas.
   const to = h("input", {
-    name: "to", placeholder: "bob, carol", autocomplete: "off",
+    name: "to", placeholder: "name, name", autocomplete: "off",
     value: draft.to ?? "",
     oninput: (e) => actions.draft(key, "to", e.target.value),
   });

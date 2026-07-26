@@ -129,6 +129,11 @@ export const api = {
   newPermission: (machine, name, floor, patterns) =>
     request("POST", "/api/v1/fleet/permissions", { machine, name, floor, patterns }),
 
+  // The toolkit, by name of the operator: the queued action says exactly what it
+  // will run rather than depending on which user the sync happens to be.
+  installToolkit: (machine, operator) =>
+    request("POST", "/api/v1/fleet/toolkit", { machine, name: operator }),
+
   assignRole: (machine, name, role) => fleetCall("identities", name, "role", machine, { role }),
   moveIdentity: (machine, name, boss) => fleetCall("identities", name, "move", machine, { boss }),
   employ: (machine, name, model, effort) =>

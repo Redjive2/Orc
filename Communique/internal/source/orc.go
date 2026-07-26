@@ -268,6 +268,12 @@ func (o *Orc) Apply(ctx context.Context, action protocol.Action) error {
 		}
 	case protocol.OpOrcTend:
 		args = []string{"tend"}
+	case protocol.OpOrcToolkit:
+		// `bootstrap` on a fleet that exists adds the toolkit permissions it does
+		// not have and touches nothing else. The operator is named so the command
+		// is the same whichever user the sync runs as — on a fleet that exists it
+		// only decides what a mismatch is reported against.
+		args = []string{"bootstrap", "--as", a.Identity}
 
 	case protocol.OpOrcInstructSet:
 		// Through a file rather than argv: a prompt is up to 16 KiB of prose, and a

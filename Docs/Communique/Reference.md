@@ -124,6 +124,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `PATCH fleet/permissions/<n>`          | `orc edit permission <name> --floor …`   |
 | `DELETE fleet/permissions/<n>`         | `orc remove permission [--from] --yes`   |
 | `POST fleet/tend`                      | `orc tend`                               |
+| `POST fleet/toolkit`                   | `orc bootstrap --as <operator>`†         |
 | `PUT instruct/system`                  | `orc instruct system --set`              |
 | `PUT instruct/roles/<n>`               | `orc instruct role <n> --set`            |
 | `PUT instruct/identities/<n>`          | `orc instruct identity <n> --set`        |
@@ -147,6 +148,13 @@ afterwards — so the agent machine compares `from` against where the identity
 works *now* and refuses a move made against a stale view, rather than silently
 overturning one somebody made in between. It is the same protection the library's
 writes get from a digest.
+
+† `toolkit` installs the permissions every fleet is made with, on a fleet that
+does not have all of them — `orc bootstrap` is safe to run again and creates only
+what is absent, so a fleet that redefined one of them keeps its own. The fleet
+snapshot carries the toolkit as the agent machine's orc defines it, with whether
+each one is present, which is what lets the browser show a permission that is
+*missing*: a screen drawn from what exists can never do that.
 
 ## Driving Macmuffin
 

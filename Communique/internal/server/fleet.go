@@ -277,6 +277,17 @@ func (s *Server) clearInstruct(kind string, wake bool) http.HandlerFunc {
 	}
 }
 
+// installToolkit adds the permissions every fleet is made with, to a fleet that does
+// not have all of them.
+//
+// The operator's name comes from the body rather than being inferred on the agent
+// machine, so the queued action says exactly what it will run.
+func (s *Server) installToolkit(w http.ResponseWriter, r *http.Request) {
+	s.fleetAction(w, r, protocol.OpOrcToolkit, func(b fleetBody, a *protocol.Args) {
+		a.Identity = named(r, b)
+	})
+}
+
 func (s *Server) tendFleet(w http.ResponseWriter, r *http.Request) {
 	s.fleetAction(w, r, protocol.OpOrcTend, nil)
 }

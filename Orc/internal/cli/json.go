@@ -8,6 +8,7 @@ import (
 	"orc/common/user"
 	"orc/orc/internal/authz"
 	"orc/orc/internal/model"
+	"orc/orc/internal/store"
 )
 
 // The JSON shapes are a contract, not a rendering: Communiqué will mirror the
@@ -114,14 +115,35 @@ type jsonVocabulary struct {
 	Innocuous []string `json:"innocuous"`
 }
 
+// jsonToolkitEntry is one toolkit permission as this build defines it, and whether
+// the fleet has it.
+//
+// It travels for the same reason jsonVocabulary does: the toolkit is a table inside
+// the binary, and any other program that wanted to show it would have to keep a copy
+// — one that goes stale silently, offering a permission this build dropped or
+// omitting one it added. The fleet a browser is looking at is the authority.
+//
+// `have` is the field that matters. `orc bootstrap` installs the toolkit and is safe
+// to run again, so a fleet made before a permission existed simply does not have it —
+// and until something says so, the only symptom is a screen that is missing rows
+// nobody knew to expect.
+type jsonToolkitEntry struct {
+	Name     string   `json:"name"`
+	Floor    int      `json:"floor"`
+	Patterns []string `json:"patterns"`
+	Why      string   `json:"why"`
+	Have     bool     `json:"have"`
+}
+
 type jsonFleet struct {
-	Root        string           `json:"root"`
-	Operator    string           `json:"operator"`
-	Identities  []jsonIdentity   `json:"identities"`
-	Roles       []jsonRole       `json:"roles"`
-	Permissions []jsonPermission `json:"permissions"`
-	Vocabulary  jsonVocabulary   `json:"vocabulary"`
-	Problems    []string         `json:"problems,omitempty"`
+	Root        string             `json:"root"`
+	Operator    string             `json:"operator"`
+	Identities  []jsonIdentity     `json:"identities"`
+	Roles       []jsonRole         `json:"roles"`
+	Permissions []jsonPermission   `json:"permissions"`
+	Toolkit     []jsonToolkitEntry `json:"toolkit"`
+	Vocabulary  jsonVocabulary     `json:"vocabulary"`
+	Problems    []string           `json:"problems,omitempty"`
 }
 
 // vocabulary renders the two lists this build knows.
@@ -178,6 +200,12 @@ func (a App) emitFleetJSON(s caller) error {
 			HeldBy:      user.Names(s.fleet.UsesRole(r.Name())),
 		})
 	}
+	kit, err := toolkitJSON(s)
+	if err != nil {
+		return err
+	}
+	out.Toolkit = kit
+
 	for _, p := range s.fleet.Permissions() {
 		out.Permissions = append(out.Permissions, jsonPermission{
 			Name:     p.Name().String(),
@@ -187,6 +215,30 @@ func (a App) emitFleetJSON(s caller) error {
 		})
 	}
 	return a.emitJSON(out)
+}
+
+// toolkitJSON is the toolkit, with what this fleet has of it.
+func toolkitJSON(s caller) ([]jsonToolkitEntry, error) {
+	want, err := store.Toolkit()
+	if err != nil {
+		return nil, err
+	}
+	have := map[string]bool{}
+	for _, p := range s.fleet.Permissions() {
+		have[p.Name().String()] = true
+	}
+
+	out := make([]jsonToolkitEntry, 0, len(want))
+	for _, p := range want {
+		out = append(out, jsonToolkitEntry{
+			Name:     p.Name.String(),
+			Floor:    p.Floor.Int(),
+			Patterns: model.PatternStrings(p.Patterns),
+			Why:      p.Why,
+			Have:     have[p.Name.String()],
+		})
+	}
+	return out, nil
 }
 
 func (s caller) identityJSON(who user.Name) (jsonIdentity, error) {

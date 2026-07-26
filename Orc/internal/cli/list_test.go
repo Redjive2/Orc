@@ -169,3 +169,78 @@ func TestListIsAColourLayer(t *testing.T) {
 		}
 	}
 }
+
+// TestTheToolkitIsVisibleAndItsAbsencesAreNamed. A fleet made before a toolkit
+// permission existed simply does not have it — `orc bootstrap` installs it and is
+// safe to run again — but until something says so the only symptom is a list missing
+// rows nobody knew to expect. That is not a failure anybody diagnoses.
+func TestListPermissionsNamesTheMissingToolkit(t *testing.T) {
+	r := newRig(t)
+	r.bootstrap("boss")
+
+	// A bootstrapped fleet has the whole toolkit, and says which rows are its.
+	got := r.ok("boss", "list", "permissions")
+	if !strings.Contains(got.stdout, "toolkit") {
+		t.Errorf("the toolkit rows are not marked:\n%s", got.stdout)
+	}
+	if strings.Contains(got.stdout, "does not have") {
+		t.Errorf("a fresh fleet reported a missing toolkit:\n%s", got.stdout)
+	}
+
+	// Remove one, as a fleet that predates it would never have had.
+	r.ok("boss", "remove", "permission", "instruct")
+
+	got = r.ok("boss", "list", "permissions")
+	if !strings.Contains(got.stdout, "instruct") {
+		t.Errorf("the missing permission is not named:\n%s", got.stdout)
+	}
+	if !strings.Contains(squeezed(got.stdout), "orc bootstrap") {
+		t.Errorf("it does not say how to get it back:\n%s", got.stdout)
+	}
+
+	// A permission the fleet invented is not claimed by the toolkit.
+	r.ok("boss", "new", "permission", "mine", "40", "read(**)")
+	if got := r.ok("boss", "list", "permissions"); !strings.Contains(got.stdout, "yours") {
+		t.Errorf("a fleet's own permission is not distinguished:\n%s", got.stdout)
+	}
+}
+
+// The same two facts through the JSON, because that is what cq mirrors — and a
+// browser that had to keep its own copy of the toolkit would be one that goes stale
+// silently.
+func TestFleetJSONCarriesTheToolkit(t *testing.T) {
+	r := newRig(t)
+	r.bootstrap("boss")
+	r.ok("boss", "remove", "permission", "instruct")
+
+	var fleet struct {
+		Toolkit []struct {
+			Name     string   `json:"name"`
+			Floor    int      `json:"floor"`
+			Patterns []string `json:"patterns"`
+			Why      string   `json:"why"`
+			Have     bool     `json:"have"`
+		} `json:"toolkit"`
+	}
+	if err := json.Unmarshal([]byte(r.ok("boss", "status", "--json").stdout), &fleet); err != nil {
+		t.Fatal(err)
+	}
+	if len(fleet.Toolkit) == 0 {
+		t.Fatal("the fleet reported no toolkit at all")
+	}
+
+	var missing []string
+	for _, e := range fleet.Toolkit {
+		if !e.Have {
+			missing = append(missing, e.Name)
+		}
+		// Every entry carries what it would be, so a browser can show a permission
+		// the fleet does not have without inventing its definition.
+		if e.Name == "" || e.Floor == 0 || len(e.Patterns) == 0 || e.Why == "" {
+			t.Errorf("a toolkit entry is not describable: %+v", e)
+		}
+	}
+	if len(missing) != 1 || missing[0] != "instruct" {
+		t.Errorf("the absent permission is %v, want [instruct]", missing)
+	}
+}

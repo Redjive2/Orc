@@ -312,7 +312,7 @@ func TestEveryOperationIsClassified(t *testing.T) {
 				t.Errorf("%q must not be idempotent", op)
 			}
 		case protocol.OpOrcAssignRole, protocol.OpOrcAssignAuthority, protocol.OpOrcAssignPerm,
-			protocol.OpOrcMove, protocol.OpOrcBudget, protocol.OpOrcTend,
+			protocol.OpOrcMove, protocol.OpOrcBudget, protocol.OpOrcTend, protocol.OpOrcToolkit,
 			protocol.OpOrcFire, protocol.OpOrcRevoke, protocol.OpOrcEditPermission,
 			protocol.OpOrcInstructSet, protocol.OpOrcInstructClear:
 			// Each sets a state to what was asked for, so a repeat lands in the
@@ -322,7 +322,9 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			// journaling a second amendment.
 			//
 			// A prompt is a value too: setting a layer to what it already says
-			// lands in the same place, and clearing one twice is cleared.
+			// lands in the same place, and clearing one twice is cleared. And the
+			// toolkit is `orc bootstrap`, which is documented as safe to run twice
+			// precisely because it creates only what is not there.
 			if !op.Idempotent() {
 				t.Errorf("%q should be idempotent", op)
 			}

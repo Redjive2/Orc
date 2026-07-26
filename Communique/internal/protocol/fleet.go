@@ -44,12 +44,21 @@ type FleetPrompt struct {
 }
 
 type Fleet struct {
-	Root        string          `json:"root"`
-	Operator    string          `json:"operator"`
-	Identities  []FleetID       `json:"identities,omitempty"`
-	Roles       []FleetRole     `json:"roles,omitempty"`
-	Permissions []FleetPerm     `json:"permissions,omitempty"`
-	Vocabulary  FleetVocabulary `json:"vocabulary,omitzero"`
+	Root        string      `json:"root"`
+	Operator    string      `json:"operator"`
+	Identities  []FleetID   `json:"identities,omitempty"`
+	Roles       []FleetRole `json:"roles,omitempty"`
+	Permissions []FleetPerm `json:"permissions,omitempty"`
+	// Toolkit is the set of permissions every fleet is made with, as the agent
+	// machine's orc defines them, and whether this fleet has each one.
+	//
+	// It travels for the same reason the vocabulary does: the toolkit is a table
+	// inside orc's binary, and a browser keeping its own copy is one that goes
+	// stale silently. It matters because a fleet made before a toolkit permission
+	// existed simply does not have it, and the only symptom is a list missing rows
+	// nobody knew to expect.
+	Toolkit    []FleetToolkit  `json:"toolkit,omitempty"`
+	Vocabulary FleetVocabulary `json:"vocabulary,omitzero"`
 	// Prompts are the standing instructions agents run under: the fleet's layer,
 	// each role's, each identity's, and every wake message. The text travels with
 	// them because the tab is an editor rather than a listing, and one that had to
@@ -133,6 +142,20 @@ type FleetPerm struct {
 	Name     string   `json:"name"`
 	Floor    int      `json:"floor"`
 	Patterns []string `json:"patterns,omitempty"`
+}
+
+// FleetToolkit is one permission from the toolkit, and whether the fleet has it.
+//
+// The definition travels even when the fleet has it, so a browser can show what a
+// missing one *would* be rather than naming an absence it cannot describe. Where the
+// fleet has a permission of that name, what it actually contains is in Permissions —
+// orc never rewrites one, so a fleet that redefined `upgrade` keeps its own.
+type FleetToolkit struct {
+	Name     string   `json:"name"`
+	Floor    int      `json:"floor"`
+	Patterns []string `json:"patterns,omitempty"`
+	Why      string   `json:"why,omitempty"`
+	Have     bool     `json:"have"`
 }
 
 // FleetWord is one word a clause may name: an orc verb, or a capability in
@@ -263,6 +286,17 @@ const (
 	OpOrcInstructSet   Op = "orc.instruct.set"   // orc instruct <target> --set -
 	OpOrcInstructClear Op = "orc.instruct.clear" // orc instruct <target> --clear
 	OpOrcTend          Op = "orc.tend"           // orc tend
+	// OpOrcToolkit installs the permissions every fleet is made with, on a fleet
+	// that does not have all of them.
+	//
+	// `orc bootstrap` is the command, because that is where the toolkit is
+	// installed and it is documented as safe to run again: an existing permission
+	// of the same name is left exactly as it is, so a fleet that redefined one
+	// keeps its own. It is here rather than as twelve queued `new permission`
+	// actions because that is twelve chances to get one of them wrong, and
+	// because orc's own table is the definition — cq repeating it would be a copy
+	// that goes stale.
+	OpOrcToolkit Op = "orc.toolkit" // orc bootstrap --as <operator>
 )
 
 // OpUpgrade rebuilds and restarts every Orc tool on the machine it reaches.
@@ -284,7 +318,7 @@ var FleetOps = []Op{
 	OpOrcRemoveIdentity, OpOrcRemoveRole, OpOrcRemovePerm,
 	OpOrcGrant, OpOrcRevoke, OpOrcMove,
 	OpOrcEmploy, OpOrcFire, OpOrcBudget,
-	OpOrcPoke, OpOrcRefresh, OpOrcTend, OpOrcWorkspace,
+	OpOrcPoke, OpOrcRefresh, OpOrcTend, OpOrcToolkit, OpOrcWorkspace,
 	OpOrcInstructSet, OpOrcInstructClear,
 }
 
@@ -317,6 +351,9 @@ var fleetRules = map[Op]argRule{
 	OpOrcPoke:       {identity: true, optMessage: true},
 	OpOrcRefresh:    {identity: true},
 	OpOrcTend:       {},
+	// The operator's name, so the action does not depend on which OS user the
+	// sync happens to run as.
+	OpOrcToolkit: {identity: true},
 	// `from` is required, not optional: a client that cannot say what it was
 	// looking at is a client that cannot be protected from acting on a stale view.
 	OpOrcWorkspace: {identity: true, workspace: true, from: true, optAdopt: true},

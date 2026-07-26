@@ -49,6 +49,7 @@ func TestEveryFleetVerbQueues(t *testing.T) {
 		protocol.OpOrcTend:       {"POST", "/api/v1/fleet/tend", `{` + m + `}`},
 		// `from` is part of the request rather than optional: the route refuses a
 		// move that cannot say what the browser was looking at.
+		protocol.OpOrcToolkit: {"POST", "/api/v1/fleet/toolkit", `{` + m + `,"name":"boss"}`},
 		protocol.OpOrcInstructSet: {"PUT", "/api/v1/instruct/identities/atlas",
 			`{` + m + `,"text":"you write the parser"}`},
 		protocol.OpOrcInstructClear: {"DELETE", "/api/v1/instruct/system", `{` + m + `}`},

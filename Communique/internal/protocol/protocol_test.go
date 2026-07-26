@@ -308,6 +308,7 @@ func TestActionArgumentRules(t *testing.T) {
 		protocol.OpOrcInstructSet:     {Prompt: "identity", PromptName: "atlas", Text: "you write the parser"},
 		protocol.OpOrcInstructClear:   {Prompt: "system"},
 		protocol.OpOrcTend:            {},
+		protocol.OpOrcToolkit:         {Identity: "boss"},
 		protocol.OpUpgrade:            {},
 	}
 

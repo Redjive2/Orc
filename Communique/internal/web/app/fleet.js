@@ -215,8 +215,48 @@ export function permissionList(state, actions) {
     h("div", { class: "body" },
       actions ? h("div", { class: "controls" },
         h("button", { onclick: () => actions.newPermission(f) }, "new permission…")) : null,
+      ...missingToolkit(f, actions),
       ...permissions(f, actions)),
   ]);
+}
+
+// missingToolkit is the permissions every fleet is made with that this one has not
+// got.
+//
+// It is here because their absence is otherwise invisible. `orc bootstrap` installs
+// the toolkit and is safe to run again, so a fleet made before one of them existed
+// simply does not have it — and the only symptom is a list missing rows nobody knew
+// to expect. A screen that shows what exists can never show that.
+//
+// Each is named with what it would be, because "you are missing eleven permissions"
+// is not something anybody can act on, and because the decision to install them is
+// one somebody should make having read what they are.
+function missingToolkit(f, actions) {
+  const absent = (f.toolkit || []).filter((t) => !t.have);
+  if (absent.length === 0) return [];
+
+  return [
+    h("div", { class: "agent pending" },
+      h("div", { class: "agent-head" },
+        h("strong", {}, `${absent.length} of the toolkit ${absent.length === 1 ? "is" : "are"} not in this fleet`),
+        h("span", { class: "muted" }, "every fleet is made with these"),
+      ),
+      h("p", { class: "muted" },
+        "a fleet made before one of them existed simply does not have it; installing them adds what is missing and changes nothing else"),
+      ...absent.map((t) => h("div", { class: "agent" },
+        h("div", { class: "agent-head" },
+          h("span", { class: "name" }, t.name),
+          h("span", { class: "muted" }, `floor ${t.floor}`),
+          h("span", { class: "muted" }, t.why || ""),
+        ),
+        h("div", { class: "clauses" },
+          ...(t.patterns || []).map((c) => clause.chip(c, f.vocabulary))),
+      )),
+      actions ? h("div", { class: "controls" },
+        h("button", { onclick: () => actions.installToolkit(f, absent) },
+          `install the ${absent.length === 1 ? "missing one" : "missing ones"}`)) : null,
+    ),
+  ];
 }
 
 // identities are drawn in tree order with an indent, because who works for whom
@@ -343,11 +383,18 @@ function permissions(f, actions) {
     }
   }
 
+  // Which names belong to the toolkit. A row is marked by name alone, because that
+  // is what orc treats as "the fleet has this one" — it never rewrites a permission,
+  // so a fleet that redefined `upgrade` keeps its own clauses under the same name,
+  // and the clauses beside the mark are the fleet's real ones either way.
+  const builtin = new Set((f.toolkit || []).map((t) => t.name));
+
   return list.map((p) => {
     const held = holders.get(p.name) || [];
     return h("div", { class: "agent" },
       h("div", { class: "agent-head" },
         h("span", { class: "name" }, p.name),
+        h("span", { class: "muted" }, builtin.has(p.name) ? "toolkit" : "yours"),
         h("span", { class: "muted" }, `floor ${p.floor}`),
         h("span", { class: held.length ? "muted" : "pending" },
           held.length ? `held by ${held.join(", ")}` : "held by nothing"),
