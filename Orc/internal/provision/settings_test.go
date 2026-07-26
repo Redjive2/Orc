@@ -123,8 +123,12 @@ func TestCompiledRules(t *testing.T) {
 		"Agent",
 		"Read(" + s.Root() + "/identities/*/key)",
 		"Read(" + s.Root() + "/identities/*/session/**)",
-		"Write(" + s.Root() + "/roles/**)",
-		"Write(" + s.Root() + "/identities/*/claude/settings.json)",
+		// `Edit`, not `Write`. Claude matches deny rules for file edits against
+		// `Edit(path)` only, and an Edit rule covers every file-editing tool — so a
+		// `Write(path)` deny rule is not a second fence, it is one that matches
+		// nothing, and Claude warns about each one on stderr at every session start.
+		"Edit(" + s.Root() + "/roles/**)",
+		"Edit(" + s.Root() + "/identities/*/claude/settings.json)",
 	} {
 		if !strings.Contains(deny, want) {
 			t.Errorf("the deny list is missing %s:\n%s", want, deny)

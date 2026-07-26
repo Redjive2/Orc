@@ -102,10 +102,11 @@ func WriteSettings(s *store.Store, name user.Name, spec SettingsSpec) error {
 	}
 	perms["allow"] = allowRules(spec)
 	perms["deny"] = denyRules(spec)
-	// The command line carries `--permission-mode bypassPermissions` too, and that is
-	// the authoritative one: a documented flag beats a settings key nobody has
-	// verified. This is here so the file describes the session it configures.
-	perms["defaultMode"] = "bypassPermissions"
+	// The command line carries `--permission-mode` too — see the supervisor's Args,
+	// which passes this same value. A documented flag beats a settings key nobody
+	// has verified; this is here so the file describes the session it configures
+	// rather than disagreeing with it.
+	perms["defaultMode"] = Mode()
 
 	existing["permissions"] = perms
 	existing["hooks"] = hookRules()
@@ -196,6 +197,46 @@ var Protected = []string{
 	"lock",
 }
 
+// EnvMode names the permission mode a session runs under.
+const EnvMode = "ORC_PERMISSION_MODE"
+
+// DefaultMode is what a fleet runs under unless it says otherwise.
+const DefaultMode = "bypassPermissions"
+
+// Mode is the permission mode sessions start in.
+//
+// Configurable because of a screen: `bypassPermissions` makes Claude open on a
+// full-page warning — "By proceeding, you accept all responsibility" — that has to
+// be answered from a keyboard. On an unattended fleet that means every new agent
+// waits at a wall nobody is looking at, and hiring somebody means attaching to it.
+//
+// `dontAsk` starts at the prompt with no such screen; that much is verified, by
+// running Claude against a scratch configuration and watching what came up. What is
+// **not** verified is how it treats a tool call that no allow rule covers — whether
+// it proceeds like bypass or refuses — and that is the difference between a fleet
+// that works and a fleet whose agents are silently refused. Testing it needs a live
+// credential and a model turn.
+//
+// So the default does not move, and the choice is the operator's, made once:
+//
+//	export ORC_PERMISSION_MODE=dontAsk
+//
+// The modes Claude accepts are acceptEdits, auto, bypassPermissions, manual,
+// dontAsk, and plan. An unrecognised one is refused here rather than at session
+// start, where the failure would be a child that exits before it draws anything.
+func Mode() string {
+	got := strings.TrimSpace(os.Getenv(EnvMode))
+	if got == "" {
+		return DefaultMode
+	}
+	for _, known := range []string{"acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"} {
+		if got == known {
+			return got
+		}
+	}
+	return DefaultMode
+}
+
 // denyRules are the refusals that do not come from a clause.
 //
 // Every one of them is also enforced by the hook, because a rule that might be ignored
@@ -215,10 +256,21 @@ func denyRules(spec SettingsSpec) []string {
 		if root != "" {
 			full = root + "/" + glob
 		}
+		// `Edit` alone on the deny side, not `Edit` and `Write` both.
+		//
+		// Claude checks deny rules for file edits against `Edit(path)` only, and an
+		// `Edit` rule covers every file-editing tool — Write and NotebookEdit
+		// included. A `Write(path)` deny rule is therefore not a second fence; it is
+		// a rule that matches nothing, and Claude says so on stderr at every start,
+		// once per protected glob. A dozen warnings across an agent's opening screen
+		// is how somebody learns to stop reading them.
+		//
+		// The allow side keeps both, because there the tools are named individually
+		// and a clause that permitted editing but not writing would allow changing a
+		// file and refuse creating one.
 		out = append(out,
 			"Read("+full+")",
 			"Edit("+full+")",
-			"Write("+full+")",
 		)
 	}
 	return tidy(out)

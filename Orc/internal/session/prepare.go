@@ -47,9 +47,25 @@ func Prepare(s *store.Store, name user.Name, id string) error {
 		return err
 	}
 
+	workspace := s.WorkspaceDir(name)
+
+	// Past Claude's first-run wizard, before the session opens on it.
+	//
+	// Here rather than at `orc new identity`, because the wizard's second screen is
+	// about the *workspace* and a workspace can move: seeding at hire time would
+	// trust a directory the session may no longer start in. This runs once per
+	// session, which is exactly when the answer is known.
+	//
+	// Not fatal. A session that starts on a wizard is a session somebody has to
+	// attach to — which is the state this whole thing is fixing, and still better
+	// than refusing to start at all.
+	if _, err := provision.SeedIdentity(s, name, workspace); err != nil {
+		return err
+	}
+
 	return provision.WriteSettings(s, name, provision.SettingsSpec{
 		Clauses:   clauses,
 		OrcHome:   s.Root(),
-		Workspace: s.WorkspaceDir(name),
+		Workspace: workspace,
 	})
 }

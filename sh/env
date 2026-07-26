@@ -59,6 +59,7 @@ settings=(
 
 	"orc|ORC_HOME|optional||the fleet's store (default \$XDG_DATA_HOME/orc, else ~/.orc)"
 	"orc|ORC_CLAUDE_BIN|optional||the binary a session runs (default: claude)"
+	"orc|ORC_PERMISSION_MODE|optional||the mode sessions start in; dontAsk skips the bypass warning screen"
 	"orc|ORC_SESSION_BIN|optional||the binary a session spawns, for tests and odd installs"
 	"orc|ORC_IDENTITY|session||orc sets it inside a session: whose session this is"
 	"orc|ORC_SESSION|session||orc sets it inside a session: which session this is"

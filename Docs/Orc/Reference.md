@@ -144,6 +144,23 @@ Orc sets the first two for every session it populates. That is the same
 credential contract every other Orc tool reads, so an agent Orc started needs no
 further setup to use `mailman`, `muff`, `anno`, or `dock`.
 
+### Starting without a person
+
+Every identity gets its own `CLAUDE_CONFIG_DIR`, which used to mean every new
+agent's first session opened on Claude's first-run wizard — theme picker, then
+the trust prompt — and hiring somebody meant attaching to click through it. Orc
+now seeds `.claude.json` when it prepares a session: `hasCompletedOnboarding`,
+and `hasTrustDialogAccepted` for the workspace that session will start in. It
+**merges** rather than overwrites, since Claude keeps the agent's own history in
+that file.
+
+The third screen is the `bypassPermissions` acceptance warning, which cannot be
+seeded and has to be answered from a keyboard. `ORC_PERMISSION_MODE` chooses the
+mode instead: `dontAsk` starts at the prompt with no warning. It is not the
+default, because how `dontAsk` treats a tool call no allow rule covers is
+unverified, and the difference between "proceeds" and "silently refused" is the
+difference between a working fleet and a stuck one.
+
 ### The toolkit
 
 Every fleet is made with these. A fresh fleet used to have no permissions at all,

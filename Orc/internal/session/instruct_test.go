@@ -147,7 +147,7 @@ func TestABrokenPromptDoesNotStopTheSession(t *testing.T) {
 		}
 	}
 	// And the session is still a session.
-	if len(args) == 0 || args[0] != "--session-id" {
+	if !strings.Contains(strings.Join(args, " "), "--session-id") {
 		t.Errorf("the session lost its arguments with its prompt: %v", args)
 	}
 }
@@ -192,5 +192,41 @@ func TestComposeRefusesAnIdentityItCannotRead(t *testing.T) {
 
 	if _, err := session.ComposeFor(s, stranger); err == nil {
 		t.Error("composing for an identity that does not exist did not say so")
+	}
+}
+
+// TestARestartIsResumedNotReMinted.
+//
+// `--session-id` mints a session with an id Orc chose; `--resume` continues one that
+// exists. Passing both is refused at argument parsing — so the child died instantly,
+// the supervisor restarted it, and it died again until the restart budget was spent.
+// From outside that is an agent that will not start, with the reason visible only by
+// attaching to it, which is the thing an unattended fleet cannot do.
+func TestResumeAndSessionIDAreNeverBothPassed(t *testing.T) {
+	s, who := fleet(t, "ember")
+
+	fresh := supervisorFor(t, s, who).Args()
+	joined := strings.Join(fresh, " ")
+	if !strings.Contains(joined, "--session-id") {
+		t.Errorf("a new session does not mint an id: %v", fresh)
+	}
+	if strings.Contains(joined, "--resume") {
+		t.Errorf("a new session tried to resume: %v", fresh)
+	}
+
+	sup, err := session.New(s, session.Spec{
+		Identity: who, ID: "0000000a-00000001", Resume: true,
+		Model: model.ModelSonnet, Effort: model.EffortMedium,
+	}, nil, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed := sup.Args()
+	joined = strings.Join(resumed, " ")
+	if !strings.Contains(joined, "--resume") {
+		t.Errorf("a restart does not resume: %v", resumed)
+	}
+	if strings.Contains(joined, "--session-id") {
+		t.Errorf("a restart passed both, which claude refuses outright: %v", resumed)
 	}
 }

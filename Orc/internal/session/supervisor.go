@@ -36,6 +36,7 @@ import (
 	"orc/orc/internal/instruct"
 	"orc/orc/internal/model"
 	"orc/orc/internal/proc"
+	"orc/orc/internal/provision"
 	"orc/orc/internal/pty"
 	"orc/orc/internal/store"
 )
@@ -169,10 +170,31 @@ func New(s *store.Store, spec Spec, env []string, bin string) (*Supervisor, erro
 // so an attach is labelled. `--resume` appears only on a restart.
 func (s *Supervisor) Args() []string {
 	args := []string{
-		"--session-id", s.spec.ID,
 		"--model", s.spec.Model.String(),
 		"--effort", s.spec.Effort.String(),
 		"--name", s.spec.Identity.String(),
+		// The permission mode, on the command line as well as in the compiled
+		// settings. The settings comment claimed this was here and it was not — a
+		// documented flag beats a settings key, and the two agreeing is what makes
+		// the file a description of the session rather than a guess at one.
+		"--permission-mode", provision.Mode(),
+	}
+	// One or the other, never both. `--session-id` *mints* a session with an id
+	// Orc chose; `--resume` continues one that exists. Passing both is refused
+	// outright — "--session-id can only be used with --continue or --resume if
+	// --fork-session is also specified" — and a refusal at argument parsing means
+	// the child dies instantly, the supervisor restarts it, and it dies again,
+	// until the restart budget is spent. From outside that looks like an agent
+	// that will not start, with the reason only visible by attaching.
+	//
+	// Not `--fork-session`, which is the other way to make the combination legal:
+	// it mints a *new* id, and the id is what Orc records, what a session-scoped
+	// grant is tied to, and what the next restart resumes. Orc would lose track of
+	// the session it is supervising.
+	if s.spec.Resume {
+		args = append(args, "--resume", s.spec.ID)
+	} else {
+		args = append(args, "--session-id", s.spec.ID)
 	}
 	if s.prompt != "" {
 		// `--append-system-prompt` rather than `--system-prompt`: appending leaves
@@ -180,9 +202,6 @@ func (s *Supervisor) Args() []string {
 		// them would mean Orc taking responsibility for everything an agent knows
 		// about how to be one.
 		args = append(args, "--append-system-prompt", s.prompt)
-	}
-	if s.spec.Resume {
-		args = append(args, "--resume", s.spec.ID)
 	}
 	return args
 }
