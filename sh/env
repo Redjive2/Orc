@@ -43,6 +43,7 @@ fi
 #   optional  has a sensible default
 #   probe     orcprobe sets it; you never set it by hand
 #   session   orc sets it inside a session; you never set it by hand
+#   internal  a tool sets it on a process it started; you never set it by hand
 #   ambient   the terminal or the OS sets it
 settings=(
 	"identity|ORC_USER|required||the mailbox to act as; mailman and muff check it on every command"
@@ -73,8 +74,11 @@ settings=(
 	"cq|CQ_STATE|optional||the server's state directory, for cq serve"
 	"cq|CQ_PASSWORD|optional|secret|the operator password, for cq admin operator"
 	"cq|CQ_LIBRARY|optional||a repository to mirror for reading"
-	"cq|CQ_BIN|optional||what to run when a nudge spawns cq (default: cq)"
+	"cq|CQ_SOURCE|optional||the checkout cq upgrade pulls and builds"
+	"cq|CQ_BIN|optional||the cq to spawn on a nudge, and where cq upgrade installs"
+	"cq|ORC|optional||the orc cq runs for fleet work (default: orc, on the path)"
 	"cq|ORC_NO_NUDGE|optional||set to stop mailman and muff spawning cq sync"
+	"cq|CQ_SUPERVISED|internal||cq serve sets it on its child, so it serves rather than supervising"
 
 	"orcprobe|ORCPROBE_HOME|optional||where probes live (default ~/.orcprobe)"
 	"orcprobe|ORCPROBE_ACTIVE|probe||the probe this shell is inside; the tools' guard keys off it"
@@ -136,7 +140,7 @@ check() {
 			required)
 				printf '  %s%-18s%s %sunset%s %s— %s%s\n' "$red" "$name" "$off" "$red" "$off" "$dim" "$what" "$off"
 				missing=$((missing + 1)) ;;
-			probe | session)
+			probe | session | internal)
 				printf '  %s%-18s%s %sunset%s %s— %s%s\n' "$blue" "$name" "$off" "$dim" "$off" "$dim" "$what" "$off" ;;
 			*)
 				printf '  %s%-18s%s %sunset%s %s— %s%s\n' "$dim" "$name" "$off" "$dim" "$off" "$dim" "$what" "$off" ;;
@@ -254,6 +258,17 @@ emit_auto() {
 		printf '%s·%s no orc binary in %s — run %ssh/build%s\n' "$dim" "$off" "$bin" "$bold" "$off" >&2
 	fi
 
+	# The checkout `cq upgrade` builds from is the one this script is in. It is set
+	# whether or not cq is configured, because `cq upgrade` runs on the machine with
+	# the source and that machine is not always the one that syncs — and because a
+	# server told to rebuild with no checkout refuses, which is the right answer to
+	# the wrong question when the tree is right here.
+	if [[ -f "$root/go.work" ]]; then
+		printf 'export CQ_SOURCE=%q\n' "$root"
+	else
+		printf '%s·%s %s does not look like the checkout; CQ_SOURCE left alone\n' "$dim" "$off" "$root" >&2
+	fi
+
 	# cq mirrors one mailbox, and it is this one. Only worth setting when a server is
 	# configured: without one, nothing nudges and the variables are noise.
 	if [[ -n "${CQ_SERVER:-}" ]]; then
@@ -311,6 +326,8 @@ emit_template() {
 			printf '# %-18s %s (orcprobe sets this; never set it by hand)\n' "$name" "$what" ;;
 		session)
 			printf '# %-18s %s (orc sets this; never set it by hand)\n' "$name" "$what" ;;
+		internal)
+			printf '# %-18s %s (a tool sets this on a process it started)\n' "$name" "$what" ;;
 		ambient)
 			printf '# %-18s %s (your terminal sets this)\n' "$name" "$what" ;;
 		required)
