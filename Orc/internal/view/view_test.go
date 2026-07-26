@@ -116,6 +116,36 @@ func TestWaitingIsDerived(t *testing.T) {
 	}
 }
 
+// TestAFreshSessionIsWaiting. A session that has started and been asked nothing is
+// sitting at an empty prompt, which is the same fact about the same session as a
+// Stop — it simply has not had a turn to end. Reading it as working is what made
+// every restarted agent invisible to `orc wake`.
+func TestWaitingCoversAFreshSession(t *testing.T) {
+	name := agent(t, "ember")
+
+	fresh := []event.Event{
+		{At: "2026-07-25T14:00:00.000Z", Name: "SessionEnd"},
+		{At: "2026-07-25T14:00:02.000Z", Name: "SessionStart"},
+	}
+	got, err := view.Fold(name, fresh, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Waiting {
+		t.Error("a session at a fresh prompt is waiting to be spoken to")
+	}
+
+	// A child that has gone is not waiting for anybody: nothing can be typed at it,
+	// and it is `orc tend`'s to bring back.
+	got, err = view.Fold(name, fresh[:1], 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Waiting {
+		t.Error("a session that has ended is not waiting")
+	}
+}
+
 // TestAnUnknownEventIsStillShown. A session doing something this build has no name
 // for is exactly what an operator wants to see, and refusing to draw it would make
 // every Claude release an outage of the view.

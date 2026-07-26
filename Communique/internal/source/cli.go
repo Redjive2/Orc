@@ -53,6 +53,11 @@ type CLI struct {
 	// of the filesystem they may touch. Empty means this machine mirrors no
 	// repository and every edit is refused.
 	LibraryRoot string
+	// Home is the agent's own directory: its journal, its cursor, and the settings
+	// an operator has chosen from the website. Needed to *change* the library
+	// root, which is recorded there rather than in the environment — see
+	// applyLibraryRoot. Empty means that action refuses and nothing else notices.
+	Home string
 	// Key is the mirrored account's Orc credential.
 	//
 	// When it is set, cq authenticates to Mailman as User itself rather than as
@@ -480,6 +485,9 @@ func (c *CLI) Apply(ctx context.Context, action protocol.Action) error {
 	}
 	if action.Op == protocol.OpUpgrade {
 		return c.upgrade(ctx)
+	}
+	if action.Op == protocol.OpLibraryRoot {
+		return c.applyLibraryRoot(action)
 	}
 
 	var args []string

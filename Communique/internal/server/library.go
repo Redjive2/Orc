@@ -31,9 +31,15 @@ type treeEntry struct {
 }
 
 type treeView struct {
-	Root      string      `json:"root"`
-	Files     []treeEntry `json:"files"`
-	Truncated string      `json:"truncated,omitempty"`
+	Root string `json:"root"`
+	// Roots is the same fact per machine, because Root is not one fact when there
+	// is more than one mirror: it holds whichever machine answered first, which is
+	// fine for a heading and wrong for anything that acts on a directory. Moving
+	// the checkout is per machine, so the screen that offers it needs to know
+	// which root belongs to which.
+	Roots     map[string]string `json:"roots,omitempty"`
+	Files     []treeEntry       `json:"files"`
+	Truncated string            `json:"truncated,omitempty"`
 	// Notes say what went wrong collecting this, in the reader's terms. Without
 	// them an uninstalled `dock` looks exactly like a repository whose documents
 	// have no sections, which is a claim about the operator's files rather than
@@ -50,7 +56,7 @@ func (s *Server) library(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	view := treeView{Files: []treeEntry{}}
+	view := treeView{Files: []treeEntry{}, Roots: map[string]string{}}
 	for _, id := range ids {
 		snap, _, err := s.snapshot(id)
 		if err != nil {
@@ -61,6 +67,7 @@ func (s *Server) library(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		view.Machines = append(view.Machines, string(id))
+		view.Roots[string(id)] = snap.Library.Root
 		if view.Root == "" {
 			view.Root = snap.Library.Root
 		}
@@ -192,4 +199,22 @@ func (s *Server) removeDir(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) removeTree(w http.ResponseWriter, r *http.Request) {
 	s.edit(w, r, protocol.OpRemoveTree)
+}
+
+// setLibraryRoot moves the directory a machine mirrors.
+//
+// It is the only library route that queues rather than answering from the
+// mirror, and the only one whose subject is the checkout rather than something
+// inside it — so it reuses fleetAction, which is where "decode a body, name a
+// machine, enqueue" already lives, despite not being a fleet verb.
+//
+// Nothing is validated here beyond the shape. Whether the directory exists,
+// whether it is a directory at all, and whether it swallows the fleet's keys are
+// questions only the machine can answer, and it answers them when it applies the
+// action — see source.checkLibraryRoot. A server that guessed would be guessing
+// about a filesystem it cannot see.
+func (s *Server) setLibraryRoot(w http.ResponseWriter, r *http.Request) {
+	s.fleetAction(w, r, protocol.OpLibraryRoot, func(b fleetBody, a *protocol.Args) {
+		a.Workspace = b.Workspace
+	})
 }

@@ -379,8 +379,13 @@ func (a App) sayInstructed(s caller, t store.Target, verb string, size int) erro
 		// exists, and the next wake uses it.
 		return a.say("  " + a.out.Muted("the next wake will use it"))
 	}
-	return a.say("  " + a.out.Muted("sessions already running keep the instructions they started with; "+
-		"`orc refresh <identity>` gives one the new ones"))
+	// Accurate about both halves. A conversation in progress is unaffected — its
+	// system prompt was fixed when the process started — but the next start of that
+	// same session carries this, so a restart applies it without anybody asking.
+	// Saying only "refresh" implied the edit sat inert until somebody did, which
+	// sent people looking for a delivery problem that was really a timing one.
+	return a.say("  " + a.out.Muted("a running session keeps what it started with until it restarts; "+
+		"`orc refresh <identity>` applies it now, and `orc status <identity>` says what one was started with"))
 }
 
 // instructShow is the composed prompt, exactly as an agent gets it.

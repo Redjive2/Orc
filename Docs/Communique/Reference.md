@@ -252,6 +252,29 @@ The project is stored at `Orc/Communique/go.mod`.
 `cq sync`, not the one serving the site. `cq status` there says whether it is
 set, which is the first thing to check when the tabs are empty.
 
+### Moving it
+
+**project › location** shows the mirrored checkout above that machine's agents,
+and offers to move it. The change queues like everything else, and the machine
+applies it on its next sync — so a mirror syncing every five minutes takes up to
+five minutes to hear about it, and one syncing hourly takes an hour.
+
+The choice is recorded in `settings.json` in the agent's home, beside the journal
+and the cursor, and is read again **between rounds**. That is what makes it work
+at all: a watcher's environment is fixed when it launches, so exporting
+`CQ_LIBRARY` in a shell afterwards reaches nothing that is already running.
+
+Three answers, in order: a `--library` typed on the command line, the choice
+recorded from the website, then `$CQ_LIBRARY`. A typed flag wins for that run and
+also stops the re-reading, so one run means one directory throughout.
+
+The machine decides whether to accept the path, because it is the only end that
+can see the filesystem. It refuses one that is not there, one that is a file, and
+one that is — contains, or sits inside — either the fleet's home or cq's own. The
+last of those is the one that matters: everything under the library root is
+mirrored to the site and writable from it, so a root that swallowed `$ORC_HOME`
+would put every agent's key on a web page.
+
 `CQ_LIBRARY` points at a checkout on the agent machine. Its documents and source
 are mirrored with the mailbox, and the site gains two tabs: **docs**, the files
 Dock found `§` sections in, and **code**, everything else.

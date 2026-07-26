@@ -1,6 +1,8 @@
 package session
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -120,6 +122,18 @@ func Populate(s *store.Store, name user.Name, id string, m model.Model, e model.
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	// The log says why, so say it rather than pointing at a file.
+	//
+	// A supervisor that dies on startup — refused the session lock, no pty, a
+	// `claude` that is not there — writes its reason and exits in milliseconds, and
+	// the caller then waits out the whole deadline and reports a timeout. The
+	// timeout is true and it is not the fault: "already has a supervisor" is, and it
+	// was on disk the entire time somebody was reading "did not come up".
+	if why := lastReason(s, name, id); why != "" {
+		return fault.Unavailable{Peer: name.String(), Err: fmt.Errorf(
+			"the session did not come up within %s: %s (%s has the rest)",
+			PopulateWait, why, s.SessionLogPath(name))}
+	}
 	return fault.Unavailable{Peer: name.String(), Err: fmt.Errorf(
 		"the session did not come up within %s; %s says why", PopulateWait, s.SessionLogPath(name))}
 }
@@ -157,13 +171,73 @@ func Depopulate(s *store.Store, name user.Name) error {
 		return err
 	}
 
+	// Waiting for the *lock*, not only for the state file.
+	//
+	// The supervisor removes its state on the way out and releases the session lock
+	// after that, so a caller that stopped at "the file is gone" would start a
+	// replacement while the old one still held the lock. The replacement is refused
+	// it — one session per identity — and dies, leaving the identity employed with
+	// nothing running. That is `orc refresh` appearing to end a session without
+	// starting one, and being a race it happens on a busy machine rather than on the
+	// one it was tested on.
+	//
+	// Taking the lock and letting it go again is the honest end condition, because
+	// it is the very thing the replacement needs and cannot get. It says nothing
+	// about *how* the supervisor went — process, goroutine, killed, or finished — and
+	// asks only whether it has let go.
 	deadline := time.Now().Add(GraceStop + 2*time.Second)
 	for time.Now().Before(deadline) {
-		if _, live, err := s.Session(name); err == nil && !live {
+		if _, live, err := s.Session(name); err == nil && !live && free(s, name) {
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	return fault.Unavailable{Peer: name.String(), Err: fmt.Errorf(
 		"the supervisor did not stop within %s", GraceStop+2*time.Second)}
+}
+
+// lastReason reads the newest thing the session log has to say about this session.
+//
+// Best effort by design: this runs on a path that is already reporting a failure,
+// so a log that will not read costs the detail and never replaces the diagnosis
+// with a complaint about the diagnosis.
+func lastReason(s *store.Store, name user.Name, id string) string {
+	data, err := os.ReadFile(s.SessionLogPath(name))
+	if err != nil {
+		return ""
+	}
+	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		var ev store.SessionEvent
+		if err := json.Unmarshal(lines[i], &ev); err != nil {
+			continue
+		}
+		// This session's own lines, or the ones written before an id was known:
+		// a supervisor refused the lock never gets as far as naming a session.
+		if ev.ID != "" && ev.ID != id {
+			continue
+		}
+		switch ev.Op {
+		case "exit", "gave-up", "failed", "prepare", "cleanup":
+			if ev.Detail != "" {
+				return ev.Detail
+			}
+		}
+	}
+	return ""
+}
+
+// free reports whether the session lock is nobody's.
+//
+// Taking it and releasing it immediately: this is a test, not a claim, and holding
+// it any longer would be Depopulate standing in the way of the replacement it exists
+// to make room for. An error is read as "not free" — a lock that cannot be taken is
+// not one to start a session against.
+func free(s *store.Store, name user.Name) bool {
+	release, held, err := s.HoldSession(name)
+	if err != nil || !held {
+		return false
+	}
+	release()
+	return true
 }

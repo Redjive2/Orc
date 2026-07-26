@@ -312,6 +312,7 @@ func TestActionArgumentRules(t *testing.T) {
 		protocol.OpOrcTend:            {},
 		protocol.OpOrcToolkit:         {Identity: "boss"},
 		protocol.OpUpgrade:            {},
+		protocol.OpLibraryRoot:        {Workspace: "/srv/checkouts/Orc"},
 	}
 
 	// The optional operands, which the loop above cannot cover because it takes
@@ -721,5 +722,46 @@ func TestADescriptionWithControlCharactersIsRefused(t *testing.T) {
 	}
 	if err := action.Validate(); err == nil {
 		t.Error("an escape sequence was queued into a description")
+	}
+}
+
+// An absolute path is absolute where it is *going*, not where it was written.
+//
+// The server validates actions for machines it is not running on. A cq server on
+// Linux queueing work for a Windows agent has to accept `C:\srv\Orc`, and one on
+// Windows has to accept `/srv/Orc` — neither host's own path rules can be the
+// judge, because the host is the wrong machine.
+func TestAWorkspaceIsAbsoluteOnItsOwnMachine(t *testing.T) {
+	action := func(where string) protocol.Action {
+		return protocol.Action{
+			ID: protocol.ActionID(strings.Repeat("e", 32)), Seq: 1, Machine: "studio",
+			Op: protocol.OpLibraryRoot, Args: protocol.Args{Workspace: where}, Queued: at,
+		}
+	}
+
+	for _, where := range []string{
+		"/srv/checkouts/Orc",
+		`C:\Users\redba\Orc`,
+		"C:/Users/redba/Orc",
+		`c:\orc`,
+		`\\build\share\Orc`,
+	} {
+		if err := action(where).Validate(); err != nil {
+			t.Errorf("%q is absolute on some machine and was refused: %v", where, err)
+		}
+	}
+
+	for _, where := range []string{
+		"checkouts/Orc",
+		"./Orc",
+		"../Orc",
+		// A drive-relative path: the current directory *on* drive C, which is not
+		// a place another machine can find.
+		`C:Orc`,
+		"1:/Orc",
+	} {
+		if err := action(where).Validate(); err == nil {
+			t.Errorf("%q is not an absolute path anywhere and was accepted", where)
+		}
 	}
 }

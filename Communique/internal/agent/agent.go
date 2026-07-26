@@ -389,3 +389,16 @@ func (a *Agent) serverError(resp *http.Response) error {
 	return fault.Unavailable{Peer: a.server,
 		Err: fmt.Errorf("unexpected status %s", resp.Status)}
 }
+
+// UseLibrary points the agent at a different repository for its next round.
+//
+// It exists because the library root is the one collection setting that can move
+// while a watcher is running: an operator changes it from the website, the change
+// arrives down the queue, and the loop applies it between rounds. Everything else
+// an agent is configured with is fixed for the life of the process.
+//
+// It is deliberately not safe to call during a round. `Sync` reads the value once
+// when it builds its options, and the caller is the watch loop, which is between
+// rounds by construction — the alternative is a lock around a field written once
+// an hour by the same goroutine that reads it.
+func (a *Agent) UseLibrary(root string) { a.library = root }

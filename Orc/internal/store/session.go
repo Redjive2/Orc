@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"orc/common/clock"
@@ -61,6 +63,20 @@ type SessionState struct {
 	// Empty on a session written before this existed, which reads as "cannot say"
 	// rather than as a disagreement.
 	Workspace string `json:"workspace,omitempty"`
+
+	// Instructed is how much of a standing instruction this session was started
+	// with, and why there is none when there should have been.
+	//
+	// Recorded because "were the instructions delivered?" had no answer anywhere.
+	// A session that composed nothing and a session whose prompt file could not be
+	// read both started silently and looked identical afterwards — and an agent not
+	// following an instruction is the least visible failure in the tool, because it
+	// looks exactly like an agent choosing not to.
+	//
+	// Zero on a session written before this existed, which reads as "cannot say"
+	// rather than as "none were sent".
+	Instructed    int    `json:"instructed,omitempty"`
+	InstructError string `json:"instruct_error,omitempty"`
 
 	Started  string `json:"started"`
 	Restarts int    `json:"restarts"`
@@ -207,6 +223,10 @@ func (s *Store) Session(name user.Name) (SessionState, bool, error) {
 //
 // Both go together: a socket with no state behind it is something an attach would
 // connect to and then wait on forever, which is a worse failure than a refusal.
+//
+// It removes whatever is there, which is right for a caller tidying up after a
+// supervisor that is provably gone and **wrong for a supervisor tidying up after
+// itself** — see RemoveOwnSession.
 func (s *Store) RemoveSession(name user.Name) error {
 	if err := s.refuseWrite(); err != nil {
 		return err
@@ -218,6 +238,44 @@ func (s *Store) RemoveSession(name user.Name) error {
 	}
 	s.ops.syncDir(s.SessionDir(name))
 	return nil
+}
+
+// RemoveOwnSession deletes the state file and socket only if they are this
+// session's.
+//
+// A supervisor removes the state on its way out so that nothing is left claiming a
+// session that has gone. Keyed by identity alone, that is a supervisor reaching
+// across a session boundary: one that gave up after its restarts, or that is slow
+// to unwind, exits *after* a replacement has already started and deletes the
+// replacement's state file.
+//
+// What that leaves is the worst shape a fleet can be in — a live supervisor
+// holding the session lock and no state file saying so. `orc status` reads it as
+// employed and not running, `tend` and `refresh` see nothing to depopulate, and the
+// new supervisor they start is refused the lock by the one still alive. The session
+// ends and no session replaces it, which is exactly what it looks like from
+// outside: `orc refresh` that only stops.
+//
+// So a supervisor removes its own session and never anybody else's. A state file
+// naming a different id is a newer session, and the right thing to do with it is
+// nothing at all.
+func (s *Store) RemoveOwnSession(name user.Name, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fault.Internal{Where: "store.RemoveOwnSession", Detail: "no session id given"}
+	}
+	state, _, err := s.Session(name)
+	if err != nil {
+		// An unreadable state file is not this session's to interpret, and one
+		// that is already gone needs no removing.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if state.ID != "" && state.ID != id {
+		return nil
+	}
+	return s.RemoveSession(name)
 }
 
 // Sessions reports each identity's current session id, for the derivation.

@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,8 +50,15 @@ func TestInstructSaysWhenItTakesEffect(t *testing.T) {
 	r := instructable(t)
 
 	got := r.ok("boss", "instruct", "system", "--set", file(t, "ask first"))
-	if !strings.Contains(got.stdout, "keep the instructions they started with") {
+	// Both halves: a running turn is unaffected, and the next start of that session
+	// carries it. Saying only "refresh" implied the edit sat inert until somebody
+	// ran one, which sent people looking for a delivery problem that was a timing
+	// one.
+	if !strings.Contains(got.stdout, "until it restarts") {
 		t.Errorf("it does not say when it applies:\n%s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, "orc status") {
+		t.Errorf("it does not say how to check what a session got:\n%s", got.stdout)
 	}
 	if !strings.Contains(got.stdout, "orc refresh") {
 		t.Errorf("it does not say how to apply it now:\n%s", got.stdout)
@@ -299,4 +307,62 @@ func TestWakeFlagBeatsTheStoredMessage(t *testing.T) {
 	if strings.Contains(got.stdout, "identity's message") {
 		t.Errorf("the stored message overrode an explicit one:\n%s", got.stdout)
 	}
+}
+
+// TestASessionSaysWhetherItWasInstructed.
+//
+// An agent not following an instruction looks exactly like an agent choosing not
+// to, so "were they sent?" has to be readable rather than inferred. Before this it
+// was answerable only by reading a supervisor's command line.
+func TestStatusSaysWhatTheSessionWasStartedWith(t *testing.T) {
+	r := instructable(t)
+	r.ok("boss", "employ", "ember")
+
+	// Nothing set: said plainly, and not as a failure.
+	got := r.ok("boss", "status", "ember")
+	if !strings.Contains(squeezed(got.stdout), "nothing was set for it") {
+		t.Errorf("a session with no instructions does not say so:\n%s", got.stdout)
+	}
+
+	// Set some, and refresh — which is the documented way to make them apply.
+	r.ok("boss", "instruct", "system", "--set", file(t, "ask before you guess"))
+	r.ok("boss", "refresh", "ember")
+
+	got = r.ok("boss", "status", "ember")
+	if !strings.Contains(squeezed(got.stdout), "instructed") {
+		t.Fatalf("the card does not report the instructions:\n%s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, "bytes") {
+		t.Errorf("it does not say how much was delivered:\n%s", got.stdout)
+	}
+	if strings.Contains(got.stdout, "nothing was set") {
+		t.Errorf("a refreshed session still reports no instructions:\n%s", got.stdout)
+	}
+}
+
+// And through the JSON, which is what cq mirrors.
+func TestSessionJSONCarriesWhatItWasInstructedWith(t *testing.T) {
+	r := instructable(t)
+	r.ok("boss", "instruct", "system", "--set", file(t, "ask before you guess"))
+	r.ok("boss", "employ", "ember")
+
+	var fleet struct {
+		Identities []struct {
+			Name       string `json:"name"`
+			Instructed int    `json:"instructed"`
+		} `json:"identities"`
+	}
+	if err := json.Unmarshal([]byte(r.ok("boss", "status", "--json").stdout), &fleet); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range fleet.Identities {
+		if id.Name != "ember" {
+			continue
+		}
+		if id.Instructed == 0 {
+			t.Error("the session reports no instructions, but the fleet's layer is set")
+		}
+		return
+	}
+	t.Fatal("ember is not in the fleet json")
 }

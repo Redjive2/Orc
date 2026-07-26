@@ -145,6 +145,44 @@ func TestWakeWakesASessionWithNoEvents(t *testing.T) {
 	}
 }
 
+// TestARestartedSessionIsWoken — the state a fleet spends most of its idle time in,
+// and the one the cycle used to be blind to.
+//
+// A session that has just started has no Stop to its name: Stop fires at the end of
+// a turn and it has not had one. Its feed ends at SessionStart, which read as
+// working — so a supervisor restart, an `orc refresh`, or an agent employed and not
+// yet given a first instruction left an agent sitting at an empty prompt that `wake`
+// would never poke, however long the loop ran.
+func TestWakeWakesARestartedSession(t *testing.T) {
+	r := wakeable(t)
+	// It worked, the child exited, the supervisor brought it back — and it has been
+	// sitting at the prompt for half an hour since.
+	feed(t, r, "ember",
+		ago(90, "PreToolUse", "Bash", "go build ./..."),
+		ago(45, "SessionEnd", "", ""),
+		ago(30, "SessionStart", "", ""))
+
+	got := r.ok("boss", "wake", "--dry-run")
+	if !strings.Contains(got.stdout, "would wake") {
+		t.Errorf("a session sitting at a fresh prompt was not woken:\n%s", got.stdout)
+	}
+}
+
+// And the other half of that: a child that is gone is not waiting for anybody. It is
+// `tend`'s to restart, and poking a dead session would be the two backstops reaching
+// for the same fleet.
+func TestWakeLeavesAnEndedSessionToTend(t *testing.T) {
+	r := wakeable(t)
+	feed(t, r, "ember",
+		ago(45, "PreToolUse", "Bash", "go build ./..."),
+		ago(30, "SessionEnd", "", ""))
+
+	got := r.ok("boss", "wake", "--dry-run")
+	if strings.Contains(got.stdout, "would wake") {
+		t.Errorf("a session whose child has gone was poked:\n%s", got.stdout)
+	}
+}
+
 // TestNothingEmployedIsNotAFailure. A fleet with nobody working is a fine state for
 // a cycle to find, and it should say so rather than exit non-zero.
 func TestWakeWithNothingEmployed(t *testing.T) {

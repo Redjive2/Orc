@@ -534,3 +534,58 @@ told, and a role is one layer of several agents' worth.
 `dialog.show` was added for it: a sheet with a document and a way out. Reusing
 `confirm` would have put a "do it" button on something that does nothing, which is
 how somebody learns not to trust the buttons.
+
+
+## §17 Delivery, corrected
+
+Reported: standing instructions were not reaching agents reliably, and refreshing
+one did not obviously help.
+
+**What was actually happening.** The composed prompt was built once, when the
+supervisor process started, and reused for that supervisor's whole life. The
+reasoning written down at the time was that a restart continues one conversation,
+so its instructions should not change underneath it.
+
+That reasoning rested on an assumption that is false: Claude does **not** keep a
+system prompt in a session's transcript. A transcript holds user, assistant and
+system *events* and no system prompt at all, so a resumed session's prompt is built
+from the flags of whatever invocation resumed it. Composing once therefore never
+"preserved the conversation's instructions" — it re-delivered a *stale copy* of them
+on every restart, for as long as the supervisor lived, and nothing anywhere said so.
+
+A supervisor that had been up for a day was still delivering what the fleet said a
+day ago. An operator who edited a prompt, watched the agent restart, and saw no
+change was looking at exactly the symptom this produces.
+
+**What changed.**
+
+- **Composed at every start**, not once per supervisor. The turn in progress is
+  untouched either way — its prompt was fixed when that process started — but the
+  next start of the same session carries what is set now. `orc refresh` still
+  applies it immediately, at the cost of the conversation.
+- **The session records what it was started with**: `instructed` (bytes) and
+  `instruct_error` on the session state, shown by `orc status <identity>` and
+  carried in `--json` for cq. This is the important half. The failure is silent by
+  construction — an agent that never received an instruction behaves exactly like
+  one that received it and chose otherwise — so "were they sent?" had no answer
+  short of reading a running process's command line. Three states are kept apart:
+  delivered with a size, none set, and *failed to compose*, which is the loud one.
+- **A positive log line at every start**, not only a failure one. Silence used to
+  mean either "nothing is set" or "something broke and you did not read the other
+  line".
+- **`compose` no longer swallows the identity lookup.** It used to fall back to "no
+  role" when the identity could not be read, which silently dropped the role's
+  layer — an agent missing a third of its instructions with nothing saying so.
+- **The message after `orc instruct --set` says both halves**: a running session
+  keeps what it started with *until it restarts*, `orc refresh` applies it now, and
+  `orc status` says what a session actually got. Saying only "refresh" implied the
+  edit sat inert until somebody ran one.
+
+**Checked, not assumed.** Delivery was verified with a stand-in `claude` recording
+its argv: the flag is present on employ, on refresh, and on every supervisor
+restart; `orc refresh` starts a genuinely new session id with no `--resume`, and no
+race puts the old session back. `--resume` was ruled out as the cause by inspecting
+a real transcript for a stored system prompt — there is none.
+
+The test that pinned the old behaviour now pins the new one, and says why it
+changed.

@@ -104,6 +104,17 @@ type Supervisor struct {
 	// prompt is the composed system prompt: the fleet's layer, the role's, and the
 	// identity's, under headings naming each. Empty where nothing is set, which is
 	// every fleet that has not used the feature.
+	//
+	// Composed at **every** start rather than once per session. It used to be once,
+	// on the reasoning that a restart continues one conversation and its
+	// instructions should not change underneath it. That reasoning was wrong about
+	// the thing that matters: Claude does not store a system prompt in a session's
+	// transcript — it is rebuilt from the flags of whatever invocation resumed it —
+	// so composing once meant a supervisor that had been up for a day was still
+	// delivering the instructions the fleet had when it started, and a restart
+	// silently *re-delivered* stale ones. Composing per start makes "what is
+	// running" and "what is set" the same thing within one restart, which is what
+	// somebody editing a prompt expects.
 	prompt string
 	// promptErr is why there is no prompt, when there should have been one.
 	promptErr error
@@ -129,18 +140,11 @@ func New(s *store.Store, spec Spec, env []string, bin string) (*Supervisor, erro
 		bin = DefaultClaude
 	}
 
-	// The standing instructions, composed once for the session's whole life.
-	//
-	// Once rather than per restart, for the reason Prepare gives about the
-	// permission snapshot: a restart continues the same conversation, and a prompt
-	// that changed underneath it would mean an agent whose instructions differ from
-	// the ones it has been following since the first turn. `orc refresh` is what
-	// asks for new instructions, and it gets them by getting a new session.
-	// Not fatal if it fails. An agent that cannot think is worse than an agent
-	// missing a layer somebody added, and one unreadable prompt file must not make
-	// a fleet unstartable. It is carried rather than swallowed: `start` writes it
-	// to the session log, where somebody asking why an instruction is not being
-	// followed will find it.
+	// Composed here as well as at every start. `once` recomposes so a restart
+	// delivers what the fleet says now; this first one exists so a supervisor is
+	// never in a state where it knows its arguments but not its prompt — `Args` is
+	// read by the log line and by tests, and one that silently omitted the
+	// instructions before the first start would be a trap laid for the next person.
 	prompt, promptErr := compose(s, spec.Identity)
 	if promptErr != nil {
 		prompt = ""
@@ -183,6 +187,14 @@ func (s *Supervisor) Args() []string {
 	return args
 }
 
+// ComposeFor is compose, for callers outside this package.
+//
+// It exists so that anything which starts a session — including a test rig standing
+// in for the supervisor — composes the instructions the same way the supervisor
+// does. A second implementation would be a second answer to "what is this agent
+// told", and the wrong one would be the one nobody was looking at.
+func ComposeFor(s *store.Store, name user.Name) (string, error) { return compose(s, name) }
+
 // compose gathers an identity's three prompt layers and joins them.
 //
 // The fleet is derived here rather than passed in for the reason Prepare gives: the
@@ -194,10 +206,15 @@ func compose(s *store.Store, name user.Name) (string, error) {
 		return "", err
 	}
 
-	var role model.Name
-	if got, err := fleet.Identity(name); err == nil {
-		role = got.Role()
+	// An identity that cannot be read is reported rather than treated as one with
+	// no role. Swallowing it meant the role's layer silently vanished from the
+	// composition — an agent missing a third of its instructions, with nothing
+	// anywhere saying so.
+	got, err := fleet.Identity(name)
+	if err != nil {
+		return "", err
 	}
+	role := got.Role()
 
 	layers, err := s.Instructions(name, role)
 	if err != nil {
@@ -243,7 +260,11 @@ func (s *Supervisor) Run() error {
 	go s.serve(listener)
 
 	defer func() {
-		if err := s.store.RemoveSession(s.spec.Identity); err != nil {
+		// Its own session and never a newer one: a supervisor that gave up, or that
+		// is slow to unwind, exits after its replacement has started, and removing
+		// by identity alone would delete the replacement's state file. See
+		// store.RemoveOwnSession.
+		if err := s.store.RemoveOwnSession(s.spec.Identity, s.spec.ID); err != nil {
 			s.note("cleanup", err.Error())
 		}
 	}()
@@ -288,6 +309,21 @@ func (s *Supervisor) Run() error {
 
 // once starts the child and waits for it.
 func (s *Supervisor) once() error {
+	// The standing instructions, composed here so that every start — the first one
+	// and every restart after it — delivers what the fleet says *now*.
+	//
+	// Not fatal if it fails. An agent that cannot think is worse than an agent
+	// missing a layer somebody added, and one unreadable prompt file must not make
+	// a fleet unstartable. It is carried rather than swallowed: it goes into the
+	// session state and into the log, so "were the instructions delivered?" has an
+	// answer that does not depend on reading a process's command line.
+	s.mu.Lock()
+	s.prompt, s.promptErr = compose(s.store, s.spec.Identity)
+	if s.promptErr != nil {
+		s.prompt = ""
+	}
+	s.mu.Unlock()
+
 	p, err := pty.Open()
 	if err != nil {
 		return err
@@ -326,17 +362,28 @@ func (s *Supervisor) once() error {
 		Started:    clock.Format(s.store.Now()),
 		Restarts:   s.restarts,
 		LastExit:   s.lastExit,
+		Instructed: len(s.prompt),
+	}
+	if s.promptErr != nil {
+		state.InstructError = s.promptErr.Error()
 	}
 	if err := s.store.WriteSession(s.spec.Identity, state); err != nil {
 		// Not fatal to the session, but it is fatal to anybody finding it, so it is
 		// reported rather than swallowed.
 		s.note("state", "could not record the session: "+err.Error())
 	}
-	if s.promptErr != nil {
+	switch {
+	case s.promptErr != nil:
 		// Said at every start rather than once, because a session that restarts is
 		// a session somebody is looking at the log of.
 		s.note("instruct", "the standing instructions could not be composed, so this "+
 			"session has none: "+s.promptErr.Error())
+	case s.prompt != "":
+		// The positive case is logged too. Without it, silence meant either "nothing
+		// is set" or "something went wrong and you did not read the other line",
+		// and those need telling apart by somebody asking why an agent is ignoring
+		// an instruction.
+		s.note("instruct", fmt.Sprintf("started with %d bytes of standing instructions", len(s.prompt)))
 	}
 	s.note("started", fmt.Sprintf("%s %s", s.bin, strings.Join(s.Args(), " ")))
 

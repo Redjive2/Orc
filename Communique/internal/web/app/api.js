@@ -153,6 +153,12 @@ export const api = {
   // would silently overturn one made on the machine in between.
   moveWorkspace: (machine, name, { workspace, from, adopt }) =>
     fleetCall("identities", name, "workspace", machine, { workspace, from, adopt }),
+  // Moving the whole machine's checkout, rather than one agent's workspace. It
+  // carries no `from`: the machine sets the root to what is named rather than
+  // stepping it from where it was, so a stale view lands in the same place as a
+  // fresh one.
+  moveLibrary: (machine, workspace) =>
+    request("POST", "/api/v1/library/root", { machine, workspace }),
   // The standing instructions. The layer is in the path, so a call cannot name one
   // layer and carry another; `name` is the role's or the agent's, and empty for the
   // fleet's own.

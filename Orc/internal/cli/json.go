@@ -68,8 +68,13 @@ type jsonIdentity struct {
 	Populated bool   `json:"populated"`
 	Session   string `json:"session,omitempty"`
 	Restarts  int    `json:"restarts,omitempty"`
-	Started   string `json:"started,omitempty"`
-	LastExit  string `json:"last_exit,omitempty"`
+	// Instructed is how many bytes of standing instruction this session started
+	// with, and InstructError why there are none when there should have been. cq
+	// mirrors these so the browser can answer the same question a terminal can.
+	Instructed    int    `json:"instructed,omitempty"`
+	InstructError string `json:"instruct_error,omitempty"`
+	Started       string `json:"started,omitempty"`
+	LastExit      string `json:"last_exit,omitempty"`
 }
 
 type jsonRole struct {
@@ -283,6 +288,8 @@ func (s caller) identityJSON(who user.Name) (jsonIdentity, error) {
 		out.Populated = true
 		out.Session = state.ID
 		out.Restarts = state.Restarts
+		out.Instructed = state.Instructed
+		out.InstructError = state.InstructError
 		out.Started = state.Started
 		out.LastExit = state.LastExit
 	}

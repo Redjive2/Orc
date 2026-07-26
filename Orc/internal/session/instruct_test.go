@@ -90,26 +90,44 @@ func TestTheComposedPromptReachesTheSession(t *testing.T) {
 	}
 }
 
-// The prompt is composed once for the session's life, so a restart continues under
-// the instructions the conversation has been following rather than under whatever
-// somebody has edited since.
-func TestThePromptDoesNotChangeUnderARunningSession(t *testing.T) {
+// TestARestartDeliversWhatIsSetNow.
+//
+// This used to assert the opposite — that a prompt was composed once and a restart
+// continued under the instructions the conversation had been following. The
+// reasoning was that changing them underneath a live conversation is a surprise.
+//
+// It was wrong about the thing that decides the question: Claude does not keep a
+// system prompt in a session's transcript, so a resumed session is built from the
+// flags of whatever invocation resumed it. Composing once therefore did not "keep
+// the conversation's instructions" — it re-delivered a stale copy of them on every
+// restart, for as long as the supervisor lived, with no way to see that from
+// outside. An operator who edits a prompt and watches an agent restart expects the
+// edit to be what restarted.
+//
+// The still-running turn is untouched either way: this is about what the next start
+// carries.
+func TestARestartComposesTheInstructionsAgain(t *testing.T) {
 	s, who := fleet(t, "ember")
 	if err := s.WritePrompt(store.FleetPrompt(false), who, "the original"); err != nil {
 		t.Fatal(err)
 	}
 
 	sup := supervisorFor(t, s, who)
-	before := strings.Join(sup.Args(), " ")
+	if before := strings.Join(sup.Args(), " "); !strings.Contains(before, "the original") {
+		t.Fatalf("the first composition is missing:\n%s", before)
+	}
 
 	if err := s.WritePrompt(store.FleetPrompt(false), who, "edited while it was running"); err != nil {
 		t.Fatal(err)
 	}
-	if after := strings.Join(sup.Args(), " "); after != before {
-		t.Errorf("the prompt changed underneath a live session:\n%s", after)
+
+	// What the *next* start would carry, which is what `once` composes.
+	got, err := session.ComposeFor(s, who)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(before, "edited while it was running") {
-		t.Error("the edit reached a session that was already started")
+	if !strings.Contains(got, "edited while it was running") {
+		t.Errorf("a restart would deliver the old instructions:\n%s", got)
 	}
 }
 
@@ -131,5 +149,48 @@ func TestABrokenPromptDoesNotStopTheSession(t *testing.T) {
 	// And the session is still a session.
 	if len(args) == 0 || args[0] != "--session-id" {
 		t.Errorf("the session lost its arguments with its prompt: %v", args)
+	}
+}
+
+// TestTheSessionRecordsWhatItWasStartedWith.
+//
+// The failure this exists for is silent by construction: an agent that never
+// received an instruction behaves exactly like one that received it and chose
+// otherwise. Recording it is what makes "were they sent?" answerable without
+// reading a running process's command line.
+func TestComposeForReportsWhatWouldBeDelivered(t *testing.T) {
+	s, who := fleet(t, "ember")
+
+	// Nothing set composes to nothing, and that is not an error: most fleets have
+	// never used the feature.
+	got, err := session.ComposeFor(s, who)
+	if err != nil || got != "" {
+		t.Fatalf("an unconfigured fleet composed %q (%v)", got, err)
+	}
+
+	if err := s.WritePrompt(store.FleetPrompt(false), who, "ask before you guess"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = session.ComposeFor(s, who)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "ask before you guess") {
+		t.Errorf("the fleet's layer is not in what would be delivered:\n%s", got)
+	}
+}
+
+// An identity that cannot be read is an error rather than an identity with no role.
+// Swallowing it made the role's layer vanish from the composition silently — an
+// agent missing a third of its instructions with nothing anywhere saying so.
+func TestComposeRefusesAnIdentityItCannotRead(t *testing.T) {
+	s, _ := fleet(t, "ember")
+	stranger, err := user.Parse("nobody")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := session.ComposeFor(s, stranger); err == nil {
+		t.Error("composing for an identity that does not exist did not say so")
 	}
 }

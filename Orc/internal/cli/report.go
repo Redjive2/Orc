@@ -10,6 +10,7 @@ import (
 	"orc/orc/internal/authz"
 	"orc/orc/internal/model"
 	"orc/orc/internal/render"
+	"orc/orc/internal/store"
 	"orc/orc/internal/style"
 )
 
@@ -323,6 +324,36 @@ func (a App) drawCard(s caller, who user.Name) error {
 }
 
 // sessionSection is the card's account of what is running.
+// instructedField says what standing instructions this session started with.
+//
+// Three states, and they are not the same thing:
+//
+//   - it failed to compose — the loudest, because something is set and is not
+//     reaching the agent;
+//   - none were composed — either nothing is set, or a session old enough to
+//     predate the record, which reads as "cannot say" rather than as "none";
+//   - some were, with how many bytes, so an operator can tell a prompt that
+//     arrived from one that arrived empty.
+func instructedField(state store.SessionState) render.Field {
+	switch {
+	case state.InstructError != "":
+		return render.Field{
+			Label: "instructed", Value: "no — " + state.InstructError,
+			Paint: func(p style.Palette, t string) string { return p.Warn(t) },
+		}
+	case state.Instructed > 0:
+		return render.Field{
+			Label: "instructed", Value: fmt.Sprintf("%d bytes, at the last start", state.Instructed),
+			Paint: func(p style.Palette, t string) string { return p.Value(t) },
+		}
+	default:
+		return render.Field{
+			Label: "instructed", Value: "nothing was set for it",
+			Paint: func(p style.Palette, t string) string { return p.Muted(t) },
+		}
+	}
+}
+
 func (a App) sessionSection(s caller, who user.Name, i model.Identity) render.Section {
 	out := render.Section{Title: "session"}
 
@@ -370,6 +401,11 @@ func (a App) sessionSection(s caller, who user.Name, i model.Identity) render.Se
 			Label: "started", Value: clock.Show(started), Note: note,
 		})
 	}
+	// What this session was actually started with, which is the only place that
+	// question is answered. An agent not following an instruction looks exactly like
+	// an agent choosing not to, so "it was never sent" has to be readable rather
+	// than inferred.
+	out.Fields = append(out.Fields, instructedField(state))
 	out.Fields = append(out.Fields, render.Field{
 		Label: "pids", Value: fmt.Sprintf("supervisor %d · claude %d", state.Supervisor, state.Child),
 		Paint: func(p style.Palette, t string) string { return p.Muted(t) },

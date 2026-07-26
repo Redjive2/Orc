@@ -325,6 +325,10 @@ func (w *waker) messageFor(s caller, who user.Name) (string, instruct.Kind, erro
 // A session with no events at all is judged from when it started. An agent that has
 // been up for twenty minutes and has never called a tool is exactly as stopped as
 // one that finished and waited, and it is the more worrying of the two.
+//
+// A session whose feed ends at its own SessionStart is the same case wearing a hook
+// event, and the feed reports it as waiting for that reason — see view.waits. It is
+// the state a restart leaves, so it is the common one, not the corner.
 func silence(feed view.Session, started, now time.Time) (last string, quiet time.Duration, waiting bool) {
 	row, ok := feed.Last()
 	if !ok {

@@ -263,7 +263,7 @@ var settings = []struct {
 	{"CQ_TOKEN", "The sync token, from `cq admin token`", "agent"},
 	{"CQ_MACHINE", "What to call this machine", "agent"},
 	{"CQ_USER", "The mailbox to mirror; by default, orc's operator", "agent"},
-	{"CQ_LIBRARY", "A repository to mirror for reading, if any", "agent"},
+	{"CQ_LIBRARY", "A repository to mirror; the website can move it", "agent"},
 	{"CQ_KEY", "That mailbox's orc key, so any agent's action can nudge", "agent"},
 	{"ORC", "The orc executable, if it is not on the path as `orc`", "agent"},
 	{"CQ_SOURCE", "The checkout `upgrade` pulls and builds", ""},

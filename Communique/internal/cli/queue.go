@@ -382,6 +382,8 @@ func describe(action protocol.Action) string {
 		// Nor does this. Without a case it fell through to the puid default and
 		// read "system.upgrade #0", which names nothing and looks like a bug.
 		return "pull, rebuild, and restart this machine"
+	case protocol.OpLibraryRoot:
+		return "mirror " + action.Args.Workspace
 	default:
 		return fmt.Sprintf("#%d", action.Args.PUID)
 	}

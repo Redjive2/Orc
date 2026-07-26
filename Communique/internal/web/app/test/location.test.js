@@ -34,6 +34,10 @@ const state = {
   }],
 };
 
+// A no-op action set, for the rows that draw controls. Each test that cares
+// about a click replaces the one method it is about.
+const actions = { moveWorkspace() {}, moveLibrary() {} };
+
 test("every agent's directory is shown", () => {
   const got = text(location.location(state, null));
 
@@ -92,4 +96,48 @@ test("a machine that could not be read says so", () => {
 test("no fleet at all is explained rather than empty", () => {
   const got = text(location.location({ fleet: [] }, null));
   assert.ok(got.includes("no machine mirrors an orc fleet"), got);
+});
+
+// The machine's own checkout: the directory the code and docs tabs show, and the
+// only one cq may write to.
+//
+// It comes from the library rather than the fleet, because it is cq's own setting
+// for the machine and not something orc knows about — so a screen drawn from the
+// fleet alone would have nowhere to get it.
+test("the machine's mirrored checkout is shown above its agents", () => {
+  const withLibrary = { ...state, library: { roots: { sandy: "/srv/checkouts/Orc" } } };
+  const got = text(location.location(withLibrary, null));
+
+  assert.match(got, /mirrored checkout/);
+  assert.match(got, /\/srv\/checkouts\/Orc/);
+});
+
+test("a machine mirroring nothing says so rather than showing a blank", () => {
+  const got = text(location.location({ ...state, library: { roots: {} } }, null));
+
+  assert.match(got, /nothing mirrored/);
+  // And the offer is to choose one, not to "move" a directory that is not there.
+  const buttons = all(
+    { childNodes: location.location({ ...state, library: { roots: {} } }, actions) },
+    (n) => n.tagName === "BUTTON");
+  assert.ok(buttons.some((b) => b.textContent === "choose one"),
+    "a machine with no checkout should offer to choose one");
+});
+
+// The move is per machine, so it must carry that machine's own root — not
+// whichever one the library happened to report first.
+test("moving the checkout hands the action that machine's root", () => {
+  const two = {
+    fleet: [{ machine: "sandy", operator: "rdm", identities: [] },
+      { machine: "buildbox", operator: "rdm", identities: [] }],
+    library: { roots: { sandy: "/srv/Orc", buildbox: "/opt/Orc" } },
+  };
+  const moved = [];
+  const nodes = location.location(two, { ...actions, moveLibrary: (f) => moved.push(f) });
+
+  const buttons = all({ childNodes: nodes }, (n) => n.tagName === "BUTTON" && n.textContent === "move");
+  assert.equal(buttons.length, 2, "each machine offers its own move");
+  buttons[1].listeners.click.forEach((fn) => fn({}));
+  assert.equal(moved[0].machine, "buildbox");
+  assert.equal(moved[0].libraryRoot, "/opt/Orc");
 });

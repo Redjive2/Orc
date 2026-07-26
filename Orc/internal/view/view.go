@@ -160,7 +160,7 @@ func Fold(name user.Name, events []event.Event, skipped int) (Session, error) {
 			continue
 		}
 		got.Rows = append(got.Rows, row)
-		got.Waiting = row.Kind == Waiting
+		got.Waiting = waits(row, e)
 	}
 
 	if over := len(got.Rows) - MaxRows; over > 0 {
@@ -168,6 +168,32 @@ func Fold(name user.Name, events []event.Event, skipped int) (Session, error) {
 		got.Dropped = over
 	}
 	return got, nil
+}
+
+// waits reports whether a feed ending on this event is a session waiting to be
+// spoken to.
+//
+// The obvious half is a Waiting row: Claude stopped, or asked for something.
+//
+// The other half is a session that has just started and been asked nothing. It has
+// no Stop to its name — Stop fires at the end of a turn, and it has not had one —
+// but it is sitting at an empty prompt, which is the same fact about the same
+// session. Fold used to read that as working, and everything downstream believed
+// it: `orc view` called a fresh session "working", and `orc wake` skipped it. That
+// is the state every restart leaves behind — a supervisor restart, an `orc
+// refresh`, a session started and not yet given a first instruction — so the agents
+// most in need of a poke were the ones the cycle could not see. An empty feed was
+// already treated as waiting for exactly this reason; a feed whose last line is
+// SessionStart says no more than an empty one does.
+//
+// SessionEnd is not waiting. The child is gone, and nothing can be typed at it —
+// that is `orc tend`'s business, and calling it waiting here would have the two
+// backstops reaching for the same fleet.
+func waits(row Row, e event.Event) bool {
+	if row.Kind == Waiting {
+		return true
+	}
+	return e.Name == "SessionStart"
 }
 
 // rowOf turns one event into a row, or drops it.

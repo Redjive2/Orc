@@ -13,6 +13,7 @@ import (
 	"orc/common/user"
 	"orc/orc/internal/cli"
 	"orc/orc/internal/model"
+	"orc/orc/internal/session"
 	"orc/orc/internal/store"
 )
 
@@ -98,11 +99,22 @@ func (r *rig) populate(s *store.Store, name user.Name, id string, m model.Model,
 	// The workspace is recorded because the real supervisor records it — it is
 	// `cmd.Dir`, the directory the session was actually started in, and the drift
 	// warning is built on the two being able to disagree.
-	return s.WriteSession(name, store.SessionState{
+	//
+	// So are the standing instructions, and through the supervisor's own composer
+	// rather than a copy of it: what a session was started with is a fact the cards
+	// report, and a rig that recorded it differently would let a bug through in the
+	// only place anybody can see the answer.
+	state := store.SessionState{
 		ID: id, Supervisor: os.Getpid(), Child: os.Getpid(),
 		Model: m.String(), Effort: e.String(), Started: clock.Format(epoch),
 		Workspace: s.WorkspaceDir(name),
-	})
+	}
+	prompt, err := session.ComposeFor(s, name)
+	if err != nil {
+		state.InstructError = err.Error()
+	}
+	state.Instructed = len(prompt)
+	return s.WriteSession(name, state)
 }
 
 func (r *rig) depopulate(s *store.Store, name user.Name) error {

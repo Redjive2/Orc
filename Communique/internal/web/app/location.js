@@ -34,11 +34,54 @@ export function location(state, actions) {
         h("h2", {}, `${f.machine} — location`),
         h("div", { class: "body" }, h("p", { class: "warn" }, f.unreachable)))];
     }
+    const root = rootOf(state, f.machine);
     return [h("article", { class: "card" },
       h("h2", {}, `${f.machine} — location`),
       h("div", { class: "meta" }, shared(f)),
-      h("div", { class: "body" }, ...places(f, actions)))];
+      h("div", { class: "body" },
+        ...checkout({ ...f, libraryRoot: root }, actions),
+        h("h3", {}, "agents"),
+        ...places(f, actions)))];
   });
+}
+
+// rootOf is the directory a machine mirrors, out of the library rather than the
+// fleet.
+//
+// The two come from different places and mean different things: the fleet is
+// orc's answer about agents, and this is cq's own setting for the machine. A
+// machine that mirrors no repository has no entry, which is the state the row
+// below exists to make visible.
+function rootOf(state, machine) {
+  return (state.library && state.library.roots && state.library.roots[machine]) || "";
+}
+
+// checkout is the machine's own directory: the one the code and docs tabs show,
+// and the only one cq may write to.
+//
+// It is above the agents rather than below them because it contains them in the
+// sense that matters — every file anybody reads or edits on this site is in
+// there, and an agent working outside it is working somewhere this site cannot
+// see. Somebody reading down the column should meet the general fact first.
+function checkout(f, actions) {
+  const has = Boolean(f.libraryRoot);
+  return [
+    h("h3", {}, "this machine"),
+    h("div", { class: has ? "agent" : "agent idle" },
+      h("div", { class: "agent-head" },
+        h("strong", {}, "mirrored checkout"),
+        h("span", { class: "muted" }, has ? "code and docs show this" : "nothing mirrored"),
+      ),
+      h("div", { class: "path" }, f.libraryRoot || "—"),
+      actions ? h("div", { class: "controls" },
+        h("button", { class: "quiet", onclick: () => actions.moveLibrary(f) },
+          has ? "move" : "choose one"),
+        h("span", { class: "muted" }, has
+          ? "it takes effect on this machine's next sync"
+          : "until one is set, there is nothing to read or edit here"),
+      ) : null,
+    ),
+  ];
 }
 
 // shared says how many agents share a directory, which is the fact this screen

@@ -27,6 +27,7 @@ import (
 	"orc/cq/internal/fault"
 	"orc/cq/internal/protocol"
 	"orc/cq/internal/server"
+	stored "orc/cq/internal/settings"
 	"orc/cq/internal/source"
 	"orc/cq/internal/store"
 	"orc/cq/internal/style"
@@ -411,15 +412,24 @@ func (a App) sync(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Where this machine mirrors from, which the website can move.
+	typed := explicitlySet(fs, "library")
+	libraryRoot, err := libraryFor(typed, *library, *home)
+	if err != nil {
+		return err
+	}
+
 	src := a.sourceFor(who)
 	// The directory the library is collected from is the only one its edits may
 	// write. One setting rather than two that could disagree.
-	src.LibraryRoot = *library
+	src.LibraryRoot = libraryRoot
+	// And the home, so an action that moves the root has somewhere to record it.
+	src.Home = *home
 
 	if *dryRun {
 		snap, err := src.Snapshot(context.Background(), source.Options{
 			Machine: protocol.MachineID(*machine), Admin: *admin, AdminBodies: *bodies,
-			Library: *library,
+			Library: libraryRoot,
 		})
 		if err != nil {
 			return err
@@ -466,13 +476,13 @@ func (a App) sync(args []string) error {
 	// home and the flags a watch would run with. An upgrade arriving down the queue
 	// applies inside this adapter, and this is what it calls afterwards.
 	src.EnsureWatch = a.ensureWatch(watchPlan{
-		Home: *home, Server: *serverURL, Machine: *machine, User: *user, Library: *library,
+		Home: *home, Server: *serverURL, Machine: *machine, User: *user,
 	})
 
 	ag, err := agent.New(agent.Options{
 		Source: src, Server: *serverURL, Token: a.look("CQ_TOKEN", ""),
 		Machine: protocol.MachineID(*machine), State: *home,
-		Admin: *admin, AdminBodies: *bodies, Library: *library, Logger: a.logger(),
+		Admin: *admin, AdminBodies: *bodies, Library: libraryRoot, Logger: a.logger(),
 	})
 	if err != nil {
 		return err
@@ -496,7 +506,7 @@ func (a App) sync(args []string) error {
 		}
 		return a.report(report)
 	}
-	return a.watchSync(ag, *home, *interval, *ttl)
+	return a.watchSync(ag, src, *home, *interval, *ttl, typed)
 }
 
 // watchSync is the mirror's heartbeat: sync, wait, sync again, until stopped.
@@ -504,13 +514,23 @@ func (a App) sync(args []string) error {
 // The loop is here rather than inside the agent, so the process stays restartable
 // and one failed round does not end the watch.
 //
-// Two things happen between rounds and never during one. The watcher checks
+// Three things happen between rounds and never during one. The watcher checks
 // whether its own binary has been replaced — an upgrade this very loop applied
-// will have done exactly that — and restarts into the new build if so. And it
-// checks whether it has outlived the time it was given. Both are between rounds
-// because a round that is half-applied when the process image changes underneath
-// it is the one outcome worse than running an old build for another five minutes.
-func (a App) watchSync(ag *agent.Agent, home string, every, ttl time.Duration) error {
+// will have done exactly that — and restarts into the new build if so. It checks
+// whether it has outlived the time it was given. And it re-reads which directory
+// it is meant to be mirroring, because that is a thing the website can move and a
+// watcher whose settings were fixed at launch could never hear about it.
+//
+// All three are between rounds because a round that is half-applied when the
+// process image — or the directory it is walking — changes underneath it is the
+// one outcome worse than running an old build for another five minutes.
+//
+// The re-read is skipped when `--library` was typed on this command line. A flag
+// is an instruction about this run, and a run whose directory changed halfway
+// through because of something somebody did in a browser is not what was asked
+// for.
+func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
+	every, ttl time.Duration, typed bool) error {
 	// Asked for once, at the top, so that what is compared against is the build
 	// this watcher started with rather than whatever was on disk a moment ago.
 	exe, stamp, err := watch.Own()
@@ -573,6 +593,9 @@ func (a App) watchSync(ag *agent.Agent, home string, every, ttl time.Duration) e
 		if stopAt != nil && !time.Now().Before(*stopAt) {
 			return a.say("cq: the watch has run its %s and is stopping", round(ttl))
 		}
+		if !typed {
+			a.reLibrary(ag, src, home)
+		}
 		if watch.Replaced(exe, stamp) {
 			// Removed first: after exec there is no `defer` left to run, and a
 			// record naming this pid would then describe the new image with the old
@@ -601,6 +624,32 @@ func (a App) watchSync(ag *agent.Agent, home string, every, ttl time.Duration) e
 			return a.say("cq: the watch has run its %s and is stopping", round(ttl))
 		}
 	}
+}
+
+// reLibrary picks up a library root the website has moved.
+//
+// Both halves are set together and from one value, because they are the same
+// setting seen twice: what the collector walks, and the only directory the
+// library verbs may write. A watcher that moved one and not the other would
+// mirror one checkout while editing another, which no screen would show.
+//
+// A settings file that will not parse is complained about and stepped over
+// rather than ending the watch — the mirror carrying on where it was is better
+// than a machine that stops syncing over a file it can reread next round. That
+// it is *said* is the part that matters: the alternative is a directory somebody
+// chose that quietly never takes effect.
+func (a App) reLibrary(ag *agent.Agent, src *source.CLI, home string) {
+	chosen, err := stored.Read(home)
+	if err != nil {
+		a.complain(err)
+		return
+	}
+	if chosen.Library == "" || chosen.Library == src.LibraryRoot {
+		return
+	}
+	src.LibraryRoot = chosen.Library
+	ag.UseLibrary(chosen.Library)
+	a.tell("cq: now mirroring %s", chosen.Library)
 }
 
 // report renders one sync's outcome, colouring only what carries state.
@@ -914,4 +963,54 @@ func defaultAgentDir() string {
 		return filepath.Join(dir, "cq")
 	}
 	return ".cq"
+}
+
+// explicitlySet reports whether a flag was given on the command line, as opposed
+// to holding its default.
+//
+// The distinction matters wherever a default comes from the environment: `*flag`
+// cannot tell "the operator asked for this" from "$CQ_LIBRARY happened to be
+// set", and those deserve different treatment when a third source — what the
+// website chose — is in the running too.
+func explicitlySet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+// libraryFor decides which repository this run mirrors.
+//
+// Three answers, in this order:
+//
+//  1. a `--library` somebody typed for this run;
+//  2. the choice recorded from the website, in the agent's home;
+//  3. `$CQ_LIBRARY`, which is what `fallback` already holds.
+//
+// The typed flag wins because it is the more specific instruction, and because a
+// flag that silently did nothing would be worse than either answer. It also stops
+// the watch re-reading, so one run means one directory throughout — see
+// watchSync.
+//
+// The recorded choice beats the environment rather than the other way round, and
+// that ordering is the whole feature. A watcher is handed `os.Environ()` when it
+// launches, so `$CQ_LIBRARY` is whatever it was in the shell that started it,
+// possibly weeks ago; the recorded choice is what somebody decided since. An
+// environment that outranked it would mean the website appeared to work and
+// changed nothing.
+func libraryFor(typed bool, fallback, home string) (string, error) {
+	if typed || home == "" {
+		return fallback, nil
+	}
+	chosen, err := stored.Read(home)
+	if err != nil {
+		return "", err
+	}
+	if chosen.Library != "" {
+		return chosen.Library, nil
+	}
+	return fallback, nil
 }

@@ -253,6 +253,9 @@ func (s *Server) routes() {
 	s.route("GET /api/v1/convos/{cuid}", needSession, s.convo)
 	s.route("GET /api/v1/library", needSession, s.library)
 	s.route("GET /api/v1/library/file", needSession, s.libraryFile)
+	// Moving the checkout a machine mirrors. POST rather than PUT on the library
+	// itself: it changes which repository is there, not what is in it.
+	s.route("POST /api/v1/library/root", needSession, s.setLibraryRoot)
 	s.route("GET /api/v1/tasks", needSession, s.tasks)
 	s.route("GET /api/v1/tasks/{name}", needSession, s.task)
 	s.route("GET /api/v1/queue", needSession, s.queue)

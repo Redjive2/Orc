@@ -3,6 +3,7 @@ package protocol
 import (
 	"path"
 	"slices"
+	"strings"
 
 	"orc/cq/internal/fault"
 )
@@ -385,6 +386,21 @@ const (
 // fails and retries, and an agent that had not synced yet finds it waiting.
 const OpUpgrade Op = "system.upgrade"
 
+// OpLibraryRoot points this machine at a different repository to mirror.
+//
+// It is the one operation that carries a path naming a *machine setting* rather
+// than a file inside one, which the note on argRules for OpUpgrade says should
+// not happen. The distinction that makes it allowable is what receives the path:
+// the upgrade's would be handed to a build script, which is arbitrary code
+// execution, and this one is handed to `filepath.EvalSymlinks` and a directory
+// walk. It never becomes a command.
+//
+// What it does decide is the boundary the library verbs write inside, so the
+// agent checks it hard before accepting it — see checkLibraryRoot. The checks run
+// on the machine because that is the only place the path means anything: the
+// server has no idea what exists there.
+const OpLibraryRoot Op = "system.library"
+
 // FleetOps are the verbs that go through Orc rather than Mailman or Macmuffin.
 var FleetOps = []Op{
 	OpOrcNewIdentity, OpOrcNewRole, OpOrcNewPermission, OpOrcEditPermission,
@@ -617,6 +633,37 @@ func (a Action) checkInstructArgs(rule argRule) error {
 	return nil
 }
 
+// absAnywhere reports whether a path is absolute on *some* platform.
+//
+// It cannot ask `path` or `path/filepath`, and this is the same trap `leaf` in
+// the supervisor was written for: both answer for the host, and the host here is
+// the server, which is not the machine the path is for. A cq server on Linux
+// validating a queued action for a Windows agent would read `C:\srv\Orc` as
+// relative and refuse a path that is perfectly absolute where it is going.
+//
+// So it accepts all three shapes and leaves the rest to the machine, which is the
+// only place the question can really be settled:
+//
+//   - `/srv/Orc` — a unix path.
+//   - `C:\srv\Orc` or `C:/srv/Orc` — a drive letter, either slash.
+//   - `\\host\share` — a UNC path.
+//
+// The looseness is safe because this is not the check that decides anything. It
+// rejects the obvious mistake early, on the machine somebody is typing at; the
+// agent resolves the path for real and refuses what it will not accept.
+func absAnywhere(p string) bool {
+	if path.IsAbs(p) || strings.HasPrefix(p, `\\`) {
+		return true
+	}
+	// A drive letter, then a colon, then a separator. `C:x` is relative to the
+	// current directory *on* drive C, which is not an absolute path.
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		c := p[0] | 0x20 // lowercase, for ASCII letters
+		return c >= 'a' && c <= 'z'
+	}
+	return false
+}
+
 // checkWorkspaceArgs validates `orc workspace`'s three operands.
 //
 // Both paths are required and both must be absolute. A relative one would mean a
@@ -644,7 +691,7 @@ func (a Action) checkWorkspaceArgs(rule argRule) error {
 		if err := checkText("Action", "args."+c.field, c.value, MaxPatternRunes, false); err != nil {
 			return err
 		}
-		if !path.IsAbs(c.value) {
+		if !absAnywhere(c.value) {
 			return fault.Field("Action", "args."+c.field,
 				"%s must be an absolute path; the machine that applies this is not the one that wrote it", c.field)
 		}

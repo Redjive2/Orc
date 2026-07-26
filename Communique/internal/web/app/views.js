@@ -582,6 +582,7 @@ function describe(action) {
     case "write": case "create": case "delete": case "mkdir": case "rmdir":
       return args.path || "";
     case "system.upgrade": return "pull, rebuild, and restart this machine";
+    case "system.library": return `mirror ${action.args?.workspace || "somewhere else"}`;
     case "orc.tend": return "the whole work list";
     default: return describeSubject(action.op, args);
   }

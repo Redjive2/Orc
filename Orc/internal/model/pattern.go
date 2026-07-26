@@ -417,8 +417,21 @@ func (p Pattern) Compare(other Pattern) int {
 // the only order that makes `write(** except .git/**)` mean what it says.
 func (p Pattern) Matches(target string) bool {
 	var clean string
+	// root is the workspace itself, which is a legitimate thing to ask about and
+	// not a path any glob is written to name.
+	//
+	// It has to be told apart here because cleanGlob refuses it: as a *pattern*,
+	// `.` selects nothing and saying so is right. As a *target* it is the
+	// directory the agent works in, and running the two through one function meant
+	// an agent holding `read(**)` could not list its own workspace — the broadest
+	// permission there is, refused on the one directory it exists to cover.
+	root := false
 	switch p.kind {
 	case KindRead, KindWrite:
+		if isRoot(target) {
+			root = true
+			break
+		}
 		got, err := cleanGlob(target)
 		if err != nil {
 			return false
@@ -433,17 +446,37 @@ func (p Pattern) Matches(target string) bool {
 		return false
 	}
 
+	// The root is matched as zero segments, which is the matcher's own rule rather
+	// than a new one: `**` already "matches whatever is left, including nothing",
+	// so `**` covers the workspace and `Docs/**` does not. An agent granted one
+	// directory still may not list the directory above it.
+	match := func(glob string) bool {
+		if root {
+			return matchSegments(strings.Split(glob, "/"), nil)
+		}
+		return globMatch(glob, clean)
+	}
+
 	for _, ex := range excludes(p.arg) {
-		if globMatch(ex, clean) {
+		if match(ex) {
 			return false // an exception refuses, whatever the terms say
 		}
 	}
 	for _, term := range includes(p.arg) {
-		if globMatch(term, clean) {
+		if match(term) {
 			return true
 		}
 	}
 	return false
+}
+
+// isRoot reports whether a target names the workspace itself.
+//
+// `.` is what filepath.Rel gives for the workspace against itself, and the empty
+// string is what a caller that trimmed it produces. Both mean the same directory.
+func isRoot(target string) bool {
+	t := strings.TrimSpace(target)
+	return t == "" || t == "." || t == "./"
 }
 
 // Contains reports whether this pattern is provably at least as wide as other.

@@ -353,6 +353,14 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			if !op.Idempotent() {
 				t.Errorf("%q should be idempotent", op)
 			}
+		case protocol.OpLibraryRoot:
+			// It sets the root to the directory named rather than stepping it from
+			// wherever it was, so applying it twice leaves the machine mirroring
+			// the same place. Unlike a workspace move it copies nothing — the
+			// files are already there; only which of them cq looks at changes.
+			if !op.Idempotent() {
+				t.Errorf("%q should be idempotent", op)
+			}
 		default:
 			t.Errorf("%q is an operation nobody has decided about", op)
 		}

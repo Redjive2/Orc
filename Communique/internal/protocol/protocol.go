@@ -260,6 +260,13 @@ func (o Op) Idempotent() bool {
 		// binaries. It is the one operation here whose repeat is not merely
 		// harmless but routine — a machine that missed a round gets the next one.
 		return true
+	case OpLibraryRoot:
+		// It sets the root to what was asked for rather than stepping it from
+		// wherever it was, so a machine already mirroring that directory is
+		// unchanged. Safe to retry after an unknown outcome, which matters: the
+		// round that carried it is the round that may have changed what the next
+		// mirror collects.
+		return true
 	case OpOrcNewIdentity, OpOrcNewRole, OpOrcNewPermission,
 		OpOrcRemoveIdentity, OpOrcRemoveRole, OpOrcRemovePerm,
 		OpOrcGrant, OpOrcEmploy, OpOrcPoke, OpOrcRefresh:
@@ -284,7 +291,8 @@ func (o Op) Idempotent() bool {
 
 // Ops lists every defined operation.
 var Ops = slices.Concat([]Op{OpSend, OpReply, OpRead, OpArchive, OpCC,
-	OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir, OpRemoveTree, OpUpgrade}, TaskOps, FleetOps)
+	OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir, OpRemoveTree,
+	OpUpgrade, OpLibraryRoot}, TaskOps, FleetOps)
 
 // Valid reports whether o is one of the defined operations.
 func (o Op) Valid() bool { return slices.Contains(Ops, o) }
@@ -705,12 +713,17 @@ type Args struct {
 	Load    int    `json:"load,omitempty"`
 	Message string `json:"message,omitempty"`
 
-	// `orc workspace`'s operands.
+	// An absolute directory on the machine that applies the action.
 	//
-	// Workspace is the absolute path to work in, and is deliberately not `Path`:
-	// that field means "relative to the mirrored checkout and may not climb out of
-	// it", and two meanings on one field would make the queue's own report of what
-	// an action is about depend on which operation sat beside it.
+	// Workspace is deliberately not `Path`: that field means "relative to the
+	// mirrored checkout and may not climb out of it", and two meanings on one
+	// field would make the queue's own report of what an action is about depend on
+	// which operation sat beside it.
+	//
+	// Two operations use it, and they are the same question at two scales:
+	// `orc workspace` moves where one agent works, and `system.library` moves the
+	// directory the whole machine mirrors and edits. Both are "an absolute path to
+	// work in", which is why they share a field rather than having one each.
 	//
 	// From is where the operator saw the identity working. Adopt says the directory
 	// is expected to be there already, which is the difference between working in
@@ -839,6 +852,16 @@ var argRules = map[Op]argRule{
 	// name — a path arriving over the wire and handed to a build script is the
 	// shape of every remote-execution hole there has ever been.
 	OpUpgrade: {},
+
+	// Moving the library does carry a path, and the rule above is the reason it
+	// carries nothing else. It names a directory to mirror and to write inside,
+	// never a program to run, and the machine that receives it decides whether to
+	// accept it — see OpLibraryRoot and checkLibraryRoot.
+	//
+	// `workspace` rather than `path` because it is absolute: `path` means
+	// "relative to the mirrored checkout and may not climb out of it", which is
+	// the opposite of naming the checkout itself.
+	OpLibraryRoot: {workspace: true},
 }
 
 // The fleet verbs live in fleet.go and are folded in here, so there is still one

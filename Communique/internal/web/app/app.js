@@ -474,6 +474,34 @@ const actions = {
       adopt: got.how !== "move",
     }));
   },
+  // moveLibrary changes the directory this machine mirrors.
+  //
+  // It is a bigger change than it looks, and the dialog says so rather than
+  // discovering it afterwards: the code and docs tabs are this directory, and it
+  // is the only place on the machine cq's editor may write. Point it somewhere
+  // else and every file open in another tab belongs to a repository the server is
+  // no longer looking at.
+  //
+  // The machine decides whether to accept it. A path that is not there, or that
+  // swallows the fleet's keys, is refused on arrival with a reason — which is why
+  // nothing here tries to check the path beyond it being non-empty and different.
+  async moveLibrary(f) {
+    const got = await dialog.ask({
+      title: `mirror something else on ${f.machine}`,
+      note: "the code and docs tabs show this directory, and it is the only one " +
+        "cq may write to. the change takes effect on this machine's next sync.",
+      submit: "queue the move",
+      fields: [
+        { name: "workspace", label: "directory on that machine", value: f.libraryRoot || "" },
+      ],
+    });
+    if (got === null) return;
+
+    const workspace = (got.workspace || "").trim();
+    if (!workspace || workspace === f.libraryRoot) return;
+
+    await run(() => api.moveLibrary(f.machine, workspace));
+  },
   // editInstruct writes one layer.
   //
   // Two things it has to say, because neither is visible from the screen: a prompt

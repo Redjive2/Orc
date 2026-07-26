@@ -45,10 +45,10 @@ const (
 // The state is carried between calls because a terminal is free to split a sequence
 // across reads, and a half-consumed one that reset would put its own tail on screen.
 const (
-	escNone = iota // ordinary text
-	escStart       // ESC seen; the next byte says what kind
-	escCSI         // ESC [ … — runs until a byte in the final range
-	escSS3         // ESC O x — exactly one more byte
+	escNone  = iota // ordinary text
+	escStart        // ESC seen; the next byte says what kind
+	escCSI          // ESC [ … — runs until a byte in the final range
+	escSS3          // ESC O x — exactly one more byte
 )
 
 // DetachKey is what follows ^\ to detach. It matches the raw proxy's sequence, so one
