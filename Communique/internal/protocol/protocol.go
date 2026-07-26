@@ -121,6 +121,18 @@ const (
 	OpMakeDir   Op = "mkdir"  // make a directory
 	OpRemoveDir Op = "rmdir"  // remove an empty directory
 
+	// OpRemoveTree removes a directory and everything under it.
+	//
+	// It is the one action here that cannot be undone and cannot be checked
+	// afterwards, so it carries the whole of what the operator was looking at:
+	// every file path the mirror showed inside that directory. The agent walks
+	// the real one and refuses if it finds anything the list does not name.
+	//
+	// That is what makes it safe from a snapshot minutes old. A folder somebody
+	// filed work into after the mirror was taken is a folder this refuses, and
+	// the operator is told so rather than losing the work.
+	OpRemoveTree Op = "rmtree"
+
 	// The task verbs, one per Macmuffin command that changes something.
 	//
 	// They are namespaced because `create` and `delete` were already taken by the
@@ -157,7 +169,7 @@ var TaskOps = []Op{
 func (o Op) TouchesTasks() bool { return slices.Contains(TaskOps, o) }
 
 // LibraryOps are the verbs that touch the checkout rather than the mailbox.
-var LibraryOps = []Op{OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir}
+var LibraryOps = []Op{OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir, OpRemoveTree}
 
 // TouchesLibrary reports whether an operation writes the mirrored checkout.
 func (o Op) TouchesLibrary() bool { return slices.Contains(LibraryOps, o) }
@@ -179,6 +191,13 @@ func (o Op) Idempotent() bool {
 		// An interrupted one is still never retried blindly — a delete that may
 		// already have happened is exactly the case that rule exists for.
 		return false
+	case OpRemoveTree:
+		// Not idempotent — the second application finds nothing and refuses —
+		// but safe to repeat where it left off, which is the question `retryable`
+		// actually asks. Its check is that nothing *unexpected* is there, so a
+		// half-finished removal has fewer files than the list, not more, and
+		// finishing the job is exactly what a retry should do.
+		return false
 	case OpRead, OpArchive, OpCC:
 		// cc is idempotent in Mailman: adding a participant who is already in a
 		// conversation is not an error and changes nothing.
@@ -192,7 +211,7 @@ func (o Op) Idempotent() bool {
 		// already one — both say so and change nothing.
 		return true
 	case OpOrcAssignRole, OpOrcAssignAuthority, OpOrcAssignPerm, OpOrcMove,
-		OpOrcBudget, OpOrcTend, OpOrcFire, OpOrcRevoke:
+		OpOrcBudget, OpOrcTend, OpOrcFire, OpOrcRevoke, OpOrcEditPermission:
 		// Each sets a state to what was asked for rather than stepping it. An
 		// identity already under that boss stays there; a role already at that
 		// authority is unchanged; `tend` reconciles to the same place however many
@@ -229,7 +248,7 @@ func (o Op) Idempotent() bool {
 
 // Ops lists every defined operation.
 var Ops = slices.Concat([]Op{OpSend, OpReply, OpRead, OpArchive, OpCC,
-	OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir, OpUpgrade}, TaskOps, FleetOps)
+	OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir, OpRemoveTree, OpUpgrade}, TaskOps, FleetOps)
 
 // Valid reports whether o is one of the defined operations.
 func (o Op) Valid() bool { return slices.Contains(Ops, o) }
@@ -669,6 +688,7 @@ type argRule struct {
 	task     bool
 	sub      bool
 	paths    bool
+	optPaths bool // a list of paths is allowed and may be empty
 	scales   bool
 	status   bool
 	optSub   bool // a sub name is allowed but not required
@@ -699,11 +719,12 @@ var argRules = map[Op]argRule{
 
 	// A create carries no base: it expects the path to be empty, and a digest of
 	// nothing is not a precondition, it is a guess.
-	OpWrite:     {path: true, text: true, base: true},
-	OpCreate:    {path: true, text: true},
-	OpDelete:    {path: true, base: true},
-	OpMakeDir:   {path: true},
-	OpRemoveDir: {path: true},
+	OpWrite:      {path: true, text: true, base: true},
+	OpCreate:     {path: true, text: true},
+	OpDelete:     {path: true, base: true},
+	OpMakeDir:    {path: true},
+	OpRemoveDir:  {path: true},
+	OpRemoveTree: {path: true, optPaths: true},
 
 	OpTaskCreate:   {task: true, scales: true},
 	OpTaskPush:     {task: true},
@@ -836,10 +857,44 @@ func (a Action) Validate() error {
 			return err
 		}
 	}
+	if err := a.validatePaths(rule); err != nil {
+		return err
+	}
 	if err := a.validateTaskArgs(rule); err != nil {
 		return err
 	}
 	return a.validateFleetArgs(rule)
+}
+
+// validatePaths checks a list of repository-relative paths.
+//
+// Two operations carry one and they mean different things by it, which is why
+// emptiness is decided by the rule rather than here. `task.scope` takes at least
+// one — `muff scope` does, and a scope of nothing is a missing operand rather
+// than a wide one. `rmtree` carries the files the operator was shown inside a
+// directory, and a directory holding only empty subdirectories shows none, so
+// an empty list there is a fact rather than an omission.
+func (a Action) validatePaths(rule argRule) error {
+	switch {
+	case !rule.paths && !rule.optPaths:
+		if len(a.Args.Paths) > 0 {
+			return unexpected(a.Op, "paths")
+		}
+		return nil
+	case rule.paths && len(a.Args.Paths) == 0:
+		return fault.Field("Action", "args.paths", "%s requires paths", a.Op)
+	}
+
+	if len(a.Args.Paths) > MaxListItems {
+		return fault.Field("Action", "args.paths", "%d paths exceeds the limit of %d",
+			len(a.Args.Paths), MaxListItems)
+	}
+	for i, path := range a.Args.Paths {
+		if err := checkPath("Action", fmt.Sprintf("args.paths[%d]", i), path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // validateTaskArgs checks the Macmuffin operands.
@@ -862,25 +917,6 @@ func (a Action) validateTaskArgs(rule argRule) error {
 		}
 	case !rule.sub && !rule.optSub && a.Args.Sub != "":
 		return unexpected(a.Op, "sub")
-	}
-
-	if rule.paths {
-		if len(a.Args.Paths) == 0 {
-			// A scope with no paths is not "scope everything" — `muff scope` takes at
-			// least one — so it is a missing operand rather than a wide one.
-			return fault.Field("Action", "args.paths", "%s requires paths", a.Op)
-		}
-		if len(a.Args.Paths) > MaxListItems {
-			return fault.Field("Action", "args.paths", "%d paths exceeds the limit of %d",
-				len(a.Args.Paths), MaxListItems)
-		}
-		for i, path := range a.Args.Paths {
-			if err := checkPath("Action", fmt.Sprintf("args.paths[%d]", i), path); err != nil {
-				return err
-			}
-		}
-	} else if len(a.Args.Paths) > 0 {
-		return unexpected(a.Op, "paths")
 	}
 
 	// The scales, held to Macmuffin's own ranges here so the queue never carries a

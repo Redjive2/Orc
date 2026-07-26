@@ -222,6 +222,7 @@ func TestIdempotenceIsDecidedPerOperation(t *testing.T) {
 		{protocol.OpCreate, false},
 		{protocol.OpDelete, false},
 		{protocol.OpRemoveDir, false},
+		{protocol.OpRemoveTree, false},
 		{protocol.Op("something-new"), false},
 	} {
 		if got := tc.op.Idempotent(); got != tc.want {
@@ -248,7 +249,8 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			if !op.Idempotent() {
 				t.Errorf("%q should be idempotent", op)
 			}
-		case protocol.OpWrite, protocol.OpCreate, protocol.OpDelete, protocol.OpRemoveDir:
+		case protocol.OpWrite, protocol.OpCreate, protocol.OpDelete,
+			protocol.OpRemoveDir, protocol.OpRemoveTree:
 			// Not idempotent — the second application refuses rather than
 			// repeating — but safe to retry, which is a different question and
 			// the one `retryable` actually asks.
@@ -273,9 +275,12 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			}
 		case protocol.OpOrcAssignRole, protocol.OpOrcAssignAuthority, protocol.OpOrcAssignPerm,
 			protocol.OpOrcMove, protocol.OpOrcBudget, protocol.OpOrcTend,
-			protocol.OpOrcFire, protocol.OpOrcRevoke:
+			protocol.OpOrcFire, protocol.OpOrcRevoke, protocol.OpOrcEditPermission:
 			// Each sets a state to what was asked for, so a repeat lands in the
-			// same place. `tend` most of all: reconciling twice reconciles.
+			// same place. `tend` most of all: reconciling twice reconciles. An edit
+			// carries the whole permission, so applying it twice writes the same
+			// floor and the same clauses — and orc says "already that" rather than
+			// journaling a second amendment.
 			if !op.Idempotent() {
 				t.Errorf("%q should be idempotent", op)
 			}
@@ -295,5 +300,32 @@ func TestEveryOperationIsClassified(t *testing.T) {
 		default:
 			t.Errorf("%q is an operation nobody has decided about", op)
 		}
+	}
+}
+
+// TestAnInterruptedLibraryVerbMayBeRetried.
+//
+// Every one of them looks before it acts, so a second application refuses or
+// finishes rather than repeating. That is exactly the case a retry exists for:
+// "it may or may not have removed the folder" is when somebody most wants to try
+// again and have the machine decide.
+func TestAnInterruptedLibraryVerbMayBeRetried(t *testing.T) {
+	s := open(t)
+	for _, tc := range []struct {
+		op   protocol.Op
+		args protocol.Args
+	}{
+		{protocol.OpWrite, protocol.Args{Path: "a.go", Text: "x", Base: strings.Repeat("b", 64)}},
+		{protocol.OpCreate, protocol.Args{Path: "new.go", Text: "x"}},
+		{protocol.OpDelete, protocol.Args{Path: "a.go", Base: strings.Repeat("b", 64)}},
+		{protocol.OpRemoveDir, protocol.Args{Path: "Docs/Empty"}},
+		{protocol.OpRemoveTree, protocol.Args{Path: "Docs/Old", Paths: []string{"Docs/Old/a.md"}}},
+	} {
+		t.Run(string(tc.op), func(t *testing.T) {
+			doubtful := doubtfulAction(t, s, tc.op, tc.args)
+			if _, err := s.Retry(doubtful.ID, at); err != nil {
+				t.Errorf("%s in doubt should be retryable: %v", tc.op, err)
+			}
+		})
 	}
 }

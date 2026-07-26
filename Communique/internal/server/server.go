@@ -264,6 +264,7 @@ func (s *Server) routes() {
 	s.route("POST /api/v1/convos/{cuid}/cc", needSession, s.cc)
 	s.route("POST /api/v1/queue/{id}/retry", needSession, s.retryAction)
 	s.route("DELETE /api/v1/queue/{id}", needSession, s.dropAction)
+	s.route("POST /api/v1/queue/clear", needSession, s.clearQueue)
 
 	// Editing the mirrored checkout. Every one queues; none of them writes here.
 	s.route("GET /api/v1/fleet", needSession, s.fleets)
@@ -286,6 +287,7 @@ func (s *Server) routes() {
 	s.route("POST /api/v1/fleet/roles/{name}/permissions", needSession, s.assignPermission)
 	s.route("POST /api/v1/fleet/roles/{name}/budget", needSession, s.setBudget)
 	s.route("DELETE /api/v1/fleet/roles/{name}", needSession, s.removeRole)
+	s.route("PATCH /api/v1/fleet/permissions/{name}", needSession, s.editPermission)
 	s.route("DELETE /api/v1/fleet/permissions/{name}", needSession, s.removePermission)
 	s.route("POST /api/v1/fleet/tend", needSession, s.tendFleet)
 
@@ -314,6 +316,7 @@ func (s *Server) routes() {
 	s.route("POST /api/v1/library/delete", needSession, s.deleteFile)
 	s.route("POST /api/v1/library/mkdir", needSession, s.makeDir)
 	s.route("POST /api/v1/library/rmdir", needSession, s.removeDir)
+	s.route("POST /api/v1/library/rmtree", needSession, s.removeTree)
 
 	// The application itself, behind the gate like everything else — the
 	// bundle is "inside the cq website".

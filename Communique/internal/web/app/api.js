@@ -78,6 +78,7 @@ export const api = {
     request("POST", "/api/v1/messages", { machine, to, subject, body }),
   retry: (id) => request("POST", `/api/v1/queue/${encodeURIComponent(id)}/retry`, {}),
   drop: (id) => request("DELETE", `/api/v1/queue/${encodeURIComponent(id)}`),
+  clearQueue: (states) => request("POST", "/api/v1/queue/clear", states ? { states } : {}),
   // Editing the mirrored checkout. Every one queues and leaves on the next sync.
   writeFile: (machine, path, text, base) =>
     request("POST", "/api/v1/library/write", { machine, path, text, base }),
@@ -87,6 +88,11 @@ export const api = {
     request("POST", "/api/v1/library/delete", { machine, path, base }),
   makeDir: (machine, path) => request("POST", "/api/v1/library/mkdir", { machine, path }),
   removeDir: (machine, path) => request("POST", "/api/v1/library/rmdir", { machine, path }),
+  // The manifest travels with the request: it is what the agent checks the real
+  // directory against, so a folder that gained work since the mirror was taken
+  // is refused rather than swept up with the rest.
+  removeTree: (machine, path, paths) =>
+    request("POST", "/api/v1/library/rmtree", { machine, path, paths }),
 
   // The task verbs. One call per Macmuffin command that changes something; each
   // queues and leaves on the next sync, like everything else the browser does.
@@ -136,6 +142,12 @@ export const api = {
   setBudget: (machine, name, load) => fleetCall("roles", name, "budget", machine, { load }),
   removeRole: (machine, name) =>
     request("DELETE", `/api/v1/fleet/roles/${encodeURIComponent(name)}`, { machine }),
+  // A permission's floor and clauses, together: Orc's `edit permission` keeps
+  // whichever half it is not given, so both are always sent from here — a form
+  // that showed both and changed one would otherwise leave the other to a default.
+  editPermission: (machine, name, floor, patterns) =>
+    request("PATCH", `/api/v1/fleet/permissions/${encodeURIComponent(name)}`,
+      { machine, floor, patterns }),
   // With a role it narrows that one role; without, it deletes the permission.
   removePermission: (machine, name, role) =>
     request("DELETE", `/api/v1/fleet/permissions/${encodeURIComponent(name)}`,

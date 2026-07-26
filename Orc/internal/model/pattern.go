@@ -26,6 +26,20 @@ const (
 	KindWrite
 	KindSpawn
 	KindOrc
+	// KindTool is a named capability in another Orc tool.
+	//
+	// It exists because containment is by *clause*, not by name — see Contains and
+	// Fleet.Holds — and that is right for everything above it: an identity that may
+	// write everything may hand on a permission to write one directory. It is wrong
+	// for a capability whose meaning is "may run this privileged action", because
+	// there is no path glob that honestly describes it and any glob broad enough to
+	// describe it would confer it by accident.
+	//
+	// So `tool(upgrade)` is covered by `tool(upgrade)` and by nothing else. A role
+	// with `write(**)` does not get it, which is the whole point: `upgrade` sits at
+	// floor 90, and a permission that a floor-70 role could reach through coverage
+	// would have no floor at all.
+	KindTool
 )
 
 // String returns the kind as it is written and stored.
@@ -39,13 +53,15 @@ func (k Kind) String() string {
 		return "spawn"
 	case KindOrc:
 		return "orc"
+	case KindTool:
+		return "tool"
 	default:
 		return "unset"
 	}
 }
 
 // Valid reports whether the kind is one this build knows.
-func (k Kind) Valid() bool { return k >= KindRead && k <= KindOrc }
+func (k Kind) Valid() bool { return k >= KindRead && k <= KindTool }
 
 // ParseKind reads a kind name.
 func ParseKind(raw string) (Kind, error) {
@@ -58,14 +74,16 @@ func ParseKind(raw string) (Kind, error) {
 		return KindSpawn, nil
 	case "orc":
 		return KindOrc, nil
+	case "tool":
+		return KindTool, nil
 	default:
 		return KindUnset, fault.Usage{Reason: fmt.Sprintf(
-			"unknown permission kind %q; try read, write, spawn, or orc", raw)}
+			"unknown permission kind %q; try read, write, spawn, orc, or tool", raw)}
 	}
 }
 
 // Kinds lists every kind, for help and for tests that must be total.
-func Kinds() []Kind { return []Kind{KindRead, KindWrite, KindSpawn, KindOrc} }
+func Kinds() []Kind { return []Kind{KindRead, KindWrite, KindSpawn, KindOrc, KindTool} }
 
 // Pattern is one clause of a permission: a kind and what it applies to.
 //
@@ -123,10 +141,10 @@ func ParsePattern(raw string) (Pattern, error) {
 		}
 		return Pattern{kind: kind, arg: clean}, nil
 
-	default: // KindOrc
+	default: // KindOrc, KindTool
 		if strings.ContainsAny(arg, "/ \t") {
 			return Pattern{}, fault.Usage{Reason: fmt.Sprintf(
-				"orc(%s) names a verb, so it cannot contain a slash or a space", arg)}
+				"%s(%s) names one thing, so it cannot contain a slash or a space", kind, arg)}
 		}
 		return Pattern{kind: kind, arg: strings.ToLower(arg)}, nil
 	}

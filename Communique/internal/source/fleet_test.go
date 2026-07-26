@@ -29,6 +29,9 @@ func TestOrcApplyRunsTheRightCommand(t *testing.T) {
 		protocol.OpOrcNewPermission: {
 			protocol.Args{Permission: "edit", Floor: 40, Patterns: []string{"read(A/**)", "write(A/i/**)"}},
 			[]string{"orc", "new", "permission", "edit", "40", "read(A/**)", "write(A/i/**)"}},
+		protocol.OpOrcEditPermission: {
+			protocol.Args{Permission: "edit", Floor: 40, Patterns: []string{"read(A/**)", "write(A/**)"}},
+			[]string{"orc", "edit", "permission", "edit", "--floor", "40", "read(A/**)", "write(A/**)"}},
 		protocol.OpOrcAssignRole: {
 			protocol.Args{Identity: "atlas", Role: "engineer"},
 			[]string{"orc", "assign", "role", "atlas", "engineer"}},

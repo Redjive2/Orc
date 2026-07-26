@@ -41,7 +41,7 @@ function stateWith(files, extra = {}) {
   return { library: { root: "Orc", files }, files: {}, open: {}, ...extra };
 }
 
-const noop = { toggle() {}, openFile() {} };
+const noop = { toggle() {}, openFile() {}, pick() {} };
 
 // everything opens every directory, so a test can see the filenames rather than
 // the one folded row the reader starts with.
@@ -116,7 +116,7 @@ test("counts are pluralised", () => {
 
 test("nothing is fetched to draw the tree", () => {
   let fetched = 0;
-  const actions = { toggle() {}, openFile() { fetched++; } };
+  const actions = { ...noop, openFile() { fetched++; } };
   lib.library(stateWith([doc, source, plain]), actions, { kind: "code" });
   assert.equal(fetched, 0, "listing the repository must not read any file");
 });
@@ -125,7 +125,7 @@ test("nothing is fetched to draw the tree", () => {
 // megabytes of repository over a slow link.
 test("opening a file asks for it once", () => {
   const asked = [];
-  const actions = { toggle() {}, openFile: (f) => asked.push(f.path) };
+  const actions = { ...noop, openFile: (f) => asked.push(f.path) };
   const open = { [`file:${plain.path}`]: false };
   const state = stateWith([plain], { open });
 
@@ -339,9 +339,15 @@ function buttons(nodes) {
 
 const labels = (nodes) => buttons(nodes).map((b) => b.textContent);
 
-test("an opened file offers edit and delete", () => {
+// A fold row is a button too, so its twist is what tells the tree apart from the
+// controls hanging off whichever row is picked.
+const controlLabels = (nodes) =>
+  labels(nodes).filter((text) => !/^[▸▾]/.test(text));
+
+test("the picked file offers edit and delete", () => {
   const state = stateWith([plain], {
     files: { [lib.fileKey(plain)]: { text: "package cli\n" } },
+    picked: `file:${plain.path}`,
     open: {
       "dir:Communique": true, "dir:Communique/internal": true,
       "dir:Communique/internal/cli": true, [`file:${plain.path}`]: true,
@@ -362,24 +368,41 @@ test("a closed file offers nothing to do to it", () => {
   assert.ok(!got.includes("edit"), `a closed file offered ${got.join(" ")}`);
 });
 
-test("an opened directory offers new file and new folder", () => {
-  const state = stateWith([plain], { open: { "dir:Communique": true } });
+test("the picked directory offers new file and new folder", () => {
+  const state = stateWith([plain], {
+    open: { "dir:Communique": true }, picked: "dir:Communique",
+  });
   const got = labels(lib.library(state, noop, { kind: "code" }));
   assert.ok(got.includes("new file"), got.join(" "));
   assert.ok(got.includes("new folder"), got.join(" "));
 });
 
-// cq removes empty directories only, so offering the control on a full one would
-// be offering a button that refuses — and the refusal arrives a sync later.
-test("only an empty directory offers to be deleted", () => {
-  const full = stateWith([plain], { open: { "dir:Communique": true } });
-  assert.ok(!labels(lib.library(full, noop, { kind: "code" })).includes("delete folder"));
+// A directory with files in it can be deleted. It could not before, which made
+// removing a real folder a matter of deleting every file inside it one at a
+// time and then the folder — so, in practice, not possible at all.
+test("a directory with things in it can still be deleted", () => {
+  const full = stateWith([plain], {
+    open: { "dir:Communique": true }, picked: "dir:Communique",
+  });
+  assert.ok(labels(lib.library(full, noop, { kind: "code" })).includes("delete folder"));
+});
 
-  // A directory with a document in it is empty as far as the code tab is
-  // concerned, which is exactly when the control must not appear either.
-  const state = stateWith([doc], { open: { "dir:Docs": true, "dir:Docs/Dock": true } });
-  const got = labels(lib.library(state, noop, { kind: "docs" }));
-  assert.ok(!got.includes("delete folder"), `a full directory offered ${got.join(" ")}`);
+// TestTheManifestIsEveryFileUnderneath: it is what the agent checks the real
+// directory against, so a file left out of it is a file that makes the removal
+// refuse, and one invented is a file the agent will not find.
+test("the manifest is every file underneath, at any depth", () => {
+  const state = stateWith([plain, doc], {
+    open: { "dir:Communique": true }, picked: "dir:Communique",
+  });
+  const asked = [];
+  const actions = {
+    ...noop,
+    removeFolder: (m, dir, paths, empty) => asked.push({ dir, paths, empty }),
+  };
+  for (const b of buttons(lib.library(state, actions, { kind: "code" }))) {
+    if (b.textContent === "delete folder") b.listeners.click.forEach((fn) => fn({ target: b }));
+  }
+  assert.deepEqual(asked, [{ dir: "Communique", paths: [plain.path], empty: false }]);
 });
 
 // An edit has to say which machine holds the file, and a directory is not itself
@@ -390,24 +413,82 @@ test("only an empty directory offers to be deleted", () => {
 // "/" — an absolute path is the one thing the agent refuses outright.
 test("a directory action names the machine holding its contents", () => {
   const asked = [];
-  const actions = { toggle() {}, openFile() {}, newFile: (m, p) => asked.push([m, p]) };
-  const state = stateWith([plain], { open: { "dir:Communique": true } });
+  const actions = { ...noop, newFile: (m, p) => asked.push([m, p]) };
+  const state = stateWith([plain], {
+    open: { "dir:Communique": true }, picked: "dir:Communique",
+  });
 
   for (const b of buttons(lib.library(state, actions, { kind: "code" }))) {
     if (b.textContent === "new file") b.listeners.click.forEach((fn) => fn({ target: b }));
   }
-  assert.deepEqual(asked, [["studio", "Communique"], ["studio", ""]]);
+  assert.deepEqual(asked, [["studio", "Communique"]]);
+});
+
+// The whole point of picking: one row's worth of controls on screen, not one
+// under every line of the tree.
+test("only the picked row carries controls", () => {
+  const open = { "dir:Communique": true, "dir:Communique/internal": true };
+
+  const none = controlLabels(lib.library(stateWith([plain], { open }), noop, { kind: "code" }));
+  assert.deepEqual(none, [], `nothing is picked, so nothing should be offered: ${none.join(" ")}`);
+
+  const one = stateWith([plain], { open, picked: "dir:Communique/internal" });
+  const got = controlLabels(lib.library(one, noop, { kind: "code" }));
+  assert.deepEqual(got, ["new file", "new folder", "delete folder"], got.join(" "));
+});
+
+// The root is a directory like any other and is where a new module starts, so it
+// offers the first two — but it is the checkout itself, and there is no `..` to
+// be standing in afterwards.
+test("the picked root offers to be filled but never deleted", () => {
+  const state = stateWith([plain], { picked: "dir:" });
+  const got = controlLabels(lib.library(state, noop, { kind: "code" }));
+  assert.deepEqual(got, ["new file", "new folder"], got.join(" "));
 });
 
 // The root holds the whole checkout, so "delete folder" there is not a folder
 // operation — there would be nothing left to be standing in.
-test("the root is never offered for deletion", () => {
-  const got = labels(lib.library(stateWith([plain]), noop, { kind: "code" }));
-  assert.ok(!got.includes("delete folder"), got.join(" "));
-  assert.ok(got.includes("new folder"), "the root should still offer to be filled");
-});
-
 test("annotations are counted through their nesting", () => {
   assert.equal(lib.countAnnotations(source.annotations), 2);
   assert.equal(lib.countAnnotations([]), 0);
+});
+
+// A folder can be acted on without being opened first. Deleting one should not
+// require expanding it, and the controls belong under the row they act on rather
+// than at the bottom of whatever it contains.
+test("a picked folder offers its controls while still closed", () => {
+  const state = stateWith([plain], { picked: "dir:Communique" });
+  const got = controlLabels(lib.library(state, noop, { kind: "code" }));
+  assert.deepEqual(got, ["new file", "new folder", "delete folder"], got.join(" "));
+});
+
+// A file is different, and the difference is not cosmetic: an edit and a delete
+// each carry the digest of what was on screen, and there is no digest of a file
+// nobody has opened.
+test("a picked file offers nothing until it has been read", () => {
+  const open = {
+    "dir:Communique": true, "dir:Communique/internal": true,
+    "dir:Communique/internal/cli": true,
+  };
+  const unread = stateWith([plain], { open, picked: `file:${plain.path}` });
+  assert.deepEqual(controlLabels(lib.library(unread, noop, { kind: "code" })), []);
+
+  const read = stateWith([plain], {
+    open: { ...open, [`file:${plain.path}`]: true },
+    picked: `file:${plain.path}`,
+    files: { [lib.fileKey(plain)]: { text: "package cli\n" } },
+  });
+  assert.deepEqual(controlLabels(lib.library(read, noop, { kind: "code" })), ["edit", "delete"]);
+});
+
+// A file the mirror could not carry has no text to edit and no digest to delete
+// against, so it says why it was skipped and offers nothing.
+test("a skipped file offers nothing to do to it", () => {
+  const skipped = { ...plain, path: "Communique/big.bin", skipped: "it is not text" };
+  const state = stateWith([skipped], {
+    open: { "dir:Communique": true, [`file:${skipped.path}`]: true },
+    picked: `file:${skipped.path}`,
+    files: { [lib.fileKey(skipped)]: { text: "" } },
+  });
+  assert.deepEqual(controlLabels(lib.library(state, noop, { kind: "code" })), []);
 });

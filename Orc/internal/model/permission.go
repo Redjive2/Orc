@@ -3,10 +3,12 @@ package model
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"orc/common/clock"
 	"orc/common/fault"
+	"orc/common/user"
 )
 
 // MaxPatterns bounds one permission. A permission with more clauses than this is
@@ -121,4 +123,93 @@ func (p Permission) Load() (int, bool) {
 		}
 	}
 	return best, found
+}
+
+// PermissionOp is what an event does to a permission.
+//
+// There is one, and the plan said there would be none: §13 decided a permission
+// was immutable because nothing mutated it, so a journal would be "a file that is
+// always empty and a fold that can never run". `orc edit permission` invalidates
+// that premise rather than the reasoning — the moment something mutates one, the
+// journal §3 reserved for every entity is what it should have.
+type PermissionOp string
+
+// OpAmend replaces a permission's floor and clauses in one step.
+//
+// One op rather than two, because a permission is edited as a whole: the form
+// that changes it submits both halves, and two events would let a floor and the
+// clauses it guards disagree for the width of a crash.
+const OpAmend PermissionOp = "amend"
+
+// PermissionEvent is one change to a permission.
+type PermissionEvent struct {
+	op       PermissionOp
+	by       user.Name
+	at       time.Time
+	floor    Authority
+	patterns []Pattern
+}
+
+// Amend is `orc edit permission`.
+func Amend(by user.Name, at time.Time, floor Authority, patterns []Pattern) (PermissionEvent, error) {
+	if floor.Zero() {
+		return PermissionEvent{}, fault.Usage{Reason: "a permission needs a floor between 1 and 100"}
+	}
+	if len(patterns) == 0 {
+		return PermissionEvent{}, fault.Usage{Reason: "a permission with no clauses permits nothing; delete it instead"}
+	}
+	if len(patterns) > MaxPatterns {
+		return PermissionEvent{}, fault.Usage{Reason: fmt.Sprintf(
+			"a permission may carry %d clauses, not %d", MaxPatterns, len(patterns))}
+	}
+	if by.Zero() {
+		return PermissionEvent{}, fault.Internal{Where: "model.Amend", Detail: "no actor named"}
+	}
+	if at.IsZero() {
+		return PermissionEvent{}, fault.Internal{Where: "model.Amend", Detail: "no timestamp"}
+	}
+	return PermissionEvent{op: OpAmend, by: by, at: at, floor: floor, patterns: slices.Clone(patterns)}, nil
+}
+
+// Op returns what the event does.
+func (e PermissionEvent) Op() PermissionOp { return e.op }
+
+// By returns who made the change.
+func (e PermissionEvent) By() user.Name { return e.by }
+
+// At returns when.
+func (e PermissionEvent) At() time.Time { return e.at }
+
+// Floor returns the new floor.
+func (e PermissionEvent) Floor() Authority { return e.floor }
+
+// Patterns returns a copy of the new clauses.
+func (e PermissionEvent) Patterns() []Pattern { return slices.Clone(e.patterns) }
+
+// Zero reports whether the event is the empty one, which a decision returns when
+// it decided nothing needed doing.
+func (e PermissionEvent) Zero() bool { return e.op == "" }
+
+// With folds an event onto a permission.
+//
+// The name and the creation time never change: renaming would break every role
+// that holds it and every card that lists it, which is what `orc new permission`
+// under another name is for.
+func (p Permission) With(e PermissionEvent) (Permission, error) {
+	if e.Zero() {
+		return p, nil
+	}
+	switch e.op {
+	case OpAmend:
+		next := Permission{name: p.name, floor: e.floor, patterns: slices.Clone(e.patterns), created: p.created}
+		slices.SortFunc(next.patterns, func(a, b Pattern) int { return strings.Compare(a.String(), b.String()) })
+		next.patterns = slices.CompactFunc(next.patterns, func(a, b Pattern) bool { return a.String() == b.String() })
+		if err := next.validate(); err != nil {
+			return Permission{}, err
+		}
+		return next, nil
+	default:
+		return Permission{}, fault.Internal{
+			Where: "model.Permission.With", Detail: fmt.Sprintf("unknown op %q", e.op)}
+	}
 }

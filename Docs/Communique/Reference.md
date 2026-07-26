@@ -118,6 +118,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `POST fleet/roles/<n>/permissions`     | `orc assign permission`                  |
 | `POST fleet/roles/<n>/budget`          | `orc budget <role> <load>`               |
 | `DELETE fleet/roles/<n>`               | `orc remove role --yes`                  |
+| `PATCH fleet/permissions/<n>`          | `orc edit permission <name> --floor …`   |
 | `DELETE fleet/permissions/<n>`         | `orc remove permission [--from] --yes`   |
 | `POST fleet/tend`                      | `orc tend`                               |
 | `POST upgrade`                         | pull, rebuild, restart — here and queued out |

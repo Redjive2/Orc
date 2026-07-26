@@ -17,6 +17,7 @@
 // it a question rather than a second place that decides what happens.
 
 import { h, mount } from "./dom.js";
+import * as clauses from "./clauses.js";
 
 // panel is where a dialog lives: outside #view, so nothing the application
 // redraws can disturb it.
@@ -107,10 +108,44 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
 
     const rows = fields.map((f) => {
       let input;
+      let mirror = null;
+      let extras = [];
       if (f.kind === "choice") {
         input = h("select", {},
           ...f.options.map((o) => h("option", { value: String(o.value) }, o.label)));
         input.value = String(f.value ?? (f.options[0] && f.options[0].value));
+      } else if (f.kind === "lines") {
+        // Prose rather than a value: a message body, where the newlines are part
+        // of what is being written. It wraps, unlike the code editor, because
+        // this is a paragraph and a paragraph has no columns to keep.
+        input = h("textarea", { rows: String(f.rows || 5), placeholder: f.placeholder });
+        input.value = String(f.value ?? "");
+      } else if (f.kind === "clauses") {
+        // A line of permission clauses, drawn coloured underneath as it is typed.
+        //
+        // Underneath rather than in place: highlighting *inside* a text box means
+        // reimplementing the caret, and a caret that is one pixel wrong is worse
+        // than no colour. This keeps the real input exactly as it is — selection,
+        // undo, autocorrect off, a phone keyboard that behaves — and puts the
+        // reading of it below, where it can also say what it could not read.
+        input = h("input", {
+          type: "text", spellcheck: "false", autocapitalize: "off",
+          autocorrect: "off", placeholder: f.placeholder,
+        });
+        input.value = String(f.value ?? "");
+        mirror = h("div", { class: "clause-mirror", "aria-hidden": "true" });
+        const trouble = h("div", { class: "clause-trouble" });
+        const redraw = () => {
+          mount(mirror, ...clauses.highlight(input.value));
+          const bad = clauses.problems(input.value);
+          // Orc has the final say, so this reports rather than refuses: a clause
+          // this cannot read is still queued, because being unable to explain
+          // something is not grounds for refusing it.
+          mount(trouble, ...bad.map((b) => h("p", { class: "muted" }, b)));
+        };
+        input.addEventListener("input", redraw);
+        redraw();
+        extras = [mirror, trouble, clauses.cheatsheet(f.cheatsheet !== false)];
       } else {
         input = h("input", {
           type: f.kind === "number" ? "number" : "text",
@@ -125,7 +160,8 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
       return h("label", { class: "field" },
         h("span", {}, f.label),
         input,
-        f.hint ? h("span", { class: "muted hint" }, f.hint) : null);
+        f.hint ? h("span", { class: "muted hint" }, f.hint) : null,
+        ...extras);
     });
 
     // Validated here, in the sheet, with the message beside the box that is

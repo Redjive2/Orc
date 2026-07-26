@@ -13,6 +13,7 @@ import { endingOf, toLF, fromLF, LF } from "./eol.js";
 import * as editor from "./editor.js";
 import * as dialog from "./dialog.js";
 import * as fleetView from "./fleet.js";
+import * as clauses from "./clauses.js";
 
 const nav = document.getElementById("nav");
 const view = document.getElementById("view");
@@ -28,7 +29,9 @@ let state = {
   // The library's structure, the file texts read so far, and which folds are
   // open. Openness is state rather than DOM, so a redraw on sync does not
   // collapse everything the reader had opened.
-  library: null, files: {}, open: {},
+  // `picked` is the one row whose controls are on screen. A tree with a button
+  // under every line is a tree nobody can read.
+  library: null, files: {}, open: {}, picked: null,
   detail: null, admin: null, error: null,
 };
 
@@ -47,9 +50,9 @@ function draw() {
   if (route.startsWith("/message/")) {
     mount(view, views.message(state, state.detail, actions));
   } else if (route.startsWith("/archive")) {
-    mount(view, views.mailbox(state, { box: "archive" }));
+    mount(view, views.mailbox(state, { box: "archive" }, actions));
   } else if (route.startsWith("/sent")) {
-    mount(view, views.mailbox(state, { box: "sent" }));
+    mount(view, views.mailbox(state, { box: "sent" }, actions));
   } else if (route.startsWith("/compose")) {
     mount(view, views.compose(state, actions));
   } else if (route.startsWith("/queue")) {
@@ -67,7 +70,7 @@ function draw() {
   } else if (route.startsWith("/admin")) {
     mount(view, views.admin(state, actions));
   } else {
-    mount(view, views.mailbox(state, { box: "inbox" }));
+    mount(view, views.mailbox(state, { box: "inbox" }, actions));
   }
 }
 
@@ -82,6 +85,25 @@ const actions = {
     if (!body.trim()) return;
     await run(() => api.reply(m.puid, m.machine, subject, body));
   },
+  // Answering from the list, without opening the message first.
+  //
+  // The same verb as the composer on the message itself — Mailman roots a
+  // conversation when the parent is standalone, so a quick reply starts the
+  // thread exactly as a considered one does. What is saved is the navigation,
+  // which on a phone is the whole cost of answering a one-line question.
+  async quickReply(m) {
+    const got = await dialog.ask({
+      title: `reply to ${m.from}`,
+      note: m.subject,
+      fields: [
+        { name: "subject", label: "subject", value: views.reSubject(m.subject) },
+        { name: "body", label: "reply", kind: "lines", placeholder: "…" },
+      ],
+      submit: "queue reply",
+    });
+    if (!got) return;
+    await actions.reply(m, got.subject, got.body);
+  },
   // send reports whether the message was queued, so the form knows whether it
   // may clear itself. Every other action is fire-and-redraw.
   async send(machine, to, subject, body) {
@@ -95,6 +117,9 @@ const actions = {
   // fold would make the interface feel broken.
   toggle(key) {
     set({ open: { ...state.open, [key]: !state.open[key] } });
+  },
+  pick(key) {
+    set({ picked: key });
   },
   async openFile(file) {
     const key = library.fileKey(file);
@@ -157,16 +182,54 @@ const actions = {
     if (!name) return;
     await run(() => api.makeDir(machine, under(dir, name)));
   },
-  async removeFolder(machine, dir) {
+  // Deleting a folder that has things in it, which is the ordinary thing to
+  // want and was previously impossible without emptying it a file at a time.
+  //
+  // What makes it safe from a mirror minutes old is the manifest: the agent
+  // walks the real directory and refuses if it holds a file this list does not
+  // name, so work filed in there since the snapshot is not swept up with the
+  // rest. The count is said before anything is queued, because this is the one
+  // action that cannot be undone and cannot be checked afterwards, and a number
+  // is the only preview a phone can give.
+  async removeFolder(machine, dir, paths, empty) {
     if (!await dialog.confirm({
       title: `delete the folder ${dir}?`,
-      body: "it must already be empty. this cannot be undone.",
-      submit: "delete it",
+      body: empty
+        ? "there is nothing in it. this cannot be undone."
+        : `it takes the ${library.plural(paths.length, "file")} in it. this cannot be undone, ` +
+          "and it is refused if anything was added since you last synced.",
+      submit: empty ? "delete it" : `delete ${library.plural(paths.length, "file")}`,
     })) return;
-    await run(() => api.removeDir(machine, dir));
+    await run(() => empty
+      ? api.removeDir(machine, dir)
+      : api.removeTree(machine, dir, paths));
   },
   async retry(entry) { await run(() => api.retry(entry.action.id)); },
-  async drop(entry) { await run(() => api.drop(entry.action.id)); },
+  async drop(entry) {
+    // A settled action is a record of something that already happened, so
+    // dropping one loses nothing but the record. The two that carry a *reason*
+    // are worth a moment's pause; a done one is not, and asking would make
+    // tidying up feel dangerous.
+    if (entry.state === "failed" || entry.state === "in_doubt") {
+      if (!await dialog.confirm({
+        title: "forget this?",
+        body: "it leaves the queue, and the reason it failed goes with it. nothing is retried.",
+        submit: "forget it",
+      })) return;
+    }
+    await run(() => api.drop(entry.action.id));
+  },
+  // Sweeping up. The queue is a log as much as a queue, and after a busy
+  // afternoon the rows worth reading are below fifty that are done.
+  async clearDone(count) {
+    if (!await dialog.confirm({
+      title: `clear ${count} finished action${count === 1 ? "" : "s"}?`,
+      body: "they have all been applied; this removes the record, and nothing else. "
+        + "anything refused or in doubt stays.",
+      submit: "clear them", danger: false,
+    })) return;
+    await run(() => api.clearQueue(["done"]));
+  },
   async markRead(m) { await run(() => api.markRead(m.puid, m.machine)); },
   async archive(m) { await run(() => api.archiveMessage(m.puid, m.machine)); },
 
@@ -206,14 +269,35 @@ const actions = {
         { name: "name", label: "name" },
         { name: "floor", label: "floor", kind: "number", value: 1, min: 1, max: 100,
           hint: "the least authority that may hold it" },
-        { name: "patterns", label: "clauses",
-          hint: "space separated — read(Anno/**)  write(Orc/**)  spawn(24)  orc(assign)" },
+        { name: "patterns", label: "clauses", kind: "clauses",
+          hint: "space separated", placeholder: "read(Anno/**) spawn(24)" },
       ],
     });
     if (!got) return;
-    const patterns = got.patterns.split(/\s+/).filter(Boolean);
+    const patterns = clauses.split(got.patterns);
     if (patterns.length === 0) return;
     await run(() => api.newPermission(f.machine, got.name, got.floor, patterns));
+  },
+  // editPermission changes a permission that already exists, rather than deleting
+  // and remaking it: a role holding it keeps holding it, and the journal keeps the
+  // history of what it used to say.
+  async editPermission(f, permission) {
+    const got = await dialog.ask({
+      title: `edit ${permission.name}`,
+      note: "every holder of this permission is affected the moment it lands",
+      submit: "queue the change",
+      fields: [
+        { name: "floor", label: "floor", kind: "number", value: permission.floor,
+          min: 1, max: 100, hint: "the least authority that may hold it" },
+        { name: "patterns", label: "clauses", kind: "clauses",
+          value: (permission.patterns || []).join(" "),
+          hint: "space separated", cheatsheet: false },
+      ],
+    });
+    if (!got) return;
+    const patterns = clauses.split(got.patterns);
+    if (patterns.length === 0) return;
+    await run(() => api.editPermission(f.machine, permission.name, got.floor, patterns));
   },
 
   async assignRole(f, id) {

@@ -62,6 +62,13 @@ main { flex: 1; padding: 1.25rem 1.5rem 2rem; }
   text-decoration: none;
 }
 .row:hover { border-color: var(--frame); }
+
+/* A row and the one action offered beside it. The row is a link and the button
+   is not inside it, because a button inside a link is a target nobody can hit
+   reliably. */
+.rows .line { display: flex; align-items: stretch; gap: 1ch; }
+.rows .line > .row { flex: 1; min-width: 0; }
+
 .row .flag { color: var(--success); }
 .row .puid { color: var(--muted); text-align: right; }
 .row .when { color: var(--muted); }
@@ -137,6 +144,20 @@ button:disabled { color: var(--muted); border-color: var(--frame); cursor: defau
 button:disabled:hover { background: transparent; color: var(--muted); }
 button.quiet { color: var(--muted); border-color: var(--frame); }
 button.quiet:hover { background: var(--frame); color: var(--text); }
+/* Quiet to the point of being a word rather than a control: this appears on
+   every row, and a column of bordered buttons down the side of a mailbox is
+   chrome competing with the mail. The border arrives on hover and on focus, so
+   it is still obviously a thing to press when somebody goes looking. */
+button.reply, .replied {
+  align-self: center;
+  border-color: transparent;
+  color: var(--muted);
+  padding: .3rem 1ch;
+  font-size: .85em;
+}
+button.reply:hover { background: var(--frame); color: var(--text); }
+button.reply:focus-visible { border-color: var(--primary); color: var(--primary); }
+.replied { color: var(--warning); white-space: nowrap; }
 
 /* --- pending and failed ------------------------------------------------ */
 
@@ -267,6 +288,40 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .clause button { border: none; padding: 0; color: var(--muted); }
 .clause button:hover { background: transparent; color: var(--danger); }
 
+/* Clauses, coloured by kind. The kind carries the state — what this lets an
+   agent do — so it takes the accent and the argument stays --text: colouring
+   the path too would make a permission look like decoration rather than a rule.
+   `write` is the warning colour because it is the one that changes files. */
+.cl-kind { color: var(--primary); }
+.cl-read { color: var(--info); }
+.cl-write { color: var(--warning); }
+.cl-spawn { color: var(--secondary); }
+.cl-orc { color: var(--primary); }
+.cl-tool { color: var(--tertiary); }
+.cl-arg { color: var(--text); }
+.cl-paren { color: var(--subtle); }
+.cl-bad { color: var(--danger); text-decoration: underline wavy; }
+
+/* The mirror under a clause input. It sits in the same grid column and the same
+   font as the box above it, so a clause lines up with itself. */
+.clause-mirror {
+  min-height: 1.7em;
+  padding: 0 1ch;
+  border: 1px solid var(--frame);
+  border-top: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.clause-trouble { display: grid; gap: .1rem; }
+.clause-trouble p { margin: 0; color: var(--warning); }
+
+.cheatsheet { border: 1px solid var(--frame); padding: .25rem 1ch; }
+.cheatsheet summary { cursor: pointer; color: var(--muted); }
+.cheatsheet summary:hover { color: var(--text); }
+.cheatsheet .cheat { border-collapse: collapse; margin: .4rem 0 .2rem; }
+.cheatsheet .cheat td { padding: 0 2ch .1rem 0; vertical-align: baseline; }
+.cheatsheet .hint { margin: 0; }
+
 .grants { display: grid; gap: .15rem; }
 .grant { display: flex; flex-wrap: wrap; gap: 0 2ch; align-items: baseline; }
 .grant button { padding: 0 1ch; font-size: .85em; }
@@ -322,6 +377,20 @@ pre.code {
 }
 
 .folded > .inner { border-left: 1px solid var(--frame); margin-left: 1ch; }
+
+/* The picked row: the one thing whose controls are on screen.
+   Marked as well as acted on, so it is obvious which row the buttons underneath
+   belong to — a tree is a column of near-identical lines, and controls that
+   float in it without an owner are controls somebody will misfire. */
+button.fold.picked { background: var(--panel); color: var(--text); }
+button.fold.picked .twist { color: var(--primary); }
+
+/* Controls hanging off a row, rather than sitting under a card. Small, because
+   they interrupt a tree that is being read: one row's worth at a time is the
+   whole point, and at card size they still shout. The narrow-screen layer puts
+   the height back — a thumb needs the target a mouse does not. */
+.controls.row { gap: 1ch; padding: .15rem 0 .35rem; }
+.controls.row button { padding: .05rem 1ch; font-size: .85em; }
 
 /* Prose inside a fold is set off from the rule that marks its depth. Without
    this the first letter of every line touches the border, and a document reads
@@ -494,6 +563,10 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
     padding: 0 .5ch;
   }
   #nav .spacer { display: none; }
+
+  /* A row's controls are compact on a desk and not on a phone: the reason they
+     are small is that a mouse is precise, and a thumb is not. */
+  .controls.row button { font-size: 1em; padding: .3rem 1ch; }
 
   button, button.quiet, button.fold {
     min-height: 44px;

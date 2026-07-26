@@ -182,3 +182,41 @@ test("the page behind an open dialog is out of reach", async () => {
   assert.equal(view.inert, false, "the page was left inert after the dialog closed");
   assert.equal(view.getAttribute("aria-hidden"), null, "the page was left hidden from readers");
 });
+
+// A clause field is a plain input with a reading of itself underneath. The point
+// of the pair is that the box stays a box — nothing reimplements the caret — so
+// what is checked is that the mirror follows the box and that neither one stops
+// the value getting through.
+test("a clause field mirrors what is typed, and complains without refusing", async () => {
+  const done = dialog.ask({
+    title: "a permission",
+    fields: [{ name: "patterns", label: "clauses", kind: "clauses", value: "read(Docs/**)" }],
+  });
+
+  const mirror = find(document.body, (n) => n.className === "clause-mirror");
+  const trouble = find(document.body, (n) => n.className === "clause-trouble");
+  assert.equal(mirror.textContent, "read(Docs/**)");
+  assert.equal(trouble.textContent, "");
+
+  const box = inputs()[0];
+  box.value = "read(Docs/**) nope";
+  for (const fn of box.listeners.input) fn({});
+  assert.equal(mirror.textContent, "read(Docs/**) nope", "the mirror lost what was typed");
+  assert.match(trouble.textContent, /nope/);
+
+  // Orc has the final say, so an unreadable clause is still queued.
+  submit();
+  assert.deepEqual(await done, { patterns: "read(Docs/**) nope" });
+});
+
+test("a clause field brings its cheat sheet", async () => {
+  const done = dialog.ask({
+    title: "a permission",
+    fields: [{ name: "patterns", label: "clauses", kind: "clauses" }],
+  });
+  const sheet = find(document.body, (n) => n.className === "cheatsheet");
+  assert.ok(sheet, "no cheat sheet beside a clause field");
+  assert.match(sheet.textContent, /spawn\(24\)/);
+  click(button("cancel"));
+  await done;
+});

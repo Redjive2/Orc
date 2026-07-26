@@ -61,12 +61,14 @@ func retryable(e Entry) error {
 		if e.Action.Op.Idempotent() {
 			return nil
 		}
-		// A library verb carries the digest of what it expected to find, so a
-		// second application refuses rather than repeating. That makes it safe to
-		// offer even in doubt — which matters, because "it may or may not have
-		// written the file" is precisely when somebody wants to try again and
-		// have the machine decide.
-		if e.Action.Op.TouchesLibrary() && e.Action.Args.Base != "" {
+		// Every library verb looks before it acts: a write and a delete against
+		// the digest they were given, a create against the file already being
+		// there, a removal against the directory holding only what the operator
+		// was shown. So a second application refuses or finishes rather than
+		// repeating, and that makes all of them safe to offer even in doubt —
+		// which matters, because "it may or may not have written the file" is
+		// precisely when somebody wants to try again and have the machine decide.
+		if e.Action.Op.TouchesLibrary() {
 			return nil
 		}
 		return fault.Conflict{Reason: "this " + string(e.Action.Op) +

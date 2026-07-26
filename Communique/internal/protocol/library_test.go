@@ -294,3 +294,56 @@ func TestWhatIsNotText(t *testing.T) {
 		})
 	}
 }
+
+// TestRemoveTreeCarriesWhatWasSeen.
+//
+// The manifest is the whole of what makes a recursive delete safe from a mirror
+// minutes old, so the wire has to insist on its shape: paths inside the tree,
+// bounded in number, and allowed to be empty — a directory holding only empty
+// subdirectories shows no files, and that is a fact rather than an omission.
+func TestRemoveTreeCarriesWhatWasSeen(t *testing.T) {
+	sound := func(args protocol.Args) protocol.Action {
+		return protocol.Action{
+			ID: protocol.ActionID(strings.Repeat("a", 32)), Machine: "studio",
+			Op: protocol.OpRemoveTree, Queued: at, Args: args,
+		}
+	}
+
+	ok := sound(protocol.Args{Path: "Docs/Old", Paths: []string{"Docs/Old/a.md"}})
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("a sound rmtree was refused: %v", err)
+	}
+
+	// A directory of empty directories has nothing to list.
+	empty := sound(protocol.Args{Path: "Docs/Old"})
+	if err := empty.Validate(); err != nil {
+		t.Errorf("an empty manifest was refused: %v", err)
+	}
+
+	// A path that climbs out is refused here rather than at the agent, so a
+	// server on one platform cannot pass one to an agent on another.
+	out := sound(protocol.Args{Path: "Docs/Old", Paths: []string{"../etc/passwd"}})
+	if err := out.Validate(); !errors.Is(err, fault.ErrParse) {
+		t.Errorf("a path out of the tree was accepted: %v", err)
+	}
+
+	// And the directory itself is still required: a manifest with nothing to
+	// remove it from is not a removal.
+	none := sound(protocol.Args{Paths: []string{"Docs/Old/a.md"}})
+	if err := none.Validate(); !errors.Is(err, fault.ErrParse) {
+		t.Errorf("a rmtree with no path was accepted: %v", err)
+	}
+}
+
+// Nothing else may carry a manifest: an operation whose meaning depends on which
+// fields happen to be set is one the queue cannot report on honestly.
+func TestOnlyTheVerbsThatTakePathsMayCarryThem(t *testing.T) {
+	a := protocol.Action{
+		ID: protocol.ActionID(strings.Repeat("a", 32)), Machine: "studio",
+		Op: protocol.OpRemoveDir, Queued: at,
+		Args: protocol.Args{Path: "Docs/Old", Paths: []string{"Docs/Old/a.md"}},
+	}
+	if err := a.Validate(); !errors.Is(err, fault.ErrParse) {
+		t.Errorf("rmdir was allowed a manifest: %v", err)
+	}
+}

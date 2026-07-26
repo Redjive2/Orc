@@ -195,6 +195,8 @@ func (o *Orc) Apply(ctx context.Context, action protocol.Action) error {
 		args = []string{"new", "role", a.Role, strconv.Itoa(a.Authority), a.Description}
 	case protocol.OpOrcNewPermission:
 		args = append([]string{"new", "permission", a.Permission, strconv.Itoa(a.Floor)}, a.Patterns...)
+	case protocol.OpOrcEditPermission:
+		args = append([]string{"edit", "permission", a.Permission, "--floor", strconv.Itoa(a.Floor)}, a.Patterns...)
 	case protocol.OpOrcAssignRole:
 		args = []string{"assign", "role", a.Identity, a.Role}
 	case protocol.OpOrcAssignAuthority:

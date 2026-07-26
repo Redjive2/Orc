@@ -833,3 +833,155 @@ type fleetReader interface {
 	Subtree(user.Name) []user.Name
 	Authority(user.Name) (model.Authority, model.Authority)
 }
+
+// edit dispatches `orc edit`.
+func (a App) edit(args []string) error {
+	if len(args) == 0 {
+		return fault.Usage{Reason: "edit takes permission"}
+	}
+	switch args[0] {
+	case "permission":
+		return a.editPermission(args[1:])
+	default:
+		return fault.Usage{Reason: fmt.Sprintf(
+			"orc cannot edit a %q; only a permission can be edited in place.\n"+
+				"  a role's authority is `orc assign authority`, and its permission set is\n"+
+				"  `orc assign permission` and `orc remove permission --from <role>`", args[0])}
+	}
+}
+
+// editPermission changes a permission's floor and clauses in place.
+//
+// Plan.md §13 decided a permission was immutable, on the reasoning that nothing
+// mutated one — so widening meant creating another under a new name, which shows
+// up in every card that lists it. That is right for widening and wrong for
+// correcting: an operator who typed `read(Ano/**)` wants that permission fixed,
+// not a second one beside it with the misspelling preserved forever. The name is
+// what roles hold, so it is the one thing an edit cannot change.
+//
+// Everything a permission guards changes the instant this returns, for every role
+// that holds it and every identity under them. That is the point, and it is why
+// the command says who is affected before it does it.
+func (a App) editPermission(args []string) error {
+	var floorFlag string
+	rest, err := flagged(args, options{values: map[string]*string{"--floor": &floorFlag}})
+	if err != nil {
+		return err
+	}
+	if len(rest) == 0 {
+		return fault.Usage{Reason: "edit permission takes a name, then the clauses that replace the old ones, " +
+			"as in `orc edit permission edit-anno read(Anno/**) write(Anno/internal/**)`.\n" +
+			"  `--floor <n>` changes the floor; giving no clauses keeps the ones it has"}
+	}
+	s, err := a.begin()
+	if err != nil {
+		return err
+	}
+	// Editing is what `new` and `remove` are: the same verb class, so the same
+	// gate. An identity that may not make policy may not rewrite it either.
+	if err := s.mayRunVerb("new"); err != nil {
+		return err
+	}
+
+	name, err := model.ParseName(rest[0])
+	if err != nil {
+		return err
+	}
+	current, ok := s.fleet.Permission(name)
+	if !ok {
+		return fault.NotFound{Target: "permission " + name.String()}
+	}
+
+	floor := current.Floor()
+	if strings.TrimSpace(floorFlag) != "" {
+		if floor, err = model.ParseAuthority(floorFlag); err != nil {
+			return err
+		}
+		// The same rule as creating one: a floor above the caller's own authority
+		// is policy for people above them.
+		if err := s.atLeast(floor, "permission "+name.String()); err != nil {
+			return err
+		}
+	}
+
+	patterns := current.Patterns()
+	if len(rest) > 1 {
+		if patterns, err = model.ParsePatterns(rest[1:]); err != nil {
+			return err
+		}
+	}
+
+	// Raising a floor can leave a role holding a permission it is too junior to
+	// use. Orc tolerates that — `verify` reports it — but doing it silently from
+	// one command would be a permission that stops working for reasons nobody
+	// was told about.
+	var stranded []string
+	holders, granted := s.fleet.UsesPermission(name)
+	for _, roleName := range holders {
+		role, exists := s.fleet.Role(roleName)
+		if !exists {
+			continue
+		}
+		if !role.Authority().AtLeast(floor) {
+			stranded = append(stranded, fmt.Sprintf("%s (authority %s)", roleName, role.Authority()))
+		}
+	}
+	if len(stranded) > 0 {
+		return fault.Conflict{Path: name.String(), Reason: fmt.Sprintf(
+			"floor %s is above %s, which hold%s this permission and would keep it without being able to use it.\n"+
+				"  lower the floor, or take it off them first with `orc remove permission %s --from <role>`",
+			floor, strings.Join(stranded, ", "), plural2(len(stranded), "s", ""), name)}
+	}
+
+	amended, err := s.store.ApplyPermission(name, func(now model.Permission) (model.PermissionEvent, error) {
+		if now.Floor() == floor && equalPatterns(now.Patterns(), patterns) {
+			// Nothing to do, and saying so is better than appending an event
+			// that changes nothing to a journal somebody will read later.
+			return model.PermissionEvent{}, nil
+		}
+		return model.Amend(s.who, s.store.Now(), floor, patterns)
+	})
+	if err != nil {
+		return err
+	}
+
+	if amended.Floor() == current.Floor() && equalPatterns(amended.Patterns(), current.Patterns()) {
+		return a.say(fmt.Sprintf("permission %s is already that", a.out.Permission(name.String())))
+	}
+	if err := a.say(fmt.Sprintf("%s permission %s   floor %s · %s",
+		a.out.Good("edited"), a.out.Permission(name.String()),
+		a.out.Authority(amended.Floor().String()),
+		a.out.Path(strings.Join(model.PatternStrings(amended.Patterns()), " ")))); err != nil {
+		return err
+	}
+
+	// Who this just changed. An edit with no holders is a quiet one; an edit
+	// that widened what six agents may write should say six.
+	var affected []string
+	if len(holders) > 0 {
+		affected = append(affected, fmt.Sprintf("roles %s", strings.Join(model.Names(holders), ", ")))
+	}
+	if len(granted) > 0 {
+		affected = append(affected, fmt.Sprintf("granted to %s", strings.Join(user.Names(granted), ", ")))
+	}
+	if len(affected) == 0 {
+		return a.say("  " + a.out.Muted("nothing holds it, so nothing changed but the permission"))
+	}
+	return a.say("  " + a.out.Warn("in force now for ") + a.out.Muted(strings.Join(affected, "; ")))
+}
+
+// equalPatterns reports whether two clause sets are the same set.
+//
+// Both sides are sorted by the model, so this is a comparison rather than a
+// search: it exists to tell an edit that changed nothing from one that did.
+func equalPatterns(a, b []model.Pattern) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].String() != b[i].String() {
+			return false
+		}
+	}
+	return true
+}

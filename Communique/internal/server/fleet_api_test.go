@@ -39,6 +39,8 @@ func TestEveryFleetVerbQueues(t *testing.T) {
 		protocol.OpOrcRemoveIdentity: {"DELETE", "/api/v1/fleet/identities/atlas", `{` + m + `}`},
 		protocol.OpOrcAssignAuthority: {"POST", "/api/v1/fleet/roles/engineer/authority",
 			`{` + m + `,"authority":55}`},
+		protocol.OpOrcEditPermission: {"PATCH", "/api/v1/fleet/permissions/edit-anno",
+			`{` + m + `,"floor":40,"patterns":["read(Anno/**)"]}`},
 		protocol.OpOrcAssignPerm: {"POST", "/api/v1/fleet/roles/engineer/permissions",
 			`{` + m + `,"permission":"edit"}`},
 		protocol.OpOrcBudget:     {"POST", "/api/v1/fleet/roles/engineer/budget", `{` + m + `,"load":24}`},

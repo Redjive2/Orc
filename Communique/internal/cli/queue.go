@@ -45,9 +45,12 @@ func (a App) queue(args []string) error {
 		return a.queueRetry(state, rest[1:])
 	case "drop":
 		return a.queueDrop(state, rest[1:])
+	case "clear":
+		return a.queueClear(state, rest[1:])
 	default:
 		return fault.Usage{Reason: fmt.Sprintf(
-			"unknown queue subcommand %q; try `cq queue`, `cq queue retry <id>`, or `cq queue drop <id>`", rest[0])}
+			"unknown queue subcommand %q; try `cq queue`, `cq queue retry <id>`, "+
+				"`cq queue drop <id>`, or `cq queue clear`", rest[0])}
 	}
 }
 
@@ -128,7 +131,7 @@ func (a App) queueSummary(entries []store.Entry) error {
 		return err
 	}
 	if stuck > 0 {
-		return a.say("%s", a.ink("  cq queue retry <id> to try again · cq queue drop <id> to forget it", style.Quiet))
+		return a.say("%s", a.ink("  cq queue retry <id> · cq queue drop <id> · cq queue clear", style.Quiet))
 	}
 	return nil
 }
@@ -161,6 +164,66 @@ func (a App) queueDrop(state *store.Store, args []string) error {
 		return err
 	}
 	return a.say("%s forgotten", a.ink("✓", style.Good))
+}
+
+// queueClear sweeps up the settled entries.
+//
+// `done` alone by default, deliberately: `failed` and `in_doubt` carry the reason
+// they failed, which is the only record of it anywhere, and a tidy-up that threw
+// those away by default would make the housekeeping command the destructive one.
+//
+// It is the same rule the browser's "clear them" button follows, and the same the
+// server's endpoint applies — the two faces of one queue should not disagree about
+// what tidying means.
+func (a App) queueClear(state *store.Store, args []string) error {
+	all := false
+	for _, arg := range args {
+		switch arg {
+		case "--all":
+			all = true
+		default:
+			return fault.Usage{Reason: fmt.Sprintf(
+				"queue clear takes --all, or nothing to clear the done ones (got %q)", arg)}
+		}
+	}
+
+	entries, err := state.Queue()
+	if err != nil {
+		return err
+	}
+
+	cleared, left := 0, 0
+	for _, e := range entries {
+		switch {
+		case e.State == store.Done, all && e.State.Settled():
+		default:
+			left++
+			continue
+		}
+		if err := state.Drop(e.Action.ID); err != nil {
+			// One that will not go does not stop the rest: a drop can race a sync
+			// that has just reported, and "most of them went" is the honest
+			// outcome rather than a failure that leaves the list half swept.
+			a.tell("cq: %s could not be cleared: %v", string(e.Action.ID)[:8], err)
+			left++
+			continue
+		}
+		cleared++
+	}
+
+	if cleared == 0 {
+		return a.say("%s", a.ink("nothing to clear", style.Quiet))
+	}
+	return a.say("%s %s cleared%s", a.ink("✓", style.Good),
+		a.ink(fmt.Sprintf("%d", cleared), style.Value),
+		a.ink(leftNote(left), style.Quiet))
+}
+
+func leftNote(left int) string {
+	if left == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" · %d left, still in flight or unresolved", left)
 }
 
 // resolve turns what the operator typed into one action id.
@@ -260,6 +323,12 @@ func describe(action protocol.Action) string {
 		return fmt.Sprintf("%s — authority %d", action.Args.Role, action.Args.Authority)
 	case protocol.OpOrcNewPermission:
 		return fmt.Sprintf("%s — floor %d, %s", action.Args.Permission, action.Args.Floor,
+			strings.Join(action.Args.Patterns, " "))
+	case protocol.OpOrcEditPermission:
+		// "becomes" rather than a bare list: this one replaces what is there, and
+		// a queue somebody is deciding whether to approve should read as a change
+		// rather than as a statement of fact.
+		return fmt.Sprintf("%s — becomes floor %d, %s", action.Args.Permission, action.Args.Floor,
 			strings.Join(action.Args.Patterns, " "))
 	case protocol.OpOrcAssignRole:
 		return fmt.Sprintf("%s — %s", action.Args.Identity, action.Args.Role)

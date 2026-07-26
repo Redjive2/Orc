@@ -150,7 +150,8 @@ function dirNodes(node, prefix, ctx, depth) {
       depth,
       label: h("span", { class: "dir" }, `${name}/`),
       note: `${plural(inner.files, "file")} · ${plural(inner.lines, "line")}`,
-      children: () => [...dirNodes(child, path, ctx, depth + 1), dirControls(path, child, ctx)],
+      controls: () => dirControls(path, child, ctx),
+      children: () => dirNodes(child, path, ctx, depth + 1),
     }));
   }
   for (const file of node.files.sort((a, b) => a.path.localeCompare(b.path))) {
@@ -165,30 +166,46 @@ function dirNodes(node, prefix, ctx, depth) {
 // mirrored — it exists because things are in it, and an action has to name the
 // machine that holds them.
 function dirControls(path, node, ctx) {
+  if (ctx.state.picked !== `dir:${path}`) return null;
   const machine = machineIn(node);
-  // The root is the checkout itself. Removing it is not a folder operation, and
-  // there is no `..` to be standing in afterwards.
-  const empty = path !== "" && counts(node).files === 0;
 
-  return h("div", { class: "controls" },
-    h("button", {
-      class: "quiet",
-      onclick: () => ctx.actions.newFile(machine, path),
-    }, "new file"),
-    h("button", {
-      class: "quiet",
-      onclick: () => ctx.actions.newFolder(machine, path),
-    }, "new folder"),
-    // Only when there is nothing in it. cq removes empty directories only, so
-    // offering the control on a full one would be offering a button that
-    // refuses — and the refusal would arrive a sync later.
-    empty
-      ? h("button", {
-          class: "quiet danger",
-          onclick: () => ctx.actions.removeFolder(machine, path),
-        }, "delete folder")
-      : null,
+  return h("div", { class: "controls row" },
+    h("button", { class: "quiet", onclick: () => ctx.actions.newFile(machine, path) }, "new file"),
+    h("button", { class: "quiet", onclick: () => ctx.actions.newFolder(machine, path) }, "new folder"),
+    // The root is the checkout itself. Removing it is not a folder operation,
+    // and there is no `..` to be standing in afterwards.
+    path === "" ? null : h("button", {
+      class: "quiet danger",
+      onclick: () => ctx.actions.removeFolder(machine, path, filesUnder(node), hollow(node)),
+    }, "delete folder"),
   );
+}
+
+// filesUnder is every file the mirror is showing inside a directory, at any
+// depth — the manifest a recursive removal carries, and the number the operator
+// is asked to confirm.
+//
+// Skipped files are in it too. They are files the mirror knows about and named a
+// reason for, so they are part of what the operator was shown, and leaving them
+// out would make the agent refuse over a file that is on screen.
+export function filesUnder(node) {
+  const out = [];
+  const walk = (n) => {
+    for (const f of n.files) out.push(f.path);
+    for (const child of n.dirs.values()) walk(child);
+  };
+  walk(node);
+  return out.sort();
+}
+
+// hollow reports a directory with nothing in it at all — no files anywhere
+// under it, and no subdirectories either.
+//
+// It picks the verb. A hollow one gets `rmdir`, which is the narrowest thing
+// that does the job and gives the clearest refusal if it turns out not to be
+// empty after all. Anything else gets the recursive verb and the manifest.
+function hollow(node) {
+  return node.files.length === 0 && node.dirs.size === 0;
 }
 
 // machineIn finds which machine holds a directory's contents.
@@ -216,6 +233,10 @@ function fileNode(file, ctx, depth) {
     // Opening a file is what asks for its text. Until then the row is drawn
     // from the tree alone, which is why the whole repository can be listed.
     onOpen: () => ctx.actions.openFile(file),
+    // A file's controls need it to have been read: an edit and a delete each
+    // carry the digest of what was on screen, and there is no digest of a file
+    // nobody has opened. So unlike a folder's, these appear only once it is.
+    controls: () => fileControls(file, ctx),
     children: () => fileBody(file, ctx, depth + 1),
   });
 }
@@ -276,7 +297,6 @@ function fileBody(file, ctx, depth) {
   if (out.length === 0) {
     out.push(prose(file, loaded.text || ""));
   }
-  out.push(fileControls(file, loaded, ctx));
   return out;
 }
 
@@ -286,9 +306,12 @@ function fileBody(file, ctx, depth) {
 // is a link and a button inside a link is a target nobody can hit reliably —
 // and because the destructive one should be reached only by somebody who has
 // opened the file and looked at it.
-function fileControls(file, loaded, ctx) {
+function fileControls(file, ctx) {
+  if (ctx.state.picked !== `file:${file.path}`) return null;
+  const loaded = ctx.state.files ? ctx.state.files[fileKey(file)] : null;
+  if (!loaded || loaded.error || file.skipped) return null;
   const text = loaded.text || "";
-  return h("div", { class: "controls" },
+  return h("div", { class: "controls row" },
     h("button", {
       class: "quiet",
       onclick: () => ctx.actions.editFile(file, text),
@@ -356,12 +379,13 @@ function prose(file, text) {
 // Openness lives in the application's state rather than in the DOM, so a redraw
 // — which happens on every sync — does not collapse everything the reader had
 // opened. That is the difference between a fold that works and one that fights.
-function fold({ key, ctx, depth, label, note, children, onOpen }) {
+function fold({ key, ctx, depth, label, note, children, controls, onOpen }) {
   const open = ctx.state.open ? ctx.state.open[key] : false;
 
   const head = h("button", {
-    class: "fold",
+    class: ctx.state.picked === key ? "fold picked" : "fold",
     "aria-expanded": open ? "true" : "false",
+    "aria-current": ctx.state.picked === key ? "true" : null,
     // The depth is handed to CSS rather than turned into padding here: a phone
     // cannot afford a two-character indent five levels down a repository, and
     // that is a layout decision, which belongs in the stylesheet.
@@ -369,6 +393,11 @@ function fold({ key, ctx, depth, label, note, children, onOpen }) {
     onclick: () => {
       if (!open && onOpen) onOpen();
       ctx.actions.toggle(key);
+      // Picking is what puts this row's controls on screen. One row at a time,
+      // because a tree with a button under every line is a tree nobody can read
+      // — and the thing somebody is about to act on is the thing they just
+      // touched.
+      ctx.actions.pick(key);
     },
   },
     h("span", { class: "twist" }, open ? "▾" : "▸"),
@@ -376,8 +405,14 @@ function fold({ key, ctx, depth, label, note, children, onOpen }) {
     note ? h("span", { class: "muted note" }, note) : null,
   );
 
-  if (!open) return head;
-  return h("div", { class: "folded" }, head,
+  // Controls sit directly under the row they belong to, and outside the fold's
+  // contents. Two reasons. A folder can be acted on without being opened first —
+  // deleting one should not require expanding it. And in an open file they would
+  // otherwise be six hundred lines further down, past the thing they act on.
+  const acts = controls ? controls() : null;
+
+  if (!open) return acts ? h("div", { class: "folded" }, head, acts) : head;
+  return h("div", { class: "folded" }, head, acts,
     h("div", { class: "inner" }, ...children()));
 }
 

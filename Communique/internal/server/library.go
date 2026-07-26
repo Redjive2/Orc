@@ -152,6 +152,11 @@ type editBody struct {
 	Path    string `json:"path"`
 	Text    string `json:"text,omitempty"`
 	Base    string `json:"base,omitempty"`
+	// Paths is the manifest a recursive removal carries: every file the browser
+	// was showing inside the directory. It is the whole of what makes that verb
+	// safe from a mirror minutes old, so it travels with the request rather than
+	// being recomputed anywhere.
+	Paths []string `json:"paths,omitempty"`
 }
 
 // Validate refuses a bad path here rather than only when the action it becomes
@@ -173,7 +178,7 @@ func (s *Server) edit(w http.ResponseWriter, r *http.Request, op protocol.Op) {
 		return
 	}
 	s.enqueue(w, r, body.Machine, op, protocol.Args{
-		Path: body.Path, Text: body.Text, Base: body.Base,
+		Path: body.Path, Text: body.Text, Base: body.Base, Paths: body.Paths,
 	})
 }
 
@@ -183,4 +188,8 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) { s.edit(w, 
 func (s *Server) makeDir(w http.ResponseWriter, r *http.Request)    { s.edit(w, r, protocol.OpMakeDir) }
 func (s *Server) removeDir(w http.ResponseWriter, r *http.Request) {
 	s.edit(w, r, protocol.OpRemoveDir)
+}
+
+func (s *Server) removeTree(w http.ResponseWriter, r *http.Request) {
+	s.edit(w, r, protocol.OpRemoveTree)
 }

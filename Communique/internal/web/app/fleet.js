@@ -13,6 +13,7 @@
 // bug against the wrong thing.
 
 import { h } from "./dom.js";
+import * as clause from "./clauses.js";
 
 // remaining renders a wall-clock expiry as time left rather than as an instant.
 //
@@ -175,8 +176,10 @@ function clauses(id) {
   if (list.length === 0) {
     return h("div", { class: "clauses" }, h("span", { class: "muted" }, "no clauses"));
   }
+  // Coloured the same way as the ones in the permission editor, so the clause an
+  // agent turned out to have looks like the clause somebody wrote.
   return h("div", { class: "clauses" }, ...list.map((c) => h("span", { class: "clause" },
-    `${c.kind}(${c.arg})`,
+    ...clause.highlight(`${c.kind}(${c.arg})`),
     c.capped ? h("span", { class: "pending" }, ` ‡ asked ${c.asked}`) : null,
     c.source === "grant" ? h("span", { class: "muted" }, ` · granted${c.lapses ? `, ${c.lapses}` : ""}`) : null,
   )));
@@ -256,8 +259,9 @@ function permissions(f, actions) {
           held.length ? `held by ${held.join(", ")}` : "held by nothing"),
       ),
       h("div", { class: "clauses" },
-        ...(p.patterns || []).map((c) => h("span", { class: "clause" }, c))),
+        ...(p.patterns || []).map((c) => clause.chip(c))),
       actions ? h("div", { class: "controls" },
+        h("button", { class: "quiet", onclick: () => actions.editPermission(f, p) }, "edit…"),
         h("button", { class: "quiet danger", onclick: () => actions.removePermission(f, p) }, "delete"),
       ) : null,
     );

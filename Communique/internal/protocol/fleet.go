@@ -173,6 +173,7 @@ const (
 	OpOrcNewIdentity     Op = "orc.new.identity"      // orc new identity <name>
 	OpOrcNewRole         Op = "orc.new.role"          // orc new role <name> <authority> <what>
 	OpOrcNewPermission   Op = "orc.new.permission"    // orc new permission <name> <floor> <patterns…>
+	OpOrcEditPermission  Op = "orc.edit.permission"   // orc edit permission <name> [--floor n] [clauses…]
 	OpOrcAssignRole      Op = "orc.assign.role"       // orc assign role <identity> <role>
 	OpOrcAssignAuthority Op = "orc.assign.authority"  // orc assign authority <role> <authority>
 	OpOrcAssignPerm      Op = "orc.assign.permission" // orc assign permission <role> <permission>
@@ -204,7 +205,7 @@ const OpUpgrade Op = "system.upgrade"
 
 // FleetOps are the verbs that go through Orc rather than Mailman or Macmuffin.
 var FleetOps = []Op{
-	OpOrcNewIdentity, OpOrcNewRole, OpOrcNewPermission,
+	OpOrcNewIdentity, OpOrcNewRole, OpOrcNewPermission, OpOrcEditPermission,
 	OpOrcAssignRole, OpOrcAssignAuthority, OpOrcAssignPerm,
 	OpOrcRemoveIdentity, OpOrcRemoveRole, OpOrcRemovePerm,
 	OpOrcGrant, OpOrcRevoke, OpOrcMove,
@@ -218,9 +219,12 @@ func (o Op) TouchesFleet() bool { return slices.Contains(FleetOps, o) }
 // fleetRules is the operand contract for each fleet verb, folded into argRules by
 // protocol.go's initialiser.
 var fleetRules = map[Op]argRule{
-	OpOrcNewIdentity:     {identity: true},
-	OpOrcNewRole:         {role: true, authority: true, description: true},
-	OpOrcNewPermission:   {permission: true, floor: true, patterns: true},
+	OpOrcNewIdentity:   {identity: true},
+	OpOrcNewRole:       {role: true, authority: true, description: true},
+	OpOrcNewPermission: {permission: true, floor: true, patterns: true},
+	// An edit carries the whole permission, because that is what it replaces:
+	// a form that posted only the half somebody touched would wipe the other.
+	OpOrcEditPermission:  {permission: true, floor: true, patterns: true},
 	OpOrcAssignRole:      {identity: true, role: true},
 	OpOrcAssignAuthority: {role: true, authority: true},
 	OpOrcAssignPerm:      {role: true, permission: true},

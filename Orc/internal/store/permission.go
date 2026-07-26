@@ -59,10 +59,17 @@ func (s *Store) CreatePermission(name model.Name, floor model.Authority, pattern
 	return s.Permission(name)
 }
 
-// Permission reads one permission.
+// Permission reads one permission: its creation record with every amendment
+// folded on.
 func (s *Store) Permission(name model.Name) (model.Permission, error) {
+	p, _, err := s.InspectPermission(name)
+	return p, err
+}
+
+// permissionRecord reads the creation record alone, before any amendment.
+func (s *Store) permissionRecord(name model.Name) (model.Permission, error) {
 	if name.Zero() {
-		return model.Permission{}, fault.Internal{Where: "store.Permission", Detail: "no permission named"}
+		return model.Permission{}, fault.Internal{Where: "store.permissionRecord", Detail: "no permission named"}
 	}
 	path := s.permissionPath(name)
 
@@ -130,7 +137,10 @@ func decodePermission(path string, want model.Name, data []byte) (model.Permissi
 
 // Permissions lists every permission, in name order.
 func (s *Store) Permissions() ([]model.Permission, error) {
-	files, err := s.names(filepath.Join(s.root, permissionsDir), MaxPermissions, "permissions")
+	// Two files per permission now, so the limit is counted in files rather
+	// than permissions: a journal beside every record would otherwise halve the
+	// fleet's permission ceiling the moment anybody edited one.
+	files, err := s.names(filepath.Join(s.root, permissionsDir), MaxPermissions*2, "permission files")
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +149,9 @@ func (s *Store) Permissions() ([]model.Permission, error) {
 	for _, file := range files {
 		base, ok := strings.CutSuffix(file, ".json")
 		if !ok {
-			// Not written by Orc. Skipping is right; `verify` is what reports it.
+			// A .jsonl is a permission's journal, read through its record rather
+			// than listed beside it; anything else was not written by Orc, and
+			// `verify` is what reports that.
 			continue
 		}
 		name, err := model.ParseName(base)
@@ -176,6 +188,98 @@ func (s *Store) DeletePermission(name model.Name) error {
 	if err := s.ops.remove(path); err != nil {
 		return fault.IO{Op: "remove", Path: path, Err: err}
 	}
+	// The journal goes with the record. Leaving it behind would mean a
+	// permission created again under the same name inherited the amendments of
+	// the one that was deleted — a fold over somebody else's history.
+	if err := s.ops.remove(s.permissionJournal(name)); err != nil && !os.IsNotExist(err) {
+		return fault.IO{Op: "remove", Path: s.permissionJournal(name), Err: err}
+	}
 	s.ops.syncDir(filepath.Dir(path))
 	return nil
+}
+
+// DecidePermission chooses what to do to a permission, given its current state.
+type DecidePermission func(current model.Permission) (model.PermissionEvent, error)
+
+// ApplyPermission amends a permission under a lock.
+//
+// The lock is the `permissions/` directory rather than the permission's own,
+// because a permission is a flat record with no directory of its own — §13 kept
+// it that way deliberately, and a format migration is a steep price for a verb
+// nobody runs twice a day. A directory-wide lock costs nothing here: two people
+// editing two different permissions at the same instant is not a thing that
+// happens, and if it did the second would wait for a file write.
+func (s *Store) ApplyPermission(name model.Name, decide DecidePermission) (model.Permission, error) {
+	if name.Zero() {
+		return model.Permission{}, fault.Internal{Where: "store.ApplyPermission", Detail: "no permission named"}
+	}
+	if decide == nil {
+		return model.Permission{}, fault.Internal{Where: "store.ApplyPermission", Detail: "no decision given"}
+	}
+
+	var out model.Permission
+	err := s.withLock(filepath.Join(s.root, permissionsDir), func() error {
+		current, err := s.Permission(name)
+		if err != nil {
+			return err
+		}
+
+		ev, err := decide(current)
+		if err != nil {
+			return err
+		}
+		if ev.Zero() {
+			// A decision that produced no event is a no-op the caller has
+			// already reported on — an edit that changed nothing.
+			out = current
+			return nil
+		}
+
+		next, err := current.With(ev)
+		if err != nil {
+			return err
+		}
+		line, err := encodePermissionEvent(ev)
+		if err != nil {
+			return err
+		}
+		if err := s.appendLine(s.permissionJournal(name), line); err != nil {
+			return err
+		}
+		out = next
+		return nil
+	})
+	if err != nil {
+		return model.Permission{}, err
+	}
+	return out, nil
+}
+
+// InspectPermission reads a permission and reports how many bytes at the end of
+// its journal an interrupted append left behind.
+//
+// Permission throws that count away, as Role does: the fold already recovered,
+// and `verify` is the one caller that cares.
+func (s *Store) InspectPermission(name model.Name) (model.Permission, int, error) {
+	base, err := s.permissionRecord(name)
+	if err != nil {
+		return model.Permission{}, 0, err
+	}
+
+	path := s.permissionJournal(name)
+	data, err := s.ops.readFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Every permission created before `orc edit permission` existed has
+			// no journal, and folds to its record.
+			return base, 0, nil
+		}
+		return model.Permission{}, 0, fault.IO{Op: "read", Path: path, Err: err}
+	}
+	return FoldPermission(path, base, data)
+}
+
+// permissionJournal is where a permission's amendments are appended.
+func (s *Store) permissionJournal(name model.Name) string {
+	return filepath.Join(s.root, permissionsDir, name.String()+".jsonl")
 }

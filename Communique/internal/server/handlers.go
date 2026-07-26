@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -719,6 +720,80 @@ func (s *Server) dropAction(w http.ResponseWriter, r *http.Request) {
 	s.log.Info("action dropped", "id", id)
 	s.events.Publish()
 	s.ok(w, r, map[string]any{"dropped": id})
+}
+
+// clearBody names what to sweep up. Empty means the done ones, which is the
+// housekeeping case and the safe one.
+type clearBody struct {
+	// States to clear. Only settled ones can go — an action in flight is one the
+	// agent may still report on, and forgetting it would lose that report.
+	States []string `json:"states,omitempty"`
+}
+
+func (b *clearBody) Validate() error { return nil }
+
+// clearQueue drops every settled entry in the named states.
+//
+// It exists because the queue is a log as much as a queue: an action that is done
+// stays on the list, and after a busy afternoon the useful rows — the ones that
+// failed — are somewhere below fifty that did not. Clearing them one at a time is
+// not housekeeping, it is a chore.
+//
+// The default is `done` alone, deliberately. `failed` and `in_doubt` carry the
+// reason they failed, which is the only record of it anywhere; sweeping those away
+// by default would make the tidy action the destructive one. A caller that wants
+// them gone says so.
+func (s *Server) clearQueue(w http.ResponseWriter, r *http.Request) {
+	var body clearBody
+	if err := decode(r, MaxRequestBytes, &body); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	wanted := map[store.State]bool{}
+	if len(body.States) == 0 {
+		wanted[store.Done] = true
+	}
+	for _, raw := range body.States {
+		got := store.State(raw)
+		if !got.Settled() {
+			// Named rather than ignored: a caller asking to clear `queued` has a
+			// wrong idea about what the queue is, and silently doing nothing would
+			// leave them with it.
+			s.fail(w, r, fault.Usage{Reason: fmt.Sprintf(
+				"%q is not a state that can be cleared; an action is dropped once the agent "+
+					"has reported on it, so only done, failed, and in_doubt can go", raw)})
+			return
+		}
+		wanted[got] = true
+	}
+
+	entries, err := s.state.Queue()
+	if err != nil {
+		s.fail(w, r, serverSide(err))
+		return
+	}
+
+	cleared := 0
+	for _, e := range entries {
+		if !wanted[e.State] {
+			continue
+		}
+		if err := s.state.Drop(e.Action.ID); err != nil {
+			// One that will not go does not stop the rest. A drop races a sync
+			// that has just reported, and the honest outcome is "most of them
+			// went" rather than a failure that leaves the list half swept.
+			s.log.Warn("could not clear queue entry", "id", e.Action.ID, "error", err)
+			continue
+		}
+		cleared++
+	}
+
+	s.log.Info("queue cleared", "cleared", cleared)
+	if cleared > 0 {
+		s.events.Publish()
+	}
+	s.ok(w, r, map[string]any{"cleared": cleared, "left": len(entries) - cleared})
 }
 
 // actionID reads and validates the identifier in the path.

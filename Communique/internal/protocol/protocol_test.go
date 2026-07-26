@@ -264,6 +264,8 @@ func TestActionArgumentRules(t *testing.T) {
 		protocol.OpDelete:    {Path: "Docs/Old.md", Base: digest},
 		protocol.OpMakeDir:   {Path: "Docs/Ideas"},
 		protocol.OpRemoveDir: {Path: "Docs/Ideas"},
+		protocol.OpRemoveTree: {Path: "Docs/Old",
+			Paths: []string{"Docs/Old/a.md", "Docs/Old/deep/b.md"}},
 
 		// The task verbs. Every mutating `muff` command has one, and this map is
 		// what makes that checkable: the loop below walks protocol.Ops, so an
@@ -287,6 +289,7 @@ func TestActionArgumentRules(t *testing.T) {
 		protocol.OpOrcNewIdentity:     {Identity: "atlas"},
 		protocol.OpOrcNewRole:         {Role: "engineer", Authority: 60, Description: "writes the code"},
 		protocol.OpOrcNewPermission:   {Permission: "edit-anno", Floor: 40, Patterns: []string{"read(Anno/**)"}},
+		protocol.OpOrcEditPermission:  {Permission: "edit-anno", Floor: 40, Patterns: []string{"read(Anno/**)"}},
 		protocol.OpOrcAssignRole:      {Identity: "atlas", Role: "engineer"},
 		protocol.OpOrcAssignAuthority: {Role: "engineer", Authority: 55},
 		protocol.OpOrcAssignPerm:      {Role: "engineer", Permission: "edit-anno"},

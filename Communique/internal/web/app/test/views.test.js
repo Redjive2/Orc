@@ -272,3 +272,81 @@ test("a machine with no admin view says so", () => {
   }));
   assert.match(out, /syncs without the admin view/);
 });
+
+// --- replying from the list ----------------------------------------------
+
+function findAll(nodes, ok, out = []) {
+  for (const n of nodes.filter(Boolean)) {
+    if (ok(n)) out.push(n);
+    findAll(n.childNodes || [], ok, out);
+  }
+  return out;
+}
+
+const replyButtons = (nodes) =>
+  findAll(nodes, (n) => n.tagName === "BUTTON" && n.className === "quiet reply");
+
+const noop = { quickReply() {} };
+
+// Answering a short message should not cost a page of navigation. That is the
+// whole of why this exists.
+test("every message offers a reply without being opened", () => {
+  for (const box of ["inbox", "archive", "sent"]) {
+    const got = replyButtons(views.mailbox(state, { box }, noop));
+    assert.equal(got.length, 1, `${box} offered ${got.length} replies`);
+    assert.equal(got[0].textContent, "reply");
+  }
+});
+
+// A column of identical "reply" buttons is what a screen reader hears without
+// this, and it has no way to tell which row it is on.
+test("a reply control names the message it answers", () => {
+  const [button] = replyButtons(views.mailbox(state, { box: "inbox" }, noop));
+  assert.equal(button.getAttribute("aria-label"), "reply to the parser");
+});
+
+test("pressing it hands the whole message to the action", () => {
+  const asked = [];
+  const [button] = replyButtons(
+    views.mailbox(state, { box: "inbox" }, { quickReply: (m) => asked.push(m) }));
+
+  button.listeners.click.forEach((fn) => fn({ target: button }));
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].puid, 0);
+  assert.equal(asked[0].machine, "studio");
+});
+
+// A queued answer that leaves no mark on the row it was written from reads as an
+// answer that did not send — and the second one would be a second message.
+test("a row with a reply already queued says so instead of offering another", () => {
+  const queued = {
+    ...state,
+    queue: [{
+      state: "queued",
+      action: { op: "reply", machine: "studio", args: { puid: 0, subject: "RE: the parser", body: "yes" } },
+    }],
+  };
+  const nodes = views.mailbox(queued, { box: "inbox" }, noop);
+  assert.equal(replyButtons(nodes).length, 0, "a second reply was offered");
+  assert.match(text(nodes), /replied/);
+
+  // Only the row it belongs to. A queued reply to one message must not silence
+  // the others.
+  assert.equal(replyButtons(views.mailbox(queued, { box: "archive" }, noop)).length, 1);
+});
+
+// Something else queued against the same message is not a reply, and must not
+// be read as one.
+test("another queued action against the message is not a reply", () => {
+  const archiving = {
+    ...state,
+    queue: [{ state: "queued", action: { op: "archive", machine: "studio", args: { puid: 0 } } }],
+  };
+  assert.equal(replyButtons(views.mailbox(archiving, { box: "inbox" }, noop)).length, 1);
+});
+
+test("a subject is prefixed once however far the thread runs", () => {
+  assert.equal(views.reSubject("the parser"), "RE: the parser");
+  assert.equal(views.reSubject("RE: the parser"), "RE: the parser");
+  assert.equal(views.reSubject(""), "RE: ");
+});

@@ -11,6 +11,7 @@ Orc exposes the following commands:
 | `assign role <identity> <role>`             | Assign the role to the identity                                            |
 | `assign authority <role> <authority>`       | Assign the authority level to the role                                     |
 | `assign permission <role> <permission>`     | Assign the permission to the role                                          |
+| `edit permission <name> [--floor <n>] [patterns...]` | Change a permission's floor, its clauses, or both; every holder feels it at once |
 | `remove identity <name>`                    | Delete the given identity (impossible if populated)                        |
 | `remove role <name>`                        | Delete the given role (impossible if in use)                               |
 | `remove permission <name>`                  | Delete the given permission (impossible if in use)                         |
@@ -22,6 +23,7 @@ Orc exposes the following commands:
 | `budget <role> <load>`†                     | Set the load a role may keep on the work list                              |
 | `attach <identity>`                         | Attach to the Claude Code session within Orc                               |
 | `poke <identity> [message]`                 | Nudge the identity to continue working                                     |
+| `wake [<identity>…] [--every <dur>]`†      | Poke whatever has gone quiet; `--every` runs it as a cycle                  |
 | `refresh <identity>`                        | Create a new Code session to replace the old one for the identity          |
 | `move <identity> <boss>`                    | Move the identity to be under the boss; lower authority/perms as needed    |
 | `model <identity> [<model>] [--effort <e>]`† | Show, or change, what an identity thinks with; `--now` replaces the running session |
@@ -78,6 +80,10 @@ Terms:
 | `--direct`     | `attach`                  | Hand the terminal to the real Claude session, not Orc's view |
 | `--worktree`   | `new identity`            | Make the workspace a git worktree of the main repo          |
 | `--watch <dur>`| `tend`                    | Keep reconciling on an interval, as a backstop              |
+| `--every <dur>` | `wake`                    | Run the wake cycle on an interval instead of once            |
+| `--after <dur>` | `wake`                    | How long a waiting session may stay waiting (default 10m)    |
+| `--message <t>` | `wake`                    | What to say instead of `continue`                            |
+| `--dry-run`     | `wake`                    | Report what would be woken, and poke nothing                 |
 | `--effort <e>`  | `model`, `employ`         | The effort half of the load: low, medium, high, xhigh, max  |
 | `--now`         | `model`                   | Replace the running session so the change takes effect now  |
 | `--only <f>`   | `introspect`              | Print one field, raw, with no formatting                    |
@@ -135,28 +141,56 @@ Orc sets the first two for every session it populates. That is the same
 credential contract every other Orc tool reads, so an agent Orc started needs no
 further setup to use `mailman`, `muff`, `anno`, or `dock`.
 
-### Builtin permissions
+### The toolkit
 
-Almost every permission is one somebody made. The exceptions are capabilities that
-live in *another tool* and so have nobody to define them:
+Every fleet is made with these. A fresh fleet used to have no permissions at all,
+so the first thing anybody did was invent a vocabulary — and invent it differently
+each time, so two fleets could not be discussed in the same words.
 
-| Permission | Floor | Clause      | Is                                                     |
-|------------|-------|-------------|--------------------------------------------------------|
-| `upgrade`  | 90    | `write(**)` | rebuild and restart every Orc tool, on every machine   |
+| Permission   | Floor | Clauses                          | Is                                          |
+|--------------|-------|----------------------------------|---------------------------------------------|
+| `read-all`   | 1     | `read(**)`                       | read every file in the workspace            |
+| `read-docs`  | 1     | `read(Docs/**)`                  | read the specifications and nothing else    |
+| `write-docs` | 20    | `read/write(Docs/**)`            | edit the specifications                     |
+| `write-all`  | 70    | `read(**)` `write(**)`           | edit anything in the workspace              |
+| `orc-read`   | 1     | `orc(introspect)`                | confine to reading — see below              |
+| `orc-agents` | 60    | `orc(new)` `orc(move)` `orc(employ)` `orc(fire)` `orc(attach)` `orc(poke)` `orc(refresh)` | hire agents and direct them |
+| `orc-policy` | 85    | `orc(assign)` `orc(grant)` `orc(revoke)` `orc(remove)` | hand out roles, permissions, authority |
+| `upgrade`    | 90    | `tool(upgrade)`                  | rebuild and restart every tool, every machine |
 
-They are created at `bootstrap` and are otherwise ordinary: assignable to a role,
-listed by `orc list permissions`, refused to anybody below the floor. Nothing about
-them is a special case in the derivation.
+They are **ordinary permissions**. Assignable, grantable, listed by
+`orc list permissions`, refused below the floor, and removable if a fleet wants its
+own vocabulary. Nothing in the derivation knows they exist; the only thing that
+makes them builtin is that `bootstrap` creates them.
 
-`bootstrap` is safe to run twice, and that is what tops these up on a fleet created
-before one existed — an existing permission is never rewritten, so re-running it
-cannot disturb a fleet that already has them.
+`bootstrap` is safe to run twice, and that is what tops these up on a fleet made
+before one of them existed. An existing permission is never rewritten, so a fleet
+that has redefined one keeps its own.
 
-The clause is named after the effect rather than the command on purpose: an upgrade
-replaces every binary on the machine, and a permission that claimed less would be
-one somebody hands out without reading. The floor is the whole of the policy — 90
-sits above every ordinary role in a fleet whose agents are 1–99, so holding it is a
-deliberate act rather than something a role drifts into.
+Budgets are not here: `orc budget <role> <load>` manages a `spawn-<n>` permission
+per load, so there is no fixed set to provide.
+
+**The floor is the policy.** Reading is 1 because an agent that cannot read cannot
+work. Writing everything is 70 because it is most of a machine. Policy is 85
+because handing out authority is how authority leaks. `upgrade` is 90 because it
+replaces every binary on every machine in the fleet.
+
+**The `orc(…)` ones narrow rather than enable.** An identity with no orc-kind
+clause is governed by the structural rules alone; one with any is additionally held
+to them. Only the verbs that *change* something consult that gate — `status`,
+`list`, `introspect`, `verify`, `doctor`, `tend`, and `budget` never do — so every
+clause above names a verb that is actually checked. `orc-read` is the odd one and
+worth understanding before handing it out: its clause allows nothing anybody
+lacked, and its effect is the narrowing. Holding it bars every orc verb that
+changes anything.
+
+**`upgrade` is a marker, and that is why its clause is `tool(…)`.** Containment is
+by clause rather than by name — an identity that may write everything may hand on a
+permission to write one directory — which is right for paths and wrong for a
+capability meaning "may run this privileged action". With a path clause, anybody
+holding `write-all` at floor 70 would reach a permission whose floor is 90, and the
+floor would mean nothing. `tool(upgrade)` is covered by `tool(upgrade)` and by
+nothing else.
 
 `check-permission` is how another tool asks. It answers with an exit code, the way
 `check-control` does, so the tool that needs the answer never holds a copy of the
@@ -168,6 +202,12 @@ See `Auth_Perm_Role.md`. In short: authority is a number on a role, the user is
 100 and everyone else is 1–99, a permission has a minimum authority, and an
 identity holds exactly one role.
 
+A clause is `kind(argument)`. The kinds are `read` and `write` over path globs
+where `**` crosses directories, `spawn` over a load budget, `orc` over Orc's own
+verbs, and `tool` over a named capability in another Orc tool. `Auth_Perm_Role.md`
+names the first three; `orc` and `tool` are this build's reading of "any number of
+specific commands or command patterns".
+
 Nothing effective is stored. An identity's authority is the lower of its role's
 and its boss's, and its permissions are its role's plus its grants, intersected
 with its boss's — so `move` changes what a whole subtree may do without editing
@@ -175,6 +215,34 @@ anything but one line.
 
 `status` shows both numbers whenever they differ, and says which one capped the
 other.
+
+## §1.3.0 Keeping a fleet moving
+
+An agent finishes a turn and stops. Nothing is wrong with it — Claude has said its
+piece and is waiting for the next thing somebody says — but in a fleet nobody is
+watching, that is where work stops.
+
+`orc wake` is what speaks. It reads each session's event feed, finds the ones that
+have been **waiting** longer than `--after`, and pokes them through the same path
+`poke` uses. `--every` makes it a cycle, alongside `tend --watch`: two backstops,
+one that keeps sessions *running* and one that keeps them *moving*.
+
+Two rules keep it from becoming noise:
+
+- **Only what is waiting is woken.** A session mid-turn is silent for good reasons —
+  a long build, a slow read — and a poke would queue a nudge into the middle of work
+  it is already doing. The feed's last event decides, not the clock alone.
+- **Each silence is woken once.** An agent that does not move after a poke is stuck
+  rather than idle; the next pass says so instead of filling its context with nudges,
+  and `orc doctor` is where a stuck session belongs.
+
+A session that has never said anything at all is judged from when it started: up for
+an hour with no tool call is as stopped as one that finished and waited, and the more
+worrying of the two.
+
+The cycle's memory lives in the running process, not the store — a wake is a fact
+about this cycle's last pass rather than about the fleet, so a restarted cycle looks
+at a quiet fleet with fresh eyes.
 
 ## §1.3.1 Changing what an agent runs on
 

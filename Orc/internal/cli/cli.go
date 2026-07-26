@@ -207,6 +207,8 @@ func (a App) dispatch(args []string) error {
 		return a.newThing(rest)
 	case "assign":
 		return a.assign(rest)
+	case "edit":
+		return a.edit(rest)
 	case "remove":
 		return a.remove(rest)
 	case "grant":
@@ -244,6 +246,8 @@ func (a App) dispatch(args []string) error {
 		return a.tend(rest)
 	case "attach":
 		return a.attach(rest)
+	case "wake":
+		return a.wake(rest)
 	case "poke":
 		return a.poke(rest)
 	case "refresh":

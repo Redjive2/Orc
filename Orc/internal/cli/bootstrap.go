@@ -51,8 +51,8 @@ func (a App) bootstrap(args []string) error {
 	// safe to run twice, and this is what makes that useful rather than merely
 	// harmless: a fleet created before a builtin permission existed gets it by
 	// running the same command again. Existing permissions are never rewritten —
-	// see EnsureBuiltin — so this cannot disturb a fleet that already has them.
-	if err := s.EnsureBuiltin(); err != nil {
+	// see EnsureToolkit — so this cannot disturb a fleet that already has them.
+	if err := s.EnsureToolkit(); err != nil {
 		return err
 	}
 

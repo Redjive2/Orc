@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"orc/cq/internal/atomic"
@@ -107,9 +109,99 @@ func (c *CLI) applyLibrary(action protocol.Action) error {
 		}
 		return nil
 
+	case protocol.OpRemoveTree:
+		return removeTree(target, action.Args.Path, action.Args.Paths)
+
 	default:
 		return fault.Internal{Where: "source.applyLibrary", Detail: "no handler for " + string(action.Op)}
 	}
+}
+
+// removeTree removes a directory and everything under it, having first checked
+// that it holds nothing the operator was not shown.
+//
+// This is the one action in cq that cannot be undone and cannot be checked
+// afterwards, and it acts on a picture that is minutes old. The manifest is what
+// closes that gap: every file the mirror showed inside the directory. If the real
+// one holds a file that is not on the list, somebody has filed work in there
+// since the snapshot was taken, and this refuses rather than taking it with the
+// rest.
+//
+// The check runs one way only — everything found must be listed, not everything
+// listed must be found. That is deliberate. A removal interrupted halfway leaves
+// fewer files than the manifest, so retrying finishes the job instead of
+// refusing it, and finishing is what a retry of this should do.
+func removeTree(target, shown string, manifest []string) error {
+	info, err := os.Lstat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fault.Conflict{Reason: shown + " is already gone"}
+		}
+		return fault.IO{Op: "check", Subject: shown, Err: err}
+	}
+	if !info.IsDir() {
+		return fault.Conflict{Reason: shown +
+			" is not a directory; delete it instead, which checks it still holds what you saw"}
+	}
+
+	expected := make(map[string]bool, len(manifest))
+	for _, path := range manifest {
+		expected[path] = true
+	}
+
+	// `walk` and not a plain WalkDir: it is the collector's own definition of
+	// what the mirror carries, and the manifest was built from what the mirror
+	// showed. Asking a different question here would refuse every folder holding
+	// an image or a `.git`, because the operator was never shown those and could
+	// never satisfy a check that counted them.
+	//
+	// Which means those go with the folder unexamined. That is the one place cq
+	// removes something nobody looked at, and it is what "delete this folder"
+	// means everywhere else — the manifest is there to catch *work* that arrived
+	// after the snapshot, not to inventory the disk.
+	found, err := walk(target)
+	if err != nil {
+		return err
+	}
+
+	var unexpected []string
+	for _, path := range found {
+		rel, err := filepath.Rel(filepath.Dir(target), path)
+		if err != nil {
+			return fault.IO{Op: "read", Subject: shown, Err: err}
+		}
+		// Rejoined onto the path the operator saw, so the names compared are the
+		// ones the mirror published rather than this machine's spelling of them.
+		under := filepath.ToSlash(filepath.Join(filepath.Dir(shown), filepath.ToSlash(rel)))
+		if !expected[under] {
+			unexpected = append(unexpected, under)
+		}
+	}
+
+	if len(unexpected) > 0 {
+		sort.Strings(unexpected)
+		return fault.Conflict{Reason: fmt.Sprintf(
+			"%s holds %s you were not shown, so it was not removed; %s arrived after this was queued — "+
+				"open it again and decide from what is there now",
+			shown, plural(len(unexpected), "file"), first(unexpected))}
+	}
+
+	if err := os.RemoveAll(target); err != nil {
+		return fault.IO{Op: "remove", Subject: shown, Err: err}
+	}
+	return nil
+}
+
+// first names one example, so a refusal points at something rather than only
+// counting. The list is sorted, so the example is the same every time.
+func first(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	if len(paths) == 1 {
+		return paths[0]
+	}
+	return paths[0] + " among them"
 }
 
 // resolve turns a relative path into an absolute one inside the checkout, or

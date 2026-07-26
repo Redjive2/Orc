@@ -353,3 +353,156 @@ func TestTheDigestIsPlainSHA256(t *testing.T) {
 		t.Errorf("an empty file has no digest: %q", got)
 	}
 }
+
+// tree builds a directory with things in it, and returns what the mirror would
+// have shown inside it.
+func tree(t *testing.T, root string) []string {
+	t.Helper()
+	files := []string{"Docs/Old/notes.md", "Docs/Old/deep/a.go", "Docs/Old/deep/b.go"}
+	for _, rel := range files {
+		write(t, filepath.Join(root, filepath.FromSlash(rel)), "contents\n")
+	}
+	return files
+}
+
+// TestRemoveTreeTakesTheWholeThing is the point of the verb: a folder with files
+// in it can be deleted, which is the ordinary thing to want and was previously
+// impossible without emptying it one file at a time.
+func TestRemoveTreeTakesTheWholeThing(t *testing.T) {
+	c, root := checkout(t)
+	shown := tree(t, root)
+
+	err := c.Apply(t.Context(), act(protocol.OpRemoveTree,
+		protocol.Args{Path: "Docs/Old", Paths: shown}))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Docs", "Old")); !os.IsNotExist(err) {
+		t.Errorf("the directory is still there: %v", err)
+	}
+	// And nothing outside it went with it.
+	if _, err := os.Stat(filepath.Join(root, "Docs", "Vision.md")); err != nil {
+		t.Errorf("something outside the tree was removed: %v", err)
+	}
+}
+
+// TestRemoveTreeRefusesWhatItWasNotShown is what makes the whole thing safe.
+//
+// The snapshot is minutes old. A file filed in there since is work nobody
+// intended to delete, and this is the only chance to notice.
+func TestRemoveTreeRefusesWhatItWasNotShown(t *testing.T) {
+	c, root := checkout(t)
+	shown := tree(t, root)
+	// An agent files something in there after the mirror was taken.
+	write(t, filepath.Join(root, "Docs", "Old", "deep", "arrived.go"), "new work\n")
+
+	err := c.Apply(t.Context(), act(protocol.OpRemoveTree,
+		protocol.Args{Path: "Docs/Old", Paths: shown}))
+
+	if !errors.Is(err, fault.ErrConflict) {
+		t.Fatalf("error = %v, want a conflict", err)
+	}
+	if !strings.Contains(err.Error(), "arrived.go") {
+		t.Errorf("the refusal should name what it found: %v", err)
+	}
+	// Nothing at all was removed — not the new file, and not the old ones.
+	for _, rel := range append(shown, "Docs/Old/deep/arrived.go") {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("%s was removed anyway: %v", rel, err)
+		}
+	}
+}
+
+// A removal interrupted halfway leaves fewer files than the manifest, so a retry
+// has to finish the job rather than refuse it. The check runs one way only, and
+// this is why.
+func TestRemoveTreeFinishesWhatItStarted(t *testing.T) {
+	c, root := checkout(t)
+	shown := tree(t, root)
+	if err := os.Remove(filepath.Join(root, "Docs", "Old", "notes.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := c.Apply(t.Context(), act(protocol.OpRemoveTree,
+		protocol.Args{Path: "Docs/Old", Paths: shown}))
+	if err != nil {
+		t.Fatalf("a half-removed tree was not finished: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Docs", "Old")); !os.IsNotExist(err) {
+		t.Error("the directory is still there")
+	}
+}
+
+// A directory of empty directories shows no files, so its manifest is empty —
+// and that has to mean "I saw nothing in there" rather than "I forgot to say".
+func TestRemoveTreeWithNothingInIt(t *testing.T) {
+	c, root := checkout(t)
+	if err := os.MkdirAll(filepath.Join(root, "Docs", "Hollow", "deeper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := c.Apply(t.Context(), act(protocol.OpRemoveTree, protocol.Args{Path: "Docs/Hollow"}))
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Docs", "Hollow")); !os.IsNotExist(err) {
+		t.Error("the directory is still there")
+	}
+}
+
+func TestRemoveTreeRefusesAFileAndSomethingGone(t *testing.T) {
+	c, _ := checkout(t)
+
+	err := c.Apply(t.Context(), act(protocol.OpRemoveTree,
+		protocol.Args{Path: "Docs/Vision.md", Paths: []string{"Docs/Vision.md"}}))
+	if !errors.Is(err, fault.ErrConflict) || !strings.Contains(err.Error(), "not a directory") {
+		t.Errorf("a file was accepted as a tree: %v", err)
+	}
+
+	err = c.Apply(t.Context(), act(protocol.OpRemoveTree, protocol.Args{Path: "Docs/NotThere"}))
+	if !errors.Is(err, fault.ErrConflict) || !strings.Contains(err.Error(), "already gone") {
+		t.Errorf("a missing tree should be a conflict: %v", err)
+	}
+}
+
+// The escape checks apply here as much as anywhere: this is the action that
+// takes the most with it.
+func TestRemoveTreeCannotLeaveTheCheckout(t *testing.T) {
+	c, root := checkout(t)
+	outside := filepath.Join(filepath.Dir(root), "outside")
+	write(t, filepath.Join(outside, "keep.md"), "untouched\n")
+
+	for _, path := range []string{"../outside", "Docs/../../outside"} {
+		if err := c.Apply(t.Context(), act(protocol.OpRemoveTree, protocol.Args{Path: path})); err == nil {
+			t.Errorf("%q was accepted", path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outside, "keep.md")); err != nil {
+		t.Error("something outside the checkout was removed")
+	}
+}
+
+// TestRemoveTreeTakesWhatTheMirrorNeverShowed pins the one place cq removes
+// something nobody looked at.
+//
+// The mirror carries text the operator can read; it does not carry images, or
+// `.git`, or anything else it has no way to show. Checking the manifest against
+// *those* would refuse every real folder, since no operator could ever satisfy
+// it. So they go with the folder — which is what deleting a folder means
+// everywhere else — and the manifest's job stays what it is: catching work
+// filed in after the snapshot was taken.
+func TestRemoveTreeTakesWhatTheMirrorNeverShowed(t *testing.T) {
+	c, root := checkout(t)
+	shown := tree(t, root)
+	write(t, filepath.Join(root, "Docs", "Old", "logo.png"), "\x89PNG not text")
+	write(t, filepath.Join(root, "Docs", "Old", ".git", "config"), "[core]\n")
+
+	err := c.Apply(t.Context(), act(protocol.OpRemoveTree,
+		protocol.Args{Path: "Docs/Old", Paths: shown}))
+	if err != nil {
+		t.Fatalf("a folder holding unmirrored files was refused: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Docs", "Old")); !os.IsNotExist(err) {
+		t.Error("the directory is still there")
+	}
+}

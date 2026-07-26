@@ -30,13 +30,14 @@ type storedEvent struct {
 	At   string `json:"at"`
 	Line int    `json:"-"`
 
-	Authority   int    `json:"authority,omitempty"`
-	Description string `json:"description,omitempty"`
-	Permission  string `json:"permission,omitempty"`
-	Role        string `json:"role,omitempty"`
-	Boss        string `json:"boss,omitempty"`
-	Model       string `json:"model,omitempty"`
-	Effort      string `json:"effort,omitempty"`
+	Authority   int      `json:"authority,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Permission  string   `json:"permission,omitempty"`
+	Role        string   `json:"role,omitempty"`
+	Boss        string   `json:"boss,omitempty"`
+	Model       string   `json:"model,omitempty"`
+	Effort      string   `json:"effort,omitempty"`
+	Patterns    []string `json:"patterns,omitempty"`
 
 	// Grant fields. Session and Until are mutually exclusive, which
 	// model.RestoreGrant enforces on the way back in.
@@ -419,6 +420,97 @@ func FoldIdentity(path string, base model.Identity, data []byte) (model.Identity
 			return out, len(raw), nil
 		}
 		return model.Identity{}, 0, err
+	}
+	return out, skipped, nil
+}
+
+// encodePermissionEvent renders a permission event for storage.
+func encodePermissionEvent(e model.PermissionEvent) ([]byte, error) {
+	stored := storedEvent{
+		Op: string(e.Op()),
+		By: e.By().String(),
+		At: clock.Format(e.At()),
+	}
+	switch e.Op() {
+	case model.OpAmend:
+		stored.Authority = e.Floor().Int()
+		stored.Patterns = model.PatternStrings(e.Patterns())
+	default:
+		return nil, fault.Internal{Where: "store.encodePermissionEvent", Detail: "unknown op " + string(e.Op())}
+	}
+	return encodeLine(stored)
+}
+
+// decodePermissionEvent rebuilds a permission event through its own constructor,
+// so a hand-edited journal cannot introduce a shape the code never produces.
+func decodePermissionEvent(path string, stored storedEvent) (model.PermissionEvent, error) {
+	bad := func(format string, args ...any) (model.PermissionEvent, error) {
+		return model.PermissionEvent{}, fault.Parse{Path: path, Line: stored.Line,
+			Reason: fmt.Sprintf(format, args...)}
+	}
+
+	by, err := stored.actor(path)
+	if err != nil {
+		return model.PermissionEvent{}, err
+	}
+	at, err := clock.Parse(stored.At)
+	if err != nil {
+		return bad("journal event has a bad timestamp: %s", err)
+	}
+	if model.PermissionOp(stored.Op) != model.OpAmend {
+		return bad("unknown permission journal operation %q", stored.Op)
+	}
+
+	floor, err := model.NewAuthority(stored.Authority)
+	if err != nil {
+		return bad("journal event has a bad floor: %s", err)
+	}
+	patterns, err := model.ParsePatterns(stored.Patterns)
+	if err != nil {
+		return bad("journal event has a bad clause: %s", err)
+	}
+	return model.Amend(by, at, floor, patterns)
+}
+
+// FoldPermission replays a permission's journal onto its creation record.
+//
+// The shape is FoldRole's, and so is the recovery rule: a truncated final line is
+// an interrupted append and is dropped with a count, anything else is corruption
+// and is a hard error. A permission with no journal is every permission created
+// before `orc edit permission` existed, which is why a missing file folds to the
+// record rather than failing.
+func FoldPermission(path string, base model.Permission, data []byte) (model.Permission, int, error) {
+	lines, complete, err := splitJournal(path, data)
+	if err != nil {
+		return model.Permission{}, 0, err
+	}
+
+	out, skipped := base, 0
+	for i, raw := range lines {
+		lineNo, last := i+1, i == len(lines)-1
+
+		skip, err := checkLine(path, lineNo, raw, last, complete)
+		if err != nil {
+			return model.Permission{}, 0, err
+		}
+		if skip {
+			skipped = len(raw)
+			continue
+		}
+
+		stored, err := decodeLine(path, lineNo, raw)
+		if err != nil {
+			return model.Permission{}, 0, err
+		}
+		ev, err := decodePermissionEvent(path, stored)
+		if err != nil {
+			return model.Permission{}, 0, err
+		}
+		next, err := out.With(ev)
+		if err != nil {
+			return model.Permission{}, 0, err
+		}
+		out = next
 	}
 	return out, skipped, nil
 }

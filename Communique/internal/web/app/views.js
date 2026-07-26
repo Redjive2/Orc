@@ -24,7 +24,7 @@ const BOXES = {
   sent: { empty: "nothing sent", outgoing: true },
 };
 
-export function mailbox(state, { box }) {
+export function mailbox(state, { box }, actions) {
   const shape = BOXES[box] || BOXES.inbox;
   const messages = state[box];
   if (!messages || messages.length === 0) {
@@ -32,7 +32,37 @@ export function mailbox(state, { box }) {
   }
   const many = (state.machines || []).length > 1;
   return [h("div", { class: "rows" },
-    ...messages.map((m) => messageRow(m, many, shape.outgoing)))];
+    ...messages.map((m) => messageLine(m, many, shape.outgoing, state, actions)))];
+}
+
+// A row and the one thing worth doing to it without opening it.
+//
+// Reply is the only action that earns a place here. Reading, archiving and the
+// rest are decisions somebody makes *after* reading the message, and this is the
+// list of messages they have not read yet — but a short answer to a short mail
+// is the common case, and making it cost a page of navigation is what makes a
+// mailbox tiring on a phone.
+//
+// The button sits beside the row rather than inside it, because the row is a
+// link, and a button inside a link is a target nobody can hit reliably.
+function messageLine(m, showMachine, outgoing, state, actions) {
+  const waiting = pendingFor(state.queue, m.puid, m.machine)
+    .some((e) => e.action.op === "reply");
+
+  return h("div", { class: "line" },
+    messageRow(m, showMachine, outgoing),
+    waiting
+      // Said where the reply was written, rather than only in the status bar: a
+      // queued answer that leaves no mark reads as an answer that did not send.
+      ? h("span", { class: "muted replied" }, "replied")
+      : h("button", {
+        class: "quiet reply",
+        // The subject is in the label because a screen reader hears a column of
+        // identical "reply" buttons otherwise.
+        "aria-label": `reply to ${m.subject}`,
+        onclick: () => actions.quickReply(m),
+      }, "reply"),
+  );
 }
 
 function messageRow(m, showMachine, outgoing) {
@@ -160,10 +190,15 @@ function verb(op) {
   }
 }
 
+// reSubject is what a reply is called, and it is prefixed once however many
+// times the thread goes back and forth: `RE: RE: RE:` is noise that grows.
+export function reSubject(subject) {
+  const s = String(subject ?? "");
+  return s.startsWith("RE: ") ? s : `RE: ${s}`;
+}
+
 function composer(m, actions) {
-  const subject = h("input", {
-    name: "subject", value: m.subject.startsWith("RE: ") ? m.subject : `RE: ${m.subject}`,
-  });
+  const subject = h("input", { name: "subject", value: reSubject(m.subject) });
   const body = h("textarea", { name: "body", placeholder: "…" });
   const button = h("button", { type: "submit" }, "queue reply");
 
@@ -296,6 +331,13 @@ const STATES = [
 // the server enforces, said here so the button is absent rather than failing.
 const REPEATABLE = ["read", "archive", "cc"];
 
+// settled mirrors store.State.Settled: an action the agent has reported on. The
+// two lists have to agree — a button the server refuses is worse than no button —
+// and this is the one place the browser needs to know.
+function settled(entry) {
+  return entry.state === "done" || entry.state === "failed" || entry.state === "in_doubt";
+}
+
 function mayRetry(entry) {
   if (entry.state === "failed") return true;
   return entry.state === "in_doubt" && REPEATABLE.includes(entry.action.op);
@@ -312,7 +354,17 @@ export function queue(state, actions) {
     const rows = entries.filter((e) => e.state === group.state);
     if (rows.length === 0) continue;
 
-    out.push(h("h2", {}, `${group.title} · ${rows.length}`));
+    out.push(h("div", { class: "row-actions" },
+      h("h2", {}, `${group.title} · ${rows.length}`),
+      // Only on the done pile. Failed and in-doubt rows carry the only record of
+      // why they failed, so sweeping those is a per-row decision rather than one
+      // button that takes them all.
+      group.state === "done" && actions
+        ? h("button", {
+            class: "quiet",
+            onclick: (e) => hold(e.target, () => actions.clearDone(rows.length)),
+          }, "clear them")
+        : null));
     if (group.note) out.push(h("p", { class: "muted" }, group.note));
     for (const entry of rows) out.push(queueRow(entry, actions));
   }
@@ -333,11 +385,19 @@ function queueRow(entry, actions) {
     // is more use than a control that refuses.
     controls.push(h("span", { class: "muted" }, "check your sent mail, then write it again"));
   }
-  if (unresolved) {
+  // Every *settled* row, not only the unresolved ones. A done action is a record
+  // of something that already happened, and the record was previously impossible
+  // to remove from the browser at all — so the queue only ever grew, and the rows
+  // worth reading sank below the ones that had worked.
+  //
+  // In-flight rows have no button, and that is the server's rule rather than a
+  // choice made here: an action the agent may still report on cannot be dropped,
+  // because the report would have nowhere to land.
+  if (settled(entry) && actions) {
     controls.push(h("button", {
       class: "quiet",
       onclick: (e) => hold(e.target, () => actions.drop(entry)),
-    }, "forget it"));
+    }, unresolved ? "forget it" : "remove"));
   }
 
   return h("article", { class: `card ${unresolved ? "failed" : "pending"}` },
@@ -351,16 +411,47 @@ function queueRow(entry, actions) {
 }
 
 // describe says what an action was for, in the terms the reader used.
+// describe says what one queued action is *about*, in the words of whichever tool
+// will run it.
+//
+// The default used to be `#${args.puid}`, which is right for the mail verbs and
+// nothing else — so every task and fleet row read `#undefined`, naming nothing, on
+// the one screen where somebody is deciding which rows to keep.
 function describe(action) {
   const args = action.args || {};
   switch (action.op) {
     case "send": return `to ${(args.to || []).join(", ")} — ${args.subject || ""}`;
     case "reply": return `#${args.puid} — ${args.subject || ""}`;
     case "cc": return `${args.user} into ${ellipsis(args.convo_uid || "", 16)}`;
+    case "read": case "archive": return `#${args.puid}`;
     case "write": case "create": case "delete": case "mkdir": case "rmdir":
       return args.path || "";
-    default: return `#${args.puid}`;
+    case "system.upgrade": return "pull, rebuild, and restart this machine";
+    case "orc.tend": return "the whole work list";
+    default: return describeSubject(action.op, args);
   }
+}
+
+// describeSubject names the thing a task or fleet action is about, and the operand
+// that distinguishes one from another of the same verb.
+function describeSubject(op, args) {
+  const subject = args.task || args.identity || args.role || args.permission || "";
+  const detail = [];
+  if (args.sub) detail.push(args.sub);
+  if (args.user) detail.push(args.user);
+  if (args.boss) detail.push(`under ${args.boss}`);
+  if (args.status) detail.push(`status ${args.status}`);
+  if (args.priority || args.difficulty) detail.push(`P${args.priority} D${args.difficulty}`);
+  if (args.authority) detail.push(`authority ${args.authority}`);
+  if (typeof args.load === "number") detail.push(`load ${args.load}`);
+  if (args.model || args.effort) detail.push(`${args.model || "?"}/${args.effort || "?"}`);
+  if (args.until) detail.push(`until ${args.until}`);
+  if ((args.paths || []).length) detail.push(args.paths.join(" "));
+  if ((args.patterns || []).length) detail.push(args.patterns.join(" "));
+  if (args.path) detail.push(args.path);
+
+  if (!subject) return detail.join(" · ");
+  return detail.length ? `${subject} — ${detail.join(" · ")}` : subject;
 }
 
 // hold disables a control while its action is in flight, so an impatient second

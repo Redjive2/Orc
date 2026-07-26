@@ -229,7 +229,9 @@ conventional (§4.2).
 <root>/
   version                     store format; an unknown one is a hard, clear error
   operator                    the operator identity's name — written once at bootstrap
-  permissions/<name>.json     the whole permission; immutable, so no journal (§13)
+  permissions/<name>.json     creation record: name, floor, and the initial clauses
+  permissions/<name>.jsonl    floor and clauses, as amended (§13)
+  permissions/lock            one lock for the set, not one per permission
   roles/<name>/role.json      creation record: name, created, and the initial values
   roles/<name>/journal.jsonl  authority, description, permission set
   roles/<name>/lock
@@ -1154,6 +1156,38 @@ Smaller notes:
   `tend --watch` under "not built yet" — a claim this stream falsified. Those two
   lines moved; `attach`'s stayed, since it is stream B's to move.
 
+### `orc wake`, as built
+
+The cycle that keeps a fleet from going quiet. An agent finishes a turn and stops —
+nothing is wrong with it, Claude has said its piece — but in a fleet nobody is
+watching, that is where work stops.
+
+**It reads the event feed rather than the clock.** §6.2's feed already says whether a
+session is *waiting* or mid-turn, so the cycle asks it: a session running a long
+build is silent for good reasons, and poking it would queue a nudge into the middle
+of work it is already doing. That distinction is the difference between a cycle that
+keeps a fleet moving and one that talks over it, and it is why this could be built
+on stream B's model rather than on timestamps alone.
+
+**It wakes each silence once.** The cycle remembers the event it woke on; a session
+that has said nothing since is stuck rather than idle, and the next pass says so
+instead of filling its context with nudges. The memory lives in the running process
+rather than the store — a wake is a fact about this cycle's last pass, not about the
+fleet, and a restarted cycle should look at a quiet fleet with fresh eyes. It also
+keeps this out of `internal/store`, which belongs to stream A.
+
+**Everything else is borrowed on purpose.** The poke is `poke`'s path, the loop is
+`tend --watch`'s shape, the control check is `controls`. A fleet now has two
+backstops — one that keeps sessions running, one that keeps them moving — and an
+operator should not have to learn two loops to use them.
+
+One bug worth recording, because it was in the case that mattered most. A session
+that has never said anything has no last event, so its mark was the empty string —
+which is also the zero value of "never woken". The two collided, and an agent that
+had done *nothing at all*, the most worrying kind of silence, was reported stuck on
+its first pass and never poked. The map's key presence decides now, and a feedless
+silence is marked by the session's start so that a refresh reads as a new one.
+
 ### `orc model`, as built
 
 A command to change what a running identity thinks with, tied into the three things
@@ -1358,14 +1392,25 @@ work if the clean view makes it worth building.
 Module `orc/orc` at `Orc/Orc/go.mod`, stdlib only, in the workspace. Nine things
 came out differently from the plan above, each for a reason worth keeping.
 
-**Permissions have no journal, because nothing mutates one.** §3 reserved a
-journal for every entity. No command in Reference.md changes a permission after
-creation — it is created, assigned, and removed — so a journal would be a file
-that is always empty and a fold that can never run. A permission is therefore one
-immutable record, and widening one is creating another under a new name, which
-shows up in every card that lists it. What this leaves missing is a way to narrow
-a *role*, so `orc remove permission <name> --from <role>` is that: it reads as the
-sentence it is, rather than adding a verb.
+**Permissions had no journal, because nothing mutated one — and then something
+did.** §3 reserved a journal for every entity. At milestone 1 no command in
+Reference.md changed a permission after creation, so a journal would have been a
+file that was always empty and a fold that could never run; a permission was one
+immutable record, and widening one meant creating another under a new name.
+
+`orc edit permission` ended that, and the reserved journal is why it cost nothing
+to say so: the record still holds what the permission was created as, `<name>.jsonl`
+holds each amendment beside it, and no stored fleet needed a format migration —
+a permission with no journal folds to itself. Editing rather than remaking is the
+point of the verb: every role and grant holding the permission keeps holding it,
+which is what a fleet wants when a directory moves, and is also why `edit` refuses
+to raise a floor above an authority that already holds it rather than silently
+stranding a role. The lock is on `permissions/` as a whole rather than per
+permission, because the check that nothing is stranded reads roles as well.
+
+What this still leaves missing is a way to narrow a *role*, so
+`orc remove permission <name> --from <role>` is that: it reads as the sentence it
+is, rather than adding a verb.
 
 **Roles and identities are directories, not pairs of flat files.** §3 wrote
 `roles/<name>.json` beside `roles/<name>.jsonl`. A directory gives the per-entity

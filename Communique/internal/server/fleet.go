@@ -127,6 +127,17 @@ func (s *Server) newPermission(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// editPermission replaces a permission's floor and clauses.
+//
+// PATCH rather than PUT: the permission's name is not in the body and cannot be
+// changed by this, so what arrives is a modification of the thing at that URL
+// rather than a replacement for it.
+func (s *Server) editPermission(w http.ResponseWriter, r *http.Request) {
+	s.fleetAction(w, r, protocol.OpOrcEditPermission, func(b fleetBody, a *protocol.Args) {
+		a.Permission, a.Floor, a.Patterns = named(r, b), b.Floor, b.Patterns
+	})
+}
+
 func (s *Server) assignRole(w http.ResponseWriter, r *http.Request) {
 	s.fleetAction(w, r, protocol.OpOrcAssignRole, func(b fleetBody, a *protocol.Args) {
 		a.Identity, a.Role = named(r, b), b.Role

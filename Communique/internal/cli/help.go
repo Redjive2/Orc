@@ -128,7 +128,12 @@ var commands = []commandDoc{
 			"already be in somebody's inbox, and cq cannot tell. Check your sent\n" +
 			"mail and write it again if it never arrived.\n" +
 			"\n" +
-			"Ids may be given by their first few characters, as printed.",
+			"Ids may be given by their first few characters, as printed.\n" +
+			"\n" +
+			"The queue is a log as much as a queue: an action that is done stays\n" +
+			"on the list. `clear` sweeps up the done ones, and `--all` takes the\n" +
+			"refused and in-doubt ones too — those carry the only record of why\n" +
+			"they failed, so they are never swept by default.",
 		flags: []flagDoc{
 			{"--state", "<dir>", "Where the server keeps its state", "$CQ_STATE"},
 			{"--json", "", "Print the queue for another program", ""},
@@ -137,6 +142,8 @@ var commands = []commandDoc{
 			"cq queue",
 			"cq queue retry 2c6f875a",
 			"cq queue drop 2c6f875a",
+			"cq queue clear",
+			"cq queue clear --all",
 		},
 	},
 	{

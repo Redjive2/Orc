@@ -8,6 +8,7 @@ import (
 	"orc/common/guess"
 
 	"orc/orc/internal/model"
+	"orc/orc/internal/store"
 	"orc/orc/internal/style"
 	"orc/theme"
 )
@@ -63,6 +64,7 @@ func usage(p style.Palette) string {
 	verb("orc assign role <identity> <role>", "give an agent its job (replaces)")
 	verb("orc assign authority <role> <authority>", "change what a role asks for")
 	verb("orc assign permission <role> <permission>", "add a permission to a role")
+	verb("orc edit permission <name> [--floor n] [clauses…]", "change one in place, for every holder")
 	verb("orc grant permission <who> <perm> [--until <d>]", "hand one over temporarily")
 	verb("orc revoke permission <who> <perm>", "end a grant early")
 	verb("orc move <identity> <boss>", "re-parent; the subtree is re-capped")
@@ -77,6 +79,7 @@ func usage(p style.Palette) string {
 	verb("orc attach <identity>", "orc's own live view of the session")
 	verb("orc attach <identity> --direct", "hand your terminal over; ^\\ d detaches")
 	verb("orc poke <identity> [message]", "type into it without attaching")
+	verb("orc wake [<identity>…] [--every <dur>]", "poke whatever has gone quiet, on a cycle")
 	verb("orc refresh <identity>", "new session, fresh context, same identity")
 	line("")
 	line("%s", p.Header("reading it"))
@@ -118,7 +121,22 @@ func usage(p style.Palette) string {
 	line("  %s   the same, for editing", p.Value("write(Anno/internal/**)"))
 	line("  %s              how much thinking may be employed at once (see below)", p.Value("spawn(24)"))
 	line("  %s            narrows which orc verbs a role may run", p.Value("orc(assign)"))
+	line("  %s        a named capability in another tool", p.Value("tool(upgrade)"))
 	line("  kinds: %s", p.Muted(kindList()))
+	line("")
+
+	line("%s", p.Header("the toolkit"))
+	line("  every fleet is made with these. ordinary permissions — assign them, grant")
+	line("  them, remove them; the floor is who may hold one at all.")
+	for _, row := range toolkitRows() {
+		gap := 14 - theme.Width(row[0])
+		if gap < 1 {
+			gap = 1
+		}
+		fmt.Fprintf(&b, "  %s%s%s%s\n", p.Permission(row[0]), strings.Repeat(" ", gap),
+			p.Authority(row[1]), p.Muted("  "+row[2]))
+	}
+	line("  %s", p.Muted("`orc list permissions` shows their clauses and who holds them"))
 	line("")
 
 	line("%s", p.Header("load"))
@@ -153,6 +171,25 @@ func usage(p style.Palette) string {
 	line("%s takes: %s", p.Command("introspect --only"), p.Muted(fieldList()))
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// toolkitRows is the toolkit, for the help screen: name, floor, and one line.
+//
+// Read from the store's own table rather than written out again, so a permission
+// added to the toolkit appears here without anybody remembering to — the screen
+// somebody trusts is the one most worth keeping honest.
+func toolkitRows() [][3]string {
+	got, err := store.Toolkit()
+	if err != nil {
+		// Unreachable: the table is constants, checked by a test. An empty list is
+		// a help screen missing a section, which is better than a crash.
+		return nil
+	}
+	rows := make([][3]string, 0, len(got))
+	for _, b := range got {
+		rows = append(rows, [3]string{b.Name.String(), fmt.Sprintf("%3d", b.Floor.Int()), b.Why})
+	}
+	return rows
 }
 
 // fieldList is what `orc introspect --only` accepts, for the help and for the
@@ -215,7 +252,7 @@ func verbs() []string {
 	return []string{
 		"bootstrap", "new", "assign", "remove", "grant", "revoke", "move",
 		"status", "list", "budget", "model", "introspect", "check-control", "check-permission", "env", "verify",
-		"doctor", "owner", "employ", "fire", "tend", "attach", "poke", "refresh", "help",
+		"doctor", "owner", "employ", "fire", "tend", "attach", "poke", "wake", "refresh", "help",
 	}
 }
 
@@ -400,6 +437,34 @@ var topics = map[string]topic{
 			"A poke to a session mid-turn queues in Claude's own input box, which is\n" +
 			"the correct behaviour and is what the command says it did.",
 		examples: []string{"orc poke ember", `orc poke ember "the tests are green now"`},
+	},
+	"wake": {
+		forms: []string{
+			"orc wake [<identity>…]",
+			"orc wake [--every <dur>] [--after <dur>] [--message <text>] [--dry-run]",
+		},
+		does: "poke whatever has gone quiet, on a cycle",
+		detail: "An agent finishes a turn and stops. Nothing is wrong with it — Claude has\n" +
+			"said its piece and is waiting for the next thing somebody says — but in a\n" +
+			"fleet nobody is watching, that is where work stops. This is the thing\n" +
+			"that speaks.\n\n" +
+			"It reads each session's event feed, finds the ones that have been\n" +
+			"*waiting* longer than --after (10m by default), and pokes them. A session\n" +
+			"that is mid-turn is silent for good reasons — a long build, a slow read —\n" +
+			"and is left alone: poking it would queue a nudge into the middle of work\n" +
+			"it is already doing.\n\n" +
+			"Each silence is woken once. An agent that does not move after a poke is\n" +
+			"stuck rather than idle, and the next pass says so instead of filling its\n" +
+			"context with nudges.\n\n" +
+			"With --every it is the cycle; without, it is one sweep. With names it\n" +
+			"wakes those, and refuses one you do not control; without, it sweeps what\n" +
+			"is employed in your own subtree.",
+		examples: []string{
+			"orc wake",
+			"orc wake --every 5m",
+			"orc wake ember --message \"status?\"",
+			"orc wake --every 5m --after 30m --dry-run",
+		},
 	},
 	"refresh": {
 		forms: []string{"orc refresh <identity>"},
