@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+#
+# Bring this machine up to date: pull the tree, rebuild every tool, install them.
+#
+#   sh/pull                what came down, then build and install
+#   sh/pull --check        what *would* come down, and nothing else
+#   sh/pull --test         run every module's tests after the build
+#   sh/pull --no-install   pull only; change no binary
+#   sh/pull --no-profile   install without touching the shell profile
+#   sh/pull --to DIR       install somewhere else
+#   sh/pull --yes          for a script: sh/push needs this off a terminal
+#
+# It is the hand-operated twin of `cq upgrade`, which does the same three things
+# on every machine in the fleet at once. This is the one you run on the machine
+# you are sitting at, and the one to reach for when the fleet's own upgrade is the
+# thing that is broken.
+#
+# Three rules keep it from being a surprise:
+#
+#   The pull is `--ff-only`. A merge commit made by a script, on a checkout
+#   nobody is watching, is a repository state somebody has to come and untangle
+#   by hand. Refusing is the kinder failure.
+#
+#   A dirty tree stops it. Not because git could not cope — it often can — but
+#   because the *build* would then install binaries made from half-finished work,
+#   and "pull" is not a thing anybody expects to do that. `--dirty` says you meant
+#   it.
+#
+#   It shows what arrived before it builds. A tool that silently replaced every
+#   binary on the machine would leave you with no way to answer "what changed?"
+#   except `git log`, which is the question you are asking precisely because
+#   something started behaving differently.
+#
+# Installing goes through sh/push, so the PATH block is offered the same way it
+# always is: shown, asked about once, never again. `--no-profile` uses sh/build
+# instead, for a machine whose profile is somebody else's business — a server
+# under systemd, or a checkout you build but do not live in.
+
+set -euo pipefail
+
+# The scripts live in sh/, so the tree is one level up from them.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+check_only=false
+run_tests=false
+install=true
+use_profile=true
+allow_dirty=false
+assume_yes=false
+target=""
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--check) check_only=true; shift ;;
+	--test) run_tests=true; shift ;;
+	--no-install) install=false; shift ;;
+	--no-profile) use_profile=false; shift ;;
+	--dirty) allow_dirty=true; shift ;;
+	--yes) assume_yes=true; shift ;;
+	--to) [[ $# -ge 2 ]] || { echo "sh/pull: --to needs a directory" >&2; exit 1; }
+		target="$2"; shift 2 ;;
+	--to=*) target="${1#--to=}"; shift ;;
+	-h | --help) sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	-*) echo "sh/pull: unknown option $1" >&2; exit 1 ;;
+	*) echo "sh/pull: takes no arguments (got $1)" >&2; exit 1 ;;
+	esac
+done
+
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+	bold=$'\033[1m'; dim=$'\033[2m'; green=$'\033[32m'; yellow=$'\033[33m'
+	red=$'\033[31m'; off=$'\033[0m'
+else
+	bold=""; dim=""; green=""; yellow=""; red=""; off=""
+fi
+
+say() { printf '%b\n' "$*"; }
+
+# Everything below runs from the tree, so a caller's working directory cannot
+# change which repository is pulled.
+cd "$root"
+
+if [[ ! -d .git ]] && ! git rev-parse --git-dir >/dev/null 2>&1; then
+	say "${red}sh/pull:${off} $root is not a git checkout, so there is nothing to pull"
+	exit 1
+fi
+
+# --- what is here now ----------------------------------------------------
+
+before="$(git rev-parse --short HEAD)"
+branch="$(git rev-parse --abbrev-ref HEAD)"
+
+# `--porcelain` rather than `diff --quiet`: it also catches untracked files, and
+# an untracked .go file is exactly the kind of half-finished work that would be
+# compiled into an installed binary without anybody meaning it.
+#
+# Noted here and acted on below, not here. The reason to refuse is that a *build*
+# would install work in progress, so it is the build this gates — `--check` asks
+# what would come down and installs nothing, and refusing to answer that because
+# a file is untracked would be a check nobody can run when they most want to.
+dirty="$(git status --porcelain)"
+
+say "${bold}$branch${off} at ${bold}$before${off}${dim}  in $root${off}"
+if [[ -n "$dirty" ]]; then
+	changed="$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')"
+	say "${yellow}$changed uncommitted change(s)${off}"
+	printf '%s\n' "$dirty" | head -8 | sed "s/^/  ${dim}/;s/\$/${off}/"
+	[[ "$changed" -gt 8 ]] && say "  ${dim}…${off}"
+fi
+
+# --- what is upstream ----------------------------------------------------
+
+# Fetch first, always. It is the one step that is safe on a dirty tree and on a
+# detached head, and doing it before deciding anything means --check reports the
+# same facts the real run would act on.
+if ! fetch_out="$(git fetch --quiet 2>&1)"; then
+	say "${red}could not fetch:${off} $fetch_out"
+	exit 1
+fi
+
+upstream="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
+if [[ -z "$upstream" ]]; then
+	say "${yellow}$branch tracks nothing,${off} ${dim}so there is nothing to pull${off}"
+	say "  ${dim}git branch --set-upstream-to origin/$branch${off}"
+	incoming=""
+else
+	incoming="$(git log --oneline "HEAD..@{upstream}" 2>/dev/null || true)"
+fi
+
+if [[ -n "$incoming" ]]; then
+	count="$(printf '%s\n' "$incoming" | wc -l | tr -d ' ')"
+	say "${green}$count commit(s) to come${off}${dim}, from $upstream${off}"
+	printf '%s\n' "$incoming" | sed "s/^/  /"
+else
+	say "${dim}already up to date${off}"
+fi
+
+if $check_only; then
+	say ""
+	say "${dim}nothing was pulled, built, or installed${off}"
+	exit 0
+fi
+
+# --- pull ----------------------------------------------------------------
+
+# The gate, where its reason applies: everything past here builds and installs.
+if [[ -n "$dirty" ]] && $install && ! $allow_dirty; then
+	say ""
+	say "${red}sh/pull:${off} not building from a tree with uncommitted changes"
+	say "  ${dim}the binaries this installs would be made from work in progress${off}"
+	say "  ${dim}commit or stash them, pass${off} ${bold}--dirty${off} ${dim}if you meant it,${off}"
+	say "  ${dim}or${off} ${bold}--no-install${off} ${dim}to pull and build nothing${off}"
+	exit 1
+fi
+
+if [[ -n "$incoming" ]]; then
+	say ""
+	if ! pull_out="$(git merge --ff-only '@{upstream}' 2>&1)"; then
+		say "${red}the pull would not fast-forward:${off}"
+		printf '%s\n' "$pull_out" | sed "s/^/  /"
+		say "  ${dim}this checkout has commits upstream does not; rebase or push them first${off}"
+		exit 1
+	fi
+	after="$(git rev-parse --short HEAD)"
+	say "${green}pulled${off} $before → ${bold}$after${off}"
+else
+	after="$before"
+fi
+
+# Even with nothing new. A working tree can be dirty under --dirty, and a
+# previous build can have failed halfway, so "no new commits" is not "no work to
+# do" — the same reasoning internal/upgrade follows.
+
+# --- build and install ---------------------------------------------------
+
+# `--no-install` skips this step and nothing else. It used to return here, which
+# meant `--no-install --test` ran no tests and said nothing about it — a flag
+# quietly cancelling another is the kind of thing somebody only notices when they
+# trust the silence.
+if $install; then
+	say ""
+	args=()
+	[[ -n "$target" ]] && args+=(--to "$target")
+	# --yes is forwarded rather than assumed: off a terminal sh/push refuses
+	# without it, and that refusal is the whole reason a PATH block is never
+	# added behind somebody's back.
+	$assume_yes && args+=(--yes)
+
+	# `${args[@]+"${args[@]}"}` rather than `"${args[@]}"`. macOS ships bash 3.2,
+	# where expanding an empty array under `set -u` is a fatal "unbound variable"
+	# rather than nothing at all — so the plain form works everywhere except the
+	# default shell on half the machines this runs on, and fails on exactly the
+	# common case of `sh/pull` with no flags.
+	if $use_profile; then
+		# sh/push builds, installs, and offers the PATH block — shown once,
+		# asked about once, and a no-op every time after.
+		"$root/sh/push" ${args[@]+"${args[@]}"}
+	else
+		"$root/sh/build" ${args[@]+"${args[@]}"}
+	fi
+else
+	say ""
+	say "${dim}--no-install: nothing was built or installed${off}"
+fi
+
+# --- tests ---------------------------------------------------------------
+
+if $run_tests; then
+	say ""
+	say "${bold}tests${off}"
+	failed=()
+	for dir in "$root"/*/; do
+		[[ -f "$dir/go.mod" ]] || continue
+		module="$(basename "$dir")"
+		printf '%s%-12s%s ' "$bold" "$module" "$off"
+		# From inside the module with the workspace off, exactly as sh/build
+		# builds them: the point of the replace directives is that each tool
+		# stands alone, and a test run through go.work would not check that.
+		if output=$(cd "$dir" && GOWORK=off go test ./... 2>&1); then
+			say "${green}ok${off}"
+		else
+			say "${red}failed${off}"
+			printf '%s\n' "$output" | grep -v '^ok\|no test files' | head -8 | sed "s/^/  /"
+			failed+=("$module")
+		fi
+	done
+	if [[ ${#failed[@]} -gt 0 ]]; then
+		say ""
+		say "${red}${#failed[@]} module(s) failed:${off} ${failed[*]}"
+		# A build that installed and then failed its tests is worth a non-zero
+		# exit, so a script that chains this stops — but the binaries are already
+		# in place, and saying so is better than leaving somebody to guess.
+		$install && say "  ${dim}the new binaries are installed; these are the tests, not the build${off}"
+		exit 1
+	fi
+fi
+
+say ""
+if [[ "$before" == "$after" ]]; then
+	say "${green}✓${off} up to date at ${bold}$after${off}"
+else
+	say "${green}✓${off} ${bold}$before${off} → ${bold}$after${off}"
+fi

@@ -1,0 +1,30 @@
+# Line endings, decided once.
+#
+# Git for Windows defaults to `core.autocrlf=true`, which rewrites every text file
+# to CRLF on checkout. For most of a repository that is harmless. For the scripts
+# in sh/ it is fatal, and fatal in a way that reads as a missing file:
+#
+#   $ sh/pull
+#   bash: sh/pull: /usr/bin/env: bad interpreter: No such file or directory
+#
+# `env` is plainly there. What is missing is `bash`, because the shebang line ends
+# `bash\r` and the carriage return is part of the name being looked up. Somebody
+# hitting that on a fresh clone has no reason to suspect line endings, and every
+# reason to suspect the script.
+#
+# So the whole tree is LF, in the repository and in the working copy, on every
+# platform. Nothing here is read by a Windows-native tool that needs CRLF: the Go
+# toolchain does not care, Git Bash wants LF, and every editor anybody uses on this
+# has handled LF for a decade.
+* text=auto eol=lf
+
+# Binaries, so nothing tries to normalise them. The build output is ignored rather
+# than committed, but a checkout can still carry a fixture or an image one day, and
+# a normalised PNG is a corrupt PNG.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary

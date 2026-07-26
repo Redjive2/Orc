@@ -255,6 +255,13 @@ build brings nothing up at all. A failed build leaves the server exactly as it w
   `orc-session` supervisor and its agent carry on and pick the new build up when
   they next exec. `orc tend` reconciles whatever did not.
 
+### By hand
+
+`sh/pull` is the same three steps on the machine you are sitting at: pull the tree,
+rebuild every tool, install them. It is what to reach for when the fleet's own
+upgrade is the thing that is broken, and `sh/pull --check` says what would come
+down without touching anything.
+
 ### Who may
 
 `cq upgrade` needs Orc's builtin `upgrade` permission — floor 90, executive agents
