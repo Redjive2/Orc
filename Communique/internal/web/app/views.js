@@ -6,6 +6,7 @@ import { h, mount, clock, since, ellipsis } from "./dom.js";
 import { render } from "./markdown.js";
 import { survey } from "./survey.js";
 import * as routes from "./routes.js";
+import * as check from "./check.js";
 
 // pendingFor finds the queue entries that concern one message, so a reply the
 // user just sent appears beside the thread it belongs to — marked queued.
@@ -265,7 +266,6 @@ function composer(state, m, actions) {
 // applied minutes later on another machine, so a typo caught now is a sentence
 // on screen, and a typo caught then is a failure the writer has to come back
 // for and cannot correct without writing the message again.
-const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 // recipients splits what was typed and says what is wrong with it, if anything.
 //
@@ -275,13 +275,18 @@ export function recipients(text) {
   const names = String(text).split(/[,\s]+/).filter(Boolean).map((n) => n.toLowerCase());
   if (names.length === 0) return { names: [], error: "no recipients" };
 
-  const bad = names.filter((n) => !NAME.test(n));
-  if (bad.length > 0) {
-    return {
-      names: [],
-      error: `not a name: ${bad.join(", ")} — letters, digits, and . _ -`,
-    };
-  }
+  // Each name put to the same rule Mailman will apply, rather than to a regexp
+  // that happens to agree with most of it. The old one accepted `system` and
+  // `all` — reserved names that queue happily and come back as a refusal after
+  // the next sync, worded for a terminal.
+  //
+  // Every bad name, each with its own reason. Both halves matter: a list without
+  // reasons cannot say that one name has a space in it and another is reserved,
+  // and one reason without the list means fixing them one send at a time.
+  const problems = names
+    .map((n) => check.mailbox(n, `“${n}”`))
+    .filter(Boolean);
+  if (problems.length > 0) return { names: [], error: problems.join("; ") };
   // Duplicates are the writer's slip, not an error worth stopping for.
   return { names: [...new Set(names)], error: "" };
 }

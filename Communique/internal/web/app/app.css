@@ -538,6 +538,26 @@ button.fold.picked .twist { color: var(--primary); }
 .trouble { color: var(--danger); }
 .trouble p { margin: 0 0 .5rem; }
 
+/* What is wrong with one field, under that field.
+   It holds no space until it has something to say, so a sheet does not jump
+   under the reader's hands as they tab through it — the same rule the compose
+   form's error line follows, for the same reason. */
+.field-error:empty { display: none; }
+.field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: .9em;
+}
+
+/* And the box itself, marked. Colour is not carrying this on its own: the
+   message below says what is wrong in words, and aria-invalid says it to a
+   screen reader. The border is what makes it findable among six fields. */
+.field input[aria-invalid="true"],
+.field textarea[aria-invalid="true"],
+.field select[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 /* No wrapping, for the same reason a code block does not wrap: a wrapped line is
    a line whose indentation lies about its depth. It scrolls instead. */
 #editor textarea {

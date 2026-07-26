@@ -18,6 +18,7 @@
 
 import { h, mount } from "./dom.js";
 import * as clauses from "./clauses.js";
+import * as check from "./check.js";
 
 // panel is where a dialog lives: outside #view, so nothing the application
 // redraws can disturb it.
@@ -159,46 +160,89 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
         // a reset would put it back rather than clearing the box.
         input.value = String(f.value ?? "");
       }
-      inputs.set(f.name, { field: f, input });
+      // Each field carries its own place to be wrong, beside the box rather than
+      // at the foot of the form. A single message at the bottom means reading it,
+      // then looking back up and working out which of five boxes it meant — and
+      // with several things wrong it could only ever name one of them.
+      const problem = h("p", { class: "field-error" });
+      const row = { field: f, input, problem, marked: false };
+      inputs.set(f.name, row);
+
+      // verify marks this one field, and says whether it is wrong.
+      const verify = () => {
+        const bad = fault(f, input);
+        mount(problem, bad ? h("span", { role: "alert" }, bad) : null);
+        // The box itself is marked too. The message says what is wrong; this is
+        // what makes it findable in a sheet with six fields in it, and what a
+        // screen reader reads as part of the field rather than as loose prose.
+        if (bad) {
+          input.setAttribute("aria-invalid", "true");
+        } else {
+          input.removeAttribute("aria-invalid");
+        }
+        row.marked = Boolean(bad);
+        return bad;
+      };
+      row.verify = verify;
+
+      // When to complain, which is most of whether this is help or nagging.
+      //
+      // Not while somebody is first typing: a name is invalid for as long as it
+      // is half-written, and a box that turns red on the first keystroke is a box
+      // that is red the whole time it is being filled in. So the first word comes
+      // when they leave the field — and after that, on every keystroke, so the
+      // message goes away as it is fixed rather than sitting there until the next
+      // attempt to submit.
+      input.addEventListener("blur", () => { if (String(input.value ?? "") !== "") verify(); });
+      input.addEventListener("input", () => { if (row.marked) verify(); });
+      input.addEventListener("change", () => { if (row.marked) verify(); });
+
       return h("label", { class: "field" },
         h("span", {}, f.label),
         input,
         f.hint ? h("span", { class: "muted hint" }, f.hint) : null,
+        problem,
         ...extras);
     });
 
     // Validated here, in the sheet, with the message beside the box that is
     // wrong. `alert` used to do this, which meant a second modal on top of the
     // first telling you about a value you could no longer see.
+    //
+    // Every field is checked, not just up to the first bad one. Stopping early
+    // means a form with three problems is submitted three times, each attempt
+    // revealing one more — and the third refusal reads as the site being broken
+    // rather than as the form having said what it wanted all along.
     const check = () => {
       const out = {};
-      for (const [name, { field, input }] of inputs) {
-        const raw = String(input.value ?? "").trim();
-        if (field.kind === "number") {
-          const n = Number.parseInt(raw, 10);
-          if (!Number.isInteger(n) || (field.min != null && n < field.min) ||
-              (field.max != null && n > field.max)) {
-            return { error: `${field.label} must be a whole number from ${field.min} to ${field.max}` };
-          }
-          out[name] = n;
+      const problems = [];
+      for (const [name, row] of inputs) {
+        if (row.verify()) {
+          problems.push(row);
           continue;
         }
-        if (field.required !== false && raw === "") {
-          return { error: `${field.label} is needed` };
-        }
-        out[name] = field.kind === "choice" ? Number.parseInt(raw, 10) || raw : raw;
+        out[name] = value(row.field, row.input);
       }
-      return { values: out };
+      return problems.length > 0 ? { problems } : { values: out };
     };
 
     const go = () => {
       const got = check();
-      if (got.error) {
-        // role=alert so it is announced when it appears: somebody who cannot see
-        // the sheet has otherwise pressed a button and had nothing happen.
-        mount(trouble, h("p", { role: "alert" }, got.error));
+      if (got.problems) {
+        // A summary only when there is more than one, and never instead of the
+        // messages themselves: with a single problem the line beside the box is
+        // the whole story, and repeating it at the foot of the form is noise.
+        mount(trouble, got.problems.length > 1
+          ? h("p", { role: "alert" }, `${got.problems.length} fields need fixing`)
+          : null);
+        // Focus goes to the first one, so the keyboard is already where the work
+        // is — and so somebody who cannot see the sheet is taken to the field
+        // rather than told that something, somewhere, is wrong.
+        const first = got.problems[0].input;
+        if (typeof first.focus === "function") first.focus();
         return;
       }
+      mount(trouble);
       done(got.values);
     };
 
@@ -223,10 +267,17 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
 }
 
 // one is the common case: a single value, asked for by name.
-export async function one({ title, label, value, note, hint, submit }) {
+//
+// The field spec is built here rather than passed through, which makes this the
+// place a field property goes missing: anything not named below is silently
+// dropped, and the caller sees a dialog that works and a rule that does nothing.
+// `check` was exactly that for a while — eight single-field sheets asking for
+// names with the validation quietly discarded — so anything added to a field
+// belongs in this list as well as in `ask`.
+export async function one({ title, label, value, note, hint, submit, check, required, placeholder }) {
   const got = await ask({
     title, note, submit,
-    fields: [{ name: "value", label, value, hint }],
+    fields: [{ name: "value", label, value, hint, check, required, placeholder }],
   });
   return got ? got.value : null;
 }
@@ -280,4 +331,40 @@ export function show({ title, text, note }) {
 // isOpen reports whether a dialog is up, so a redraw can leave it alone.
 export function isOpen() {
   return Boolean(panel && panel.isConnected && !panel.hidden);
+}
+
+// fault is what is wrong with one field, or "" when nothing is.
+//
+// The order is the order somebody discovers things in, and it matters: a field
+// left empty is *missing*, not malformed, and telling somebody their blank box
+// has a bad character at position 1 is the kind of message that makes a form feel
+// hostile. So emptiness is settled first, and only a value that is actually there
+// is put to the field's own check.
+export function fault(field, input) {
+  const raw = String(input.value ?? "").trim();
+
+  if (field.kind === "number") {
+    return check.whole(raw, { min: field.min, max: field.max, what: field.label });
+  }
+  if (raw === "") {
+    return field.required === false ? "" : `${field.label} cannot be empty`;
+  }
+  // A field that is allowed to be empty is still checked once it has something
+  // in it: `--until` may be left blank, and "2 hours" in it is a mistake either
+  // way.
+  const rule = check.of(field.check);
+  return rule ? rule(raw, field.label) : "";
+}
+
+// value is what a field contributes once it is known to be sound.
+//
+// A choice is parsed as a number when it looks like one because the fleet panel's
+// selects carry authorities and loads; `Number.parseInt(...) || raw` would turn a
+// legitimate zero into a string, which is why this asks rather than relying on
+// the falsiness of 0.
+function value(field, input) {
+  const raw = String(input.value ?? "").trim();
+  if (field.kind === "number") return Number.parseInt(raw, 10);
+  if (field.kind === "choice" && /^-?[0-9]+$/.test(raw)) return Number.parseInt(raw, 10);
+  return raw;
 }

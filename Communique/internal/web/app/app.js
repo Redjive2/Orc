@@ -299,7 +299,7 @@ const actions = {
 
   async newIdentity(f) {
     const name = await dialog.one({
-      title: "hire an agent", label: "name",
+      title: "hire an agent", label: "name", check: "mailbox",
       hint: "letters, digits, and dashes",
       note: "it is created under you, with no role and no permissions until you give it one",
     });
@@ -311,7 +311,7 @@ const actions = {
       title: "a new role",
       note: "authority runs 1 to 99; the operator is 100 and that is a position, not a level",
       fields: [
-        { name: "name", label: "name", hint: "letters, digits, and dashes" },
+        { name: "name", label: "name", check: "label", hint: "letters, digits, and dashes" },
         { name: "authority", label: "authority", kind: "number", value: 50, min: 1, max: 99 },
         { name: "description", label: "what it is", hint: "one line; it shows in every listing" },
       ],
@@ -324,7 +324,7 @@ const actions = {
       title: "a new permission",
       note: "a named set of clauses with a floor: only an identity at or above it can hold this",
       fields: [
-        { name: "name", label: "name" },
+        { name: "name", label: "name", check: "label" },
         { name: "floor", label: "floor", kind: "number", value: 1, min: 1, max: 100,
           hint: "the least authority that may hold it" },
         { name: "patterns", label: "clauses", kind: "clauses", words: f.vocabulary,
@@ -361,7 +361,7 @@ const actions = {
 
   async assignRole(f, id) {
     const role = await dialog.one({
-      title: `the job for ${id.name}`, label: "role", value: id.role || "",
+      title: `the job for ${id.name}`, label: "role", check: "label", value: id.role || "",
       note: "an identity holds exactly one role; this replaces whatever it had",
     });
     if (!role) return;
@@ -369,7 +369,7 @@ const actions = {
   },
   async moveIdentity(f, id) {
     const boss = await dialog.one({
-      title: `who ${id.name} works for`, label: "boss", value: id.boss || "",
+      title: `who ${id.name} works for`, label: "boss", check: "mailbox", value: id.boss || "",
       note: "the whole subtree is re-capped: nobody under it can exceed the new boss",
     });
     if (!boss) return;
@@ -546,8 +546,8 @@ const actions = {
       note: "every grant lapses. without an expiry it lasts the current session.",
       submit: "grant it",
       fields: [
-        { name: "permission", label: "permission" },
-        { name: "until", label: "until", required: false,
+        { name: "permission", label: "permission", check: "label" },
+        { name: "until", label: "until", required: false, check: "span",
           hint: "a duration like 2h or 30m — blank ties it to the session" },
       ],
     });
@@ -583,7 +583,7 @@ const actions = {
   },
   async addPermission(f, role) {
     const permission = await dialog.one({
-      title: `give ${role.name} a permission`, label: "permission",
+      title: `give ${role.name} a permission`, label: "permission", check: "label",
       note: "orc refuses if the role's authority is below the permission's floor",
     });
     if (!permission) return;
@@ -671,7 +671,7 @@ const actions = {
       note: `it will be created on ${machine}, as a draft, on the next sync`,
       submit: "queue it",
       fields: [
-        { name: "name", label: "name", value: "", hint: "letters, digits, and dashes" },
+        { name: "name", label: "name", value: "", check: "label", hint: "letters, digits, and dashes" },
         { name: "priority", label: "priority", kind: "number", value: 3, min: 1, max: 5,
           hint: "1 low → 5 high" },
         { name: "difficulty", label: "difficulty", kind: "number", value: 3, min: 1, max: 5,
@@ -693,7 +693,7 @@ const actions = {
   },
   async assignTask(t) {
     const user = await dialog.one({
-      title: `assign ${t.name}`, label: "to",
+      title: `assign ${t.name}`, label: "to", check: "mailbox",
       value: t.owner || "", hint: "an agent you control",
       note: "macmuffin tells them, and refuses if you do not control them",
     });
@@ -702,7 +702,7 @@ const actions = {
   },
   async inviteToTask(t) {
     const user = await dialog.one({
-      title: `invite to ${t.name}`, label: "agent",
+      title: `invite to ${t.name}`, label: "agent", check: "mailbox",
       note: "a collaborator can work on it; the owner is unchanged",
     });
     if (!user) return;
@@ -721,7 +721,7 @@ const actions = {
     // than an addition — which is also what `muff scope` does, so the current
     // scope is what the box starts with rather than an empty one.
     const typed = await dialog.one({
-      title: `scope for ${t.name}`, label: "paths",
+      title: `scope for ${t.name}`, label: "paths", check: "paths",
       value: (t.scope || []).join(" "),
       hint: "separated by spaces, relative to the repository",
       note: "this replaces the whole scope; a task cannot be edited or completed without one",

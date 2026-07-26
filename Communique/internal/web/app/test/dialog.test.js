@@ -53,6 +53,28 @@ function submit() {
   for (const fn of (form.listeners.submit || [])) fn({ preventDefault() {} });
 }
 
+// said is every complaint currently on the sheet, wherever it is shown.
+function said() {
+  return all(document.body, (n) => n.className === "field-error" || n.className === "trouble")
+    .map((n) => n.textContent).join(" ");
+}
+
+// marked is the boxes flagged as wrong, which is what makes one findable among
+// six.
+function marked() {
+  return all(document.body, (n) => n.getAttribute && n.getAttribute("aria-invalid") === "true");
+}
+
+// blur runs a field's leave handler, which is when the first complaint is due.
+function blur(el) {
+  for (const fn of (el.listeners.blur || [])) fn({ target: el });
+}
+
+function type(el, text) {
+  el.value = text;
+  for (const fn of (el.listeners.input || [])) fn({ target: el });
+}
+
 const taskFields = [
   { name: "name", label: "name", value: "" },
   { name: "priority", label: "priority", kind: "number", value: 3, min: 1, max: 5 },
@@ -83,8 +105,11 @@ test("a value out of range is refused in the sheet, not in another popup", async
   boxes[1].value = "9";
   submit();
 
-  const trouble = find(document.body, (n) => n.className === "trouble");
-  assert.match(trouble.textContent, /priority.*1 to 5/, "nothing was said about the bad value");
+  // Beside the field, not at the foot of the form: with six boxes on a sheet, a
+  // message at the bottom means reading it and then working out which one it
+  // meant.
+  assert.match(said(), /priority.*1 to 5/, "nothing was said about the bad value");
+  assert.equal(marked().length, 1, "the offending box was not marked");
   assert.ok(dialog.isOpen(), "the sheet closed on a value it refused");
 
   // And it accepts the correction rather than having to be reopened.
@@ -96,8 +121,7 @@ test("a value out of range is refused in the sheet, not in another popup", async
 test("an empty required field is refused, and says which", async () => {
   const done = dialog.ask({ title: "a new task", fields: taskFields });
   submit();
-  const trouble = find(document.body, (n) => n.className === "trouble");
-  assert.match(trouble.textContent, /name is needed/);
+  assert.match(said(), /name cannot be empty/);
 
   inputs()[0].value = "parser";
   submit();
@@ -219,4 +243,200 @@ test("a clause field brings its cheat sheet", async () => {
   assert.match(sheet.textContent, /spawn\(24\)/);
   click(button("cancel"));
   await done;
+});
+
+// --- saying what is wrong, before it is sent -------------------------------
+//
+// The complaint these answer: things failed with opaque errors instead of the
+// form saying what it wanted. A name with a space in it used to be accepted,
+// queued, and refused by orc minutes later on a machine nobody was watching —
+// so the person who typed it read the refusal, in a terminal's words, long after
+// they had moved on.
+
+test("a name that the tool would refuse is refused here, with the reason", async () => {
+  dialog.ask({ title: "hire", fields: [{ name: "who", label: "name", check: "mailbox" }] });
+  const box = inputs()[0];
+  box.value = "my agent";
+  submit();
+
+  assert.match(said(), /position 3/, `it did not say where: ${said()}`);
+  assert.match(said(), /letters, digits/, said());
+  assert.ok(dialog.isOpen(), "it queued a name that would have been refused");
+  press("Escape");
+});
+
+// The two reserved sets differ, and a check that used the wrong one would refuse
+// a name that works — the one failure mode worse than the original problem.
+test("a reserved name is caught, and only in the right sheet", async () => {
+  dialog.ask({ title: "hire", fields: [{ name: "who", label: "name", check: "mailbox" }] });
+  inputs()[0].value = "system";
+  submit();
+  assert.match(said(), /reserved/, said());
+  press("Escape");
+
+  // `system` is a perfectly good role name, and must not be refused here.
+  const done = dialog.ask({ title: "new role", fields: [{ name: "n", label: "name", check: "label" }] });
+  inputs()[0].value = "system";
+  submit();
+  assert.deepEqual(await done, { n: "system" });
+});
+
+// clock.ParseSpan is not time.ParseDuration, so this is what somebody fluent in
+// Go types. The generic message would send them hunting for a typo.
+test("a compound duration is refused with the spelling that works", async () => {
+  dialog.ask({
+    title: "grant", submit: "grant",
+    fields: [{ name: "until", label: "until", check: "span" }],
+  });
+  inputs()[0].value = "1h30m";
+  submit();
+  assert.match(said(), /90m/, `it should offer the spelling that works: ${said()}`);
+  press("Escape");
+});
+
+// A field allowed to be empty is still checked once it has something in it.
+test("an optional field is checked when it is filled in", async () => {
+  const done = dialog.ask({
+    title: "grant",
+    fields: [{ name: "until", label: "until", required: false, check: "span" }],
+  });
+  const box = inputs()[0];
+  box.value = "2 hours";
+  submit();
+  assert.match(said(), /30m or 2h/, said());
+
+  // And blank still goes through, because blank is what "optional" means.
+  box.value = "";
+  submit();
+  assert.deepEqual(await done, { until: "" });
+});
+
+// Stopping at the first problem means a form with three of them is submitted
+// three times, each attempt revealing one more — and the third refusal reads as
+// the site being broken rather than the form having said what it wanted.
+test("every problem is reported at once, not one per attempt", async () => {
+  dialog.ask({
+    title: "a new task",
+    fields: [
+      { name: "name", label: "name", check: "label" },
+      { name: "priority", label: "priority", kind: "number", value: 3, min: 1, max: 5 },
+      { name: "difficulty", label: "difficulty", kind: "number", value: 3, min: 1, max: 5 },
+    ],
+  });
+  const boxes = inputs();
+  boxes[0].value = "not a name!";
+  boxes[1].value = "9";
+  boxes[2].value = "0";
+  submit();
+
+  assert.equal(marked().length, 3, `only ${marked().length} of 3 bad fields were marked`);
+  const text = said();
+  for (const want of [/name/, /priority/, /difficulty/]) {
+    assert.match(text, want, `it did not mention every bad field: ${text}`);
+  }
+  press("Escape");
+});
+
+// A summary only when there is more than one. With a single problem the line
+// beside the box is the whole story, and repeating it below is noise.
+test("one problem is said once", async () => {
+  dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] });
+  inputs()[0].value = "bad name!";
+  submit();
+
+  const summary = find(document.body, (n) => n.className === "trouble");
+  assert.equal(summary.textContent, "", `a single problem was also summarised: ${summary.textContent}`);
+  press("Escape");
+});
+
+// Where the keyboard lands. Somebody who cannot see the sheet has otherwise
+// pressed a button and been told that something, somewhere, is wrong.
+test("focus goes to the first field that needs fixing", async () => {
+  dialog.ask({
+    title: "t",
+    fields: [
+      { name: "a", label: "a", required: false },
+      { name: "b", label: "b", check: "label" },
+      { name: "c", label: "c", check: "label" },
+    ],
+  });
+  const boxes = inputs();
+  boxes[1].value = "bad!";
+  boxes[2].value = "also bad!";
+  submit();
+  assert.equal(boxes[1].focused, true, "focus was not put on the first problem");
+  press("Escape");
+});
+
+// When to complain, which is most of whether this helps or nags. A name is
+// invalid for as long as it is half-written, so a box that reddens on the first
+// keystroke is red the whole time it is being filled in.
+test("a field is not marked while it is still being typed", async () => {
+  dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] });
+  const box = inputs()[0];
+  type(box, "r");
+  type(box, "re");
+  type(box, "rev");
+  assert.equal(marked().length, 0, "it complained while the name was still being typed");
+
+  // The first word comes on leaving the field.
+  type(box, "rev iewer");
+  blur(box);
+  assert.equal(marked().length, 1, "it said nothing when the field was left with a bad value");
+  press("Escape");
+});
+
+// And once marked, it clears as the value is fixed — rather than sitting there
+// accusing until the next attempt to submit.
+test("a complaint goes away as it is fixed", async () => {
+  dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] });
+  const box = inputs()[0];
+  type(box, "bad name!");
+  blur(box);
+  assert.equal(marked().length, 1, "a bad value was not marked on leaving the field");
+
+  type(box, "goodname");
+  assert.equal(marked().length, 0, "the complaint stayed after the value was corrected");
+  assert.equal(said().trim(), "", `the message stayed: ${said()}`);
+  press("Escape");
+});
+
+// Leaving an empty field alone is not a mistake yet — somebody tabbing through a
+// sheet to see its shape should not be scolded for every box they pass.
+test("tabbing past an empty field says nothing", async () => {
+  dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] });
+  const box = inputs()[0];
+  blur(box);
+  assert.equal(marked().length, 0, "an untouched empty field was marked on the way past");
+  press("Escape");
+});
+
+// A misspelled check must not stop the sheet opening: validating one field less
+// is a small loss, a dialog that will not appear is the whole action lost.
+test("a check that does not exist does not break the sheet", async () => {
+  const done = dialog.ask({ title: "t", fields: [{ name: "n", label: "n", check: "nosuchthing" }] });
+  inputs()[0].value = "whatever";
+  submit();
+  assert.deepEqual(await done, { n: "whatever" });
+});
+
+// one() builds its field spec by hand, so it is where a field property goes
+// missing — and it did: `check` was dropped, leaving eight single-field sheets
+// asking for names with the validation quietly discarded. The sheets looked
+// right, the rules were declared, and nothing enforced them.
+test("one() carries the field's check, and not only its label", async () => {
+  dialog.one({ title: "hire an agent", label: "name", check: "mailbox" });
+  const box = inputs()[0];
+  box.value = "my agent";
+  submit();
+
+  assert.match(said(), /position 3/, `one() dropped the check: ${said()}`);
+  assert.equal(marked().length, 1, "the box was not marked");
+  press("Escape");
+});
+
+test("one() carries required, so an optional single field may be left blank", async () => {
+  const done = dialog.one({ title: "t", label: "note", required: false });
+  submit();
+  assert.equal(await done, "");
 });
