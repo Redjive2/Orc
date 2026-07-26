@@ -73,6 +73,17 @@ built=()
 failed=()
 installed=()
 
+# Windows starts a program only through a name it recognises, and PATHEXT is how
+# it recognises one. `go build -o name` writes exactly `name` on every platform —
+# no extension is added when -o is given — so without this the tools land here
+# unrunnable by anything that resolves a command properly. A shell will still run
+# them, which is what makes it confusing: `cq` works, and then `cq serve` cannot
+# start its own supervisor and reports that cq is "not found in %PATH%".
+exe=""
+case "$(go env GOOS)" in
+	windows) exe=".exe" ;;
+esac
+
 for module in $(modules); do
 	wants "$module" || continue
 	dir="$root/$module"
@@ -107,8 +118,8 @@ for module in $(modules); do
 			printf '%scannot write to %s%s\n' "$red" "$target" "$off" >&2
 			exit 1
 		fi
-		(cd "$dir" && GOWORK=off go build -o "$target/$name" "./cmd/$name")
-		installed+=("$name")
+		(cd "$dir" && GOWORK=off go build -o "$target/$name$exe" "./cmd/$name")
+		installed+=("$name$exe")
 	done
 
 	printf '%sok%s %s%s%s\n' "$green" "$off" "$dim" "${names[*]}" "$off"

@@ -212,7 +212,18 @@ func (a App) serve(args []string) error {
 	// `a.Listen != nil` is a test serving in-process. There is no exec there and
 	// nothing to restart, so supervising would fork the test binary.
 	if *supervise && !a.supervised() && a.Listen == nil {
-		return a.supervise(append([]string{"serve"}, args...))
+		// Serving is what was asked for; restarting in place is a convenience on
+		// top of it. So a binary this process cannot start a copy of costs the
+		// supervisor and nothing else — said out loud, because `cq upgrade` will
+		// later have to ask for a restart by hand and this is the reason.
+		switch exe, err := restartable(); {
+		case err == nil:
+			return a.supervise(exe, append([]string{"serve"}, args...))
+		default:
+			a.tell("%s %v", a.ink("warning", style.Warn), err)
+			a.tell("%s serving without a supervisor; %s will ask you to restart by hand",
+				a.ink("       ", style.None), a.ink("cq upgrade", style.Flag))
+		}
 	}
 
 	state, err := store.Open(*stateDir)

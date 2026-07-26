@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,12 +55,7 @@ const supervisedEnv = "CQ_SUPERVISED"
 // child's exit code — so a server that fails to start does not leave a supervisor
 // spinning, and `cq serve` under systemd or a shell still behaves like one
 // process that either works or does not.
-func (a App) supervise(args []string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return fault.IO{Op: "find", Subject: "this executable", Err: err}
-	}
-
+func (a App) supervise(exe string, args []string) error {
 	// Signals are forwarded rather than acted on. A supervisor that died on ^C
 	// while its child kept the port would be worse than no supervisor at all.
 	signals := make(chan os.Signal, 4)
@@ -152,6 +149,62 @@ func exitCode(err error) int {
 		return exit.ExitCode()
 	}
 	return 1
+}
+
+// restartable returns the path this process can start a copy of itself from, or
+// says why it cannot.
+//
+// The check exists because `os/exec` resolves *every* command through the
+// platform's rules, even one handed an absolute path it was told is an
+// executable. On Windows those rules are PATHEXT, so a file whose name carries
+// no recognised extension cannot be started at all — not even by itself. And
+// `go build -o cq` writes exactly such a file: no extension is added when `-o`
+// names the output, on any platform.
+//
+// The result is a binary a shell runs happily and `os/exec` will not touch, and
+// the error it gives back is "executable file not found in %PATH%" naming a path
+// that is plainly right there. Asking here turns that into something an operator
+// can act on, and asks before the server starts rather than after the first
+// upgrade tries to restart it.
+func restartable() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fault.IO{Op: "find", Subject: "this executable", Err: err}
+	}
+	if _, err := exec.LookPath(exe); err != nil {
+		return "", fault.Usage{Reason: cannotStart(runtime.GOOS, exe)}
+	}
+	return exe, nil
+}
+
+// cannotStart explains a binary this process may not start, in the terms of
+// whichever platform is refusing it.
+//
+// The platform is a parameter rather than read from runtime, so that the message
+// somebody on Windows will actually read is pinned by a test that runs
+// everywhere. It is the message that carries the fix, and it is the one thing
+// here that cannot be checked by running the code on the machine that wrote it.
+func cannotStart(goos, exe string) string {
+	const shared = "cq cannot start a copy of itself from %s"
+	if name := leaf(exe); goos == "windows" && !strings.Contains(name, ".") {
+		return fmt.Sprintf(shared+
+			": windows starts a program only through a name it recognises, and this one has no "+
+			"extension — rename it to %s.exe and start it again", exe, name)
+	}
+	return fmt.Sprintf(shared+": it is not something this system will run — check that it is executable", exe)
+}
+
+// leaf is the last element of a path, spelled for either platform.
+//
+// `path/filepath` asks the *host* how paths are written, and this decides a
+// message about Windows while possibly running somewhere else: a Windows path
+// read on unix is one long element, and `.local` in the middle of it would look
+// like the extension the binary is missing.
+func leaf(path string) string {
+	if i := strings.LastIndexAny(path, `\/`); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 // supervised reports whether this process is the child of a supervisor.
