@@ -13,6 +13,7 @@ import (
 	"orc/common/watch"
 	"orc/orc/internal/instruct"
 	"orc/orc/internal/model"
+	"orc/orc/internal/session"
 	"orc/orc/internal/view"
 )
 
@@ -93,6 +94,14 @@ func (a App) wake(args []string) error {
 	// beats everything stored. Left empty, each agent is told whatever its own
 	// standing wake message says — see `orc instruct wake`.
 	text := strings.TrimSpace(message)
+	// An explicit --message is typed into somebody's terminal, so it is held to what
+	// a stored wake message is held to. The stored ones go through instruct.Check on
+	// the way in; this one has never been near that door.
+	if text != "" {
+		if err := session.Typeable(text); err != nil {
+			return err
+		}
+	}
 
 	var names []user.Name
 	for _, raw := range rest {
@@ -231,6 +240,16 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 	if !ok {
 		return working, nil
 	}
+	// A negative silence means the clock moved: an event stamped in the future, or a
+	// machine whose time was corrected between the event and now. Waking on it would
+	// be waking on arithmetic nobody can check, and skipping it silently would let a
+	// genuinely stuck agent hide behind a bad timestamp — so it is said out loud and
+	// left for the next pass, by which time the clock has usually settled.
+	if quiet < 0 {
+		w.app.note("%s: its last event is stamped %s in the future, so how long it has been "+
+			"quiet cannot be said; check the clock", who, round(-quiet))
+		return working, nil
+	}
 	if quiet < w.quiet {
 		return working, nil
 	}
@@ -243,7 +262,17 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 	// empty mark against a missing entry made those two the same thing — so the
 	// one agent that most needs waking, the one that has done nothing at all,
 	// was reported stuck on its first pass and never poked.
-	if mark, ok := w.woken[who.String()]; ok && mark == last {
+	// The mark is read from the store as well as from this pass's memory. `orc wake
+	// --every` keeps its own; `orc wake` from a cron entry — which is how most
+	// machines will run it — starts empty every time, so without the stored one a
+	// wedged agent was poked afresh on every invocation and never once reported as
+	// stuck. The two ways of running the same command behaved differently in the
+	// exact case the command exists for.
+	mark, marked := w.woken[who.String()]
+	if !marked {
+		mark, marked = s.store.Woken(who, state.ID)
+	}
+	if marked && mark == last {
 		if err := w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Warn("still silent"),
 			w.app.out.Identity(who.String()),
 			w.app.out.Muted(fmt.Sprintf("%s since the last wake — `orc attach %s` or `orc doctor`",
@@ -280,6 +309,11 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 		return working, err
 	}
 	w.woken[who.String()] = last
+	if err := s.store.RecordWake(who, state.ID, last); err != nil {
+		// The poke has already happened. The worst an unrecorded wake costs is one
+		// extra nudge next pass, which is much cheaper than failing the cycle.
+		w.app.note("%s was woken, but the wake could not be recorded, so it may be woken again: %v", who, err)
+	}
 
 	return wokeIt, w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Good("woke"),
 		w.app.out.Identity(who.String()),

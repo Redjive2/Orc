@@ -153,6 +153,14 @@ func Depopulate(s *store.Store, name user.Name) error {
 	if err != nil {
 		return err
 	}
+	// Whatever the last session was stuck on is not the next one's problem. The mark
+	// is keyed by session so a new one would ignore it anyway; removing it keeps a
+	// file from outliving what it describes, which is how somebody eventually reads
+	// one as current.
+	if err := s.ForgetWake(name); err != nil {
+		return err
+	}
+
 	if !live {
 		// Tidy up after a supervisor that was killed, so nothing is left claiming a
 		// session that has gone.

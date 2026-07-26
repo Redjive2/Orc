@@ -306,3 +306,39 @@ func TestSnapshotRoundTrip(t *testing.T) {
 		t.Errorf("a missing snapshot reported found=%v err=%v", found, err)
 	}
 }
+
+// TestASessionDoesNotOpenOnAWarningNobodyCanAnswer.
+//
+// `bypassPermissions` makes Claude open on a full-page acceptance screen with a menu.
+// An unattended fleet has no keyboard, so every new agent waited there until somebody
+// attached — which is most of why hiring one meant babysitting it. The operator has
+// already answered that question for themselves; this file *is* the user settings for
+// an agent's config dir, so without the key it replaced their answer rather than
+// carrying it forward.
+func TestCompiledSettingsSkipTheBypassAcceptance(t *testing.T) {
+	s, name := settingsFleet(t)
+
+	if err := provision.WriteSettings(s, name, provision.SettingsSpec{
+		OrcHome: s.Root(), Workspace: s.WorkspaceDir(name),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+	raw, err := os.ReadFile(filepath.Join(s.ClaudeDir(name), "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if skip, _ := got["skipDangerousModePermissionPrompt"].(bool); !skip {
+		t.Errorf("the acceptance screen is not skipped, so a new session waits for a keyboard:\n%s", raw)
+	}
+	// And it is tied to the mode that causes the screen: a fleet that has chosen a
+	// different posture is not silently opted out of a warning it never sees.
+	perms, _ := got["permissions"].(map[string]any)
+	if mode, _ := perms["defaultMode"].(string); mode != "bypassPermissions" {
+		t.Errorf("defaultMode is %q, and the skip belongs with bypassPermissions", mode)
+	}
+}

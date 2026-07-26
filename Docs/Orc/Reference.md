@@ -154,12 +154,14 @@ and `hasTrustDialogAccepted` for the workspace that session will start in. It
 **merges** rather than overwrites, since Claude keeps the agent's own history in
 that file.
 
-The third screen is the `bypassPermissions` acceptance warning, which cannot be
-seeded and has to be answered from a keyboard. `ORC_PERMISSION_MODE` chooses the
-mode instead: `dontAsk` starts at the prompt with no warning. It is not the
-default, because how `dontAsk` treats a tool call no allow rule covers is
-unverified, and the difference between "proceeds" and "silently refused" is the
-difference between a working fleet and a stuck one.
+The third screen is the `bypassPermissions` acceptance warning. The compiled
+settings carry `skipDangerousModePermissionPrompt`, which is the answer the
+operator already gave in their own settings — Orc's file replaces those for an
+agent, so without it their answer was lost rather than inherited.
+
+`ORC_PERMISSION_MODE` still chooses the mode, but **do not set `dontAsk`**: it
+auto-denies any tool no allow rule covers, and Orc's allow list names no `Bash`,
+so agents would be refused every command they ran.
 
 ### The toolkit
 

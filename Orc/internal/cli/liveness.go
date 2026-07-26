@@ -542,6 +542,12 @@ func (a App) poke(args []string) error {
 	if message == "" {
 		message = "continue"
 	}
+	// Checked here as well as at the pty. The supervisor refuses it either way, but
+	// a refusal that arrives after the dial is one the operator reads as "the
+	// session is broken" rather than as "that message cannot be typed".
+	if err := session.Typeable(message); err != nil {
+		return err
+	}
 
 	client, err := a.dial(s, who)
 	if err != nil {

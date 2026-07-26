@@ -29,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"orc/common/clock"
 	"orc/common/fault"
@@ -463,12 +465,70 @@ func (s *Supervisor) Poke(text string) error {
 		return fault.Unavailable{Peer: s.spec.Identity.String(), Err: errors.New("the session is restarting")}
 	}
 
+	if err := Typeable(text); err != nil {
+		return err
+	}
+
 	payload := text
-	if strings.Contains(text, "\n") {
-		payload = "\x1b[200~" + text + "\x1b[201~"
+	// Bracketed on any line ending, not only "\n". A lone carriage return is Enter
+	// to a terminal, so text carrying one submits early and the rest arrives as a
+	// separate turn — the same failure bracketing exists to prevent.
+	if strings.ContainsAny(text, "\n\r") {
+		payload = pasteStart + text + pasteEnd
 	}
 	if _, err := p.Master.WriteString(payload + "\r"); err != nil {
 		return fault.IO{Op: "write to", Path: p.Name, Err: err}
+	}
+	return nil
+}
+
+// The terminal's paste markers. Named because the closing one is the sequence that
+// must never appear *inside* a payload — see Typeable.
+const (
+	pasteStart = "\x1b[200~"
+	pasteEnd   = "\x1b[201~"
+)
+
+// Typeable refuses text that must not be written into a session's terminal.
+//
+// This is the last gate in front of a pty, and it is here rather than only at the
+// command line because the socket is a separate way in: `orc poke` validates before
+// it dials, and something that dialled without validating would otherwise be typing
+// straight into somebody's agent.
+//
+// What it refuses, and why each one is not paranoia:
+//
+//   - **Control characters.** Written raw into a terminal they do what they say: an
+//     escape sequence repaints the screen, a NUL truncates, and a lone ^C or ^D at
+//     the wrong moment ends the agent's turn or its session.
+//   - **The bracketed-paste terminator.** Text carrying `ESC[201~` closes the paste
+//     early, and everything after it is read as *keystrokes* rather than as content
+//     — which is how a wake message becomes a command the agent never chose to run.
+//     Bracketing is what makes a multi-line poke one message; a payload that can
+//     end the bracket makes it several.
+//
+// Newlines and tabs are how prose is written, and are what bracketing is for.
+//
+// The same rules `instruct.Check` applies to a stored wake message. The two exist
+// separately because they guard different doors — a store and a socket — and a
+// guard that only stood at one of them would be a guard somebody walks around.
+func Typeable(text string) error {
+	if !utf8.ValidString(text) {
+		return fault.Parse{Path: "poke", Reason: "the message is not valid UTF-8"}
+	}
+	if strings.Contains(text, pasteEnd) || strings.Contains(text, pasteStart) {
+		return fault.Parse{Path: "poke", Reason: "the message contains a bracketed-paste marker; " +
+			"it would end the paste early and the rest would be typed as keystrokes"}
+	}
+	for i, r := range text {
+		if r == '\n' || r == '\t' || r == '\r' {
+			continue
+		}
+		if unicode.IsControl(r) {
+			return fault.Parse{Path: "poke", Reason: fmt.Sprintf(
+				"there is a control character (%q) at byte %d; typed into a terminal it does "+
+					"something nobody asked for", r, i)}
+		}
 	}
 	return nil
 }

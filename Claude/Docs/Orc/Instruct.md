@@ -589,3 +589,78 @@ a real transcript for a stored system prompt — there is none.
 
 The test that pinned the old behaviour now pins the new one, and says why it
 changed.
+
+
+## §18 Hardening the liveness system
+
+A pass over everything that keeps an agent alive and instructed: waking, the
+worklist, poking, and prompt injection. Four defects, each verified against a real
+Claude rather than against a reading of the code.
+
+### An agent could be typed into
+
+`orc poke <identity> <message>` wrote its text straight into the session's pty with
+no validation, and so did `orc wake --message`. The stored wake messages went
+through `instruct.Check`, which refuses control characters for exactly this reason —
+so one door was guarded and its sibling was not.
+
+What that allowed: a message containing `ESC[201~`, the bracketed-paste terminator,
+closes the paste early, and **everything after it is read as keystrokes rather than
+as content**. A wake message is written by whoever holds the `instruct` permission,
+which is not necessarily the person whose agent receives it.
+
+`session.Typeable` is now the one gate in front of a pty: it refuses control
+characters, invalid UTF-8, and either paste marker, and it is applied at the command
+line *and* at the socket — because those are two different doors and a guard at one
+of them is a guard somebody walks around. Bracketing now triggers on a lone carriage
+return too, which is Enter to a terminal.
+
+### A wedged agent was nudged for ever
+
+The wake cycle records what an agent last said when it was poked, so that one which
+has said nothing since is *reported* rather than poked again. That memory lived only
+in the running process. `orc wake --every` was therefore correct, and `orc wake` from
+a cron entry — which is how most machines will run it — started empty every pass and
+re-poked the same wedged agent indefinitely, never once reporting it as stuck.
+
+The mark is now in the store, keyed by session id so a refresh clears it. An
+unreadable mark reads as no mark: a backstop that refused to run because it could not
+read its own notes would stop working exactly when something else had gone wrong.
+
+### A clock that moved backwards hid a silence
+
+`quiet` is `now - last event`. An event stamped in the future — a corrected clock, a
+transcript from elsewhere — made it negative, which compared as "not quiet long
+enough" and skipped the agent silently. It is now said out loud and left for the next
+pass.
+
+### The last two gates in front of an unattended agent
+
+`bypassPermissions` opens Claude on a full-page acceptance warning with a menu. An
+unattended fleet has no keyboard, so every new agent sat there until somebody
+attached — which is what made hiring an agent mean babysitting one.
+
+The answer is `skipDangerousModePermissionPrompt`, written into the compiled
+settings. An operator who has run Claude themselves has already accepted that
+warning, and the acceptance lives in *their* user settings — but Orc's compiled file
+**is** the user settings for an agent's `CLAUDE_CONFIG_DIR`, so it replaced their
+answer rather than inheriting it. Verified by A/B against a real Claude in an
+isolated configuration directory: with the key, the session opens at its prompt;
+without it, at the warning.
+
+**`ORC_PERMISSION_MODE=dontAsk` is no longer the way to do this, and is now
+documented as dangerous.** Claude's own words: `dontAsk` "auto-denies tools unless
+pre-approved via /permissions or permissions.allow rules". Orc's allow list is
+compiled from read and write clauses and names no `Bash`, so an agent under
+`dontAsk` would be refused every command it ran — silently, one tool call at a time,
+looking exactly like an agent that had decided not to work.
+
+### What was checked and found sound
+
+- **`$CLAUDE_CONFIG_DIR/CLAUDE.md` is loaded.** Confirmed with Claude's own
+  `InstructionsLoaded` hook, which reported it as `memory_type: User` at
+  `session_start`. The per-identity file an agent is given does reach it.
+- **The composed prompt cannot inject an argument.** It is one element of an argv
+  slice, so a layer beginning `--dangerously-skip-permissions` is text, not a flag.
+- **The prompt is delivered on every start** — employ, refresh, and every supervisor
+  restart — confirmed by a stand-in `claude` that records its argv.

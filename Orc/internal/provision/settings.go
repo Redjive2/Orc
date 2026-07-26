@@ -109,6 +109,28 @@ func WriteSettings(s *store.Store, name user.Name, spec SettingsSpec) error {
 	perms["defaultMode"] = Mode()
 
 	existing["permissions"] = perms
+
+	// The acceptance screen, skipped.
+	//
+	// `bypassPermissions` makes Claude open on a full-page warning — "By proceeding,
+	// you accept all responsibility" — with a menu that has to be answered from a
+	// keyboard. An unattended fleet has no keyboard: every new agent sat at that
+	// screen until somebody attached to its pty and pressed enter, which is most of
+	// why hiring an agent used to mean babysitting one.
+	//
+	// An operator who has ever run Claude themselves has already accepted it, and
+	// the acceptance lives in *their* user settings — but this file **is** the user
+	// settings for an agent's CLAUDE_CONFIG_DIR, so it replaced the answer rather
+	// than inheriting it. Writing it here is Orc carrying forward the answer the
+	// operator already gave, for sessions the operator started, in a mode the
+	// operator chose.
+	//
+	// Verified by A/B against a real Claude in an isolated configuration directory:
+	// with the key the session opens at the prompt, without it at the warning.
+	if Mode() == "bypassPermissions" {
+		existing["skipDangerousModePermissionPrompt"] = true
+	}
+
 	existing["hooks"] = hookRules()
 
 	data, err := json.MarshalIndent(existing, "", "  ")
@@ -210,16 +232,17 @@ const DefaultMode = "bypassPermissions"
 // be answered from a keyboard. On an unattended fleet that means every new agent
 // waits at a wall nobody is looking at, and hiring somebody means attaching to it.
 //
-// `dontAsk` starts at the prompt with no such screen; that much is verified, by
-// running Claude against a scratch configuration and watching what came up. What is
-// **not** verified is how it treats a tool call that no allow rule covers — whether
-// it proceeds like bypass or refuses — and that is the difference between a fleet
-// that works and a fleet whose agents are silently refused. Testing it needs a live
-// credential and a model turn.
+// It is no longer needed for that: the acceptance screen is skipped by
+// `skipDangerousModePermissionPrompt` above, so the default mode starts unattended.
+// The variable stays as the escape hatch for a fleet that wants a different posture.
 //
-// So the default does not move, and the choice is the operator's, made once:
-//
-//	export ORC_PERMISSION_MODE=dontAsk
+// **`dontAsk` is not that escape hatch for most fleets.** Claude's own words: it
+// "auto-denies tools unless pre-approved via /permissions or permissions.allow
+// rules". Orc's allow list is compiled from an identity's read and write clauses
+// and names no `Bash`, so under `dontAsk` an agent would be refused every command
+// it tried to run — silently, one tool call at a time, looking like an agent that
+// had decided not to work. Do not set it without first widening the allow list to
+// cover every tool an agent needs.
 //
 // The modes Claude accepts are acceptEdits, auto, bypassPermissions, manual,
 // dontAsk, and plan. An unrecognised one is refused here rather than at session
