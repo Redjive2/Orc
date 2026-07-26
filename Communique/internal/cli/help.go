@@ -55,6 +55,9 @@ var commands = []commandDoc{
 			{"--tls-key", "<file>", "Key that goes with it", ""},
 			{"--no-admin", "", "Do not serve the admin panel at all", ""},
 			{"--admin-metadata-only", "", "Record that bodies should be withheld", ""},
+			{"--supervise", "", "Run a supervisor so the server can restart itself", "on"},
+			{"--source", "<dir>", "Checkout `upgrade` pulls and builds", "$CQ_SOURCE"},
+			{"--bin", "<dir>", "Where `upgrade` installs binaries", "$CQ_BIN"},
 		},
 		examples: []string{
 			"cq serve",
@@ -163,6 +166,35 @@ var commands = []commandDoc{
 		},
 	},
 	{
+		name: "upgrade", side: "agent",
+		summary: "Rebuild and restart every tool, everywhere",
+		detail: "Pulls the tree, rebuilds every Orc tool, and restarts — on the\n" +
+			"machine serving the site *and* on every agent machine.\n\n" +
+			"Two halves, because the two are reachable in opposite directions.\n" +
+			"The server upgrades itself: a local pull, a local build, and a\n" +
+			"restart through its supervisor. Each agent machine gets a queued\n" +
+			"action instead, and does the work on its next sync — the server\n" +
+			"cannot reach them, which is the whole architecture.\n\n" +
+			"Nothing queued is lost by the restart. The queue is on disk before\n" +
+			"the server goes down, so an agent that synced during the gap retries\n" +
+			"and one that had not finds its action waiting.\n\n" +
+			"It needs Orc's `upgrade` permission, which is builtin at floor 90 —\n" +
+			"executive agents only. `orc check-permission upgrade` says whether\n" +
+			"you hold it.",
+		flags: []flagDoc{
+			{"--yes", "", "Required; this restarts the site and every agent", ""},
+			{"--server", "<url>", "The cq server to ask", "$CQ_SERVER"},
+			{"--token", "<token>", "The sync token", "$CQ_TOKEN"},
+			{"--machines", "<a,b>", "Only these agent machines", "all of them"},
+			{"--no-server", "", "Upgrade the agents but leave the site up", ""},
+		},
+		examples: []string{
+			"cq upgrade --yes",
+			"cq upgrade --yes --no-server",
+			"cq upgrade --yes --machines studio",
+		},
+	},
+	{
 		name: "help", args: "[command]", side: "",
 		summary:  "This, or the detail for one command",
 		examples: []string{"cq help", "cq help sync"},
@@ -184,6 +216,8 @@ var settings = []struct {
 	{"CQ_LIBRARY", "A repository to mirror for reading, if any", "agent"},
 	{"CQ_KEY", "That mailbox's orc key, so any agent's action can nudge", "agent"},
 	{"ORC", "The orc executable, if it is not on the path as `orc`", "agent"},
+	{"CQ_SOURCE", "The checkout `upgrade` pulls and builds", ""},
+	{"CQ_BIN", "Where `upgrade` installs binaries; else beside the running one", ""},
 	{"ORC_THEME", "Colour scheme, shared with every Orc tool", ""},
 }
 

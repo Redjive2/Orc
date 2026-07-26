@@ -47,6 +47,15 @@ func (a App) bootstrap(args []string) error {
 		return err
 	}
 
+	// Before the early return below, deliberately. `bootstrap` is documented as
+	// safe to run twice, and this is what makes that useful rather than merely
+	// harmless: a fleet created before a builtin permission existed gets it by
+	// running the same command again. Existing permissions are never rewritten —
+	// see EnsureBuiltin — so this cannot disturb a fleet that already has them.
+	if err := s.EnsureBuiltin(); err != nil {
+		return err
+	}
+
 	if existing, err := s.Operator(); err == nil {
 		if existing.String() != name.String() {
 			// Said plainly rather than refused: the caller asked for something

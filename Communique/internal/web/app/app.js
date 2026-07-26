@@ -23,6 +23,7 @@ const statusBar = document.getElementById("status");
 // been fetched yet" are different states, which they are.
 let state = {
   session: null, adminEnabled: false, machines: [], fleet: [], fleetError: "",
+  upgrading: null,
   inbox: [], archive: [], sent: [], queue: [], tasks: [],
   // The library's structure, the file texts read so far, and which folds are
   // open. Openness is state rather than DOM, so a redraw on sync does not
@@ -362,6 +363,33 @@ const actions = {
     await run(() => api.removePermission(f.machine, permission, role.name));
   },
   async tend(f) { await run(() => api.tend(f.machine)); },
+
+  // Rebuild and restart the whole fleet.
+  //
+  // The confirmation says what will happen rather than asking whether you are
+  // sure, and it says the part people forget: this takes the site down for as
+  // long as a build takes, and the page you are reading it on goes with it.
+  async upgradeEverything(state) {
+    const machines = (state.machines || []).map((m) => m.machine);
+    if (!await dialog.confirm({
+      title: "rebuild and restart everything?",
+      body: `this pulls the tree and rebuilds every orc tool on this server and on `
+        + `${machines.length} agent machine${machines.length === 1 ? "" : "s"}`
+        + `${machines.length ? ` (${machines.join(", ")})` : ""}. `
+        + `the site restarts, so this page will be unreachable for a minute; the agents `
+        + `rebuild on their next sync. nothing queued is lost.`,
+      submit: "rebuild everything",
+    })) return;
+    // Not through `run`: it refetches, and what it would be refetching from is a
+    // server that is about to go away. The reply is the last thing this page
+    // hears, so it is what gets shown.
+    try {
+      const got = await api.upgrade({});
+      set({ upgrading: got, error: null });
+    } catch (err) {
+      set({ error: err });
+    }
+  },
 
   // --- tasks -------------------------------------------------------------
   //

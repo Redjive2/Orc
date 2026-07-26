@@ -638,6 +638,40 @@ function taskPending(state, t) {
       e.error ? h("span", { class: "muted" }, ` ${e.error}`) : null)))];
 }
 
+// upgrading is the button that rebuilds the whole fleet, and what the server said
+// when it was last pressed.
+//
+// Its own block at the foot of the panel rather than a control beside the fleet:
+// it is the only thing in cq that takes the site down, and a button that does that
+// should not sit next to `tend`.
+function upgrading(state, actions) {
+  if (!actions) return [];
+  const got = state.upgrading;
+  return [h("article", { class: "card" },
+    h("h2", {}, "the build"),
+    h("div", { class: "meta" },
+      "pull the tree, rebuild every orc tool, and restart — here and on every agent machine"),
+    h("div", { class: "body" },
+      h("div", { class: "controls" },
+        h("button", { class: "danger", onclick: () => actions.upgradeEverything(state) },
+          "rebuild everything"),
+        h("span", { class: "muted" }, "the site restarts; agents rebuild on their next sync")),
+      // What the server said, kept on screen. It is the last thing this page hears
+      // before the server goes away, so throwing it out on the next redraw would
+      // leave somebody watching a page that had stopped explaining itself.
+      got
+        ? h("div", { class: "pending" },
+            h("div", {}, got.server),
+            got.queued && got.queued.length
+              ? h("div", {}, `queued for ${got.queued.join(", ")}`)
+              : h("div", { class: "muted" }, "no agent machine was queued"),
+            got.restarting
+              ? h("div", { class: "muted" }, "this page will fail to reach the server until it is back")
+              : null)
+        : null)),
+  ];
+}
+
 // --- tree ----------------------------------------------------------------
 
 // The repository as shape and size: where the weight sits, what it is made of,
@@ -679,7 +713,7 @@ export function admin(state, actions) {
   // a machine that has never run `mailman admin owner`. The queue used to come
   // first and is a health check: worth having, not worth twenty rows of resolved
   // history between somebody and the thing they came to change.
-  const out = [...fleet(state, actions), queueHealth(state)];
+  const out = [...fleet(state, actions), ...upgrading(state, actions), queueHealth(state)];
 
   if (blocks.length === 0) {
     out.push(h("p", { class: "muted" }, "nothing has synced an admin view yet"));

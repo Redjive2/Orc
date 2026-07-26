@@ -545,6 +545,40 @@ func (a App) checkControl(args []string) error {
 	return nil
 }
 
+// checkPermission is `orc check-permission <name>`: exit 0 if the caller holds it,
+// 8 if not.
+//
+// The sibling of `check-control`, and it exists for the same reason: another tool
+// needs to ask Orc a yes-or-no question about authority and must not answer it
+// itself. `muff assign` asks about ancestry; `cq upgrade` asks about a permission.
+// Both get a number rather than a screen, so a shell can branch on it.
+//
+// A permission the fleet does not have is `2`, not `8` — the same rule the rest of
+// Orc follows. "You may not hold what does not exist" would be a refusal about
+// policy, and this is a fact about the store.
+func (a App) checkPermission(args []string) error {
+	if err := exactly(args, 1, "check-permission takes one permission"); err != nil {
+		return err
+	}
+	s, err := a.begin()
+	if err != nil {
+		return err
+	}
+
+	want, err := model.ParseName(args[0])
+	if err != nil {
+		return err
+	}
+	if _, ok := s.fleet.Permission(want); !ok {
+		return fault.NotFound{Target: "permission " + want.String()}
+	}
+	if !s.fleet.Holds(s.who, want) {
+		return fault.Denied{Actor: s.who.String(), Action: "use", Target: want.String(),
+			Reason: "it is not in this identity's effective permissions"}
+	}
+	return nil
+}
+
 // env prints the export block for a manual shell.
 //
 // It is the only command besides `orc bootstrap` that discloses a key, and it says

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"orc/cq/internal/fault"
-	"orc/cq/internal/source"
 )
 
 // Whose mailbox this machine mirrors.
@@ -127,10 +126,4 @@ func oneLine(err error) string {
 		text = strings.TrimSpace(text[:i]) + " …"
 	}
 	return text
-}
-
-// orc is the adapter for asking Orc about the fleet. `$ORC` names the executable
-// for the unusual machine where it is not on the path under its own name.
-func (a App) orc() *source.Orc {
-	return &source.Orc{Command: a.look("ORC", "orc")}
 }

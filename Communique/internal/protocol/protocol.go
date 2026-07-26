@@ -200,6 +200,11 @@ func (o Op) Idempotent() bool {
 		// fired and revoking what is already revoked both land where they were
 		// asked to land.
 		return true
+	case OpUpgrade:
+		// Pulling and rebuilding twice lands on the same revision with the same
+		// binaries. It is the one operation here whose repeat is not merely
+		// harmless but routine — a machine that missed a round gets the next one.
+		return true
 	case OpOrcNewIdentity, OpOrcNewRole, OpOrcNewPermission,
 		OpOrcRemoveIdentity, OpOrcRemoveRole, OpOrcRemovePerm,
 		OpOrcGrant, OpOrcEmploy, OpOrcPoke, OpOrcRefresh:
@@ -224,7 +229,7 @@ func (o Op) Idempotent() bool {
 
 // Ops lists every defined operation.
 var Ops = slices.Concat([]Op{OpSend, OpReply, OpRead, OpArchive, OpCC,
-	OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir}, TaskOps, FleetOps)
+	OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir, OpUpgrade}, TaskOps, FleetOps)
 
 // Valid reports whether o is one of the defined operations.
 func (o Op) Valid() bool { return slices.Contains(Ops, o) }
@@ -715,6 +720,12 @@ var argRules = map[Op]argRule{
 	// a different thing rather than a missing operand.
 	OpTaskComplete: {task: true, optSub: true, optForce: true},
 	OpTaskDelete:   {task: true, optSub: true},
+
+	// The upgrade takes nothing. What to pull and where to build it are the
+	// machine's own settings, not something a browser on another machine gets to
+	// name — a path arriving over the wire and handed to a build script is the
+	// shape of every remote-execution hole there has ever been.
+	OpUpgrade: {},
 }
 
 // The fleet verbs live in fleet.go and are folded in here, so there is still one

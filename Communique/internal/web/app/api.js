@@ -142,6 +142,10 @@ export const api = {
       { machine, role: role || undefined }),
   tend: (machine) => request("POST", "/api/v1/fleet/tend", { machine }),
 
+  // Rebuild and restart everything. One request: the server upgrades itself, and
+  // every agent machine gets a queued action it applies on its next sync.
+  upgrade: (body) => request("POST", "/api/v1/upgrade", body || {}),
+
   deleteTask: (machine, name, sub) =>
     request("DELETE", `/api/v1/tasks/${encodeURIComponent(name)}`,
       { machine, sub: sub || undefined }),

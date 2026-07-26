@@ -16,6 +16,7 @@ import (
 
 	"orc/cq/internal/fault"
 	"orc/cq/internal/protocol"
+	"orc/cq/internal/upgrade"
 )
 
 // Timeout bounds one invocation of another tool. A sync that hangs because
@@ -42,6 +43,10 @@ type CLI struct {
 	// Orc is the orc command, "orc" by default. It reads the fleet and applies the
 	// fleet verbs, as the mirrored account.
 	Orc string
+	// Upgrade says where this machine's checkout and binaries are. Its zero value
+	// has no source, which makes every upgrade a refusal that says so — the right
+	// answer for a machine that installs binaries rather than building them.
+	Upgrade upgrade.Options
 	// User is the account whose mailbox is mirrored. Required.
 	User string
 	// LibraryRoot is the checkout the library verbs may write, and the only part
@@ -457,6 +462,9 @@ func (c *CLI) Apply(ctx context.Context, action protocol.Action) error {
 	if action.Op.TouchesFleet() {
 		return c.orc().Apply(ctx, action)
 	}
+	if action.Op == protocol.OpUpgrade {
+		return c.upgrade(ctx)
+	}
 
 	var args []string
 	switch action.Op {
@@ -565,6 +573,38 @@ func (c *CLI) anno() string {
 		return "anno"
 	}
 	return c.Anno
+}
+
+// upgrade pulls the tree and rebuilds every tool on this machine.
+//
+// The action carries nothing: what to pull and where to install are this machine's
+// own settings. A path arriving over the wire and being handed to a build script is
+// the shape of every remote-execution hole there has ever been, and the server is
+// on somebody else's computer.
+//
+// It does not restart anything. Replacing a binary on unix leaves the running
+// process on its old inode, so every tool here keeps working until it next execs —
+// an orc session supervisor carries on, and picks the new binary up when it spawns.
+// The one process that must come back new is whichever `cq` is watching, and that
+// is its own decision: see cli.sync, which re-execs after the round it was in.
+func (c *CLI) upgrade(ctx context.Context) error {
+	report, err := c.Upgrade.Upgrade(ctx)
+	if err != nil {
+		return err
+	}
+	// Reported rather than returned: an action's result is a yes or a no plus a
+	// message, and what an operator wants in the queue is which revision this
+	// machine is on now.
+	c.warn("upgraded %s: %s → %s, built %s", report.Source,
+		orNone(report.Before), orNone(report.After), strings.Join(report.Built, " "))
+	return nil
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "?"
+	}
+	return s
 }
 
 // orc is the adapter for the fleet, pinned to the mirrored account.

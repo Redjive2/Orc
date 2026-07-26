@@ -287,6 +287,11 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			if op.Idempotent() {
 				t.Errorf("%q must not be idempotent", op)
 			}
+		case protocol.OpUpgrade:
+			// Pulling and rebuilding twice lands on the same revision.
+			if !op.Idempotent() {
+				t.Errorf("%q should be idempotent", op)
+			}
 		default:
 			t.Errorf("%q is an operation nobody has decided about", op)
 		}

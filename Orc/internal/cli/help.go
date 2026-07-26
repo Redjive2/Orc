@@ -70,6 +70,7 @@ func usage(p style.Palette) string {
 	line("%s", p.Header("running them"))
 	verb("orc budget", "what each identity may employ, and what it spends")
 	verb("orc budget <role> <load>", "set the load a role may keep employed")
+	verb("orc model <identity> [<model>] [--effort e]", "what it thinks with; --now restarts it")
 	verb("orc employ <identity> [--model m] [--effort e]", "put it on the work list and start it")
 	verb("orc fire <identity> [--yes]", "take it off; --yes if a session is live")
 	verb("orc tend [--watch <dur>]", "reconcile the work list with what is running")
@@ -83,6 +84,7 @@ func usage(p style.Palette) string {
 	verb("orc list identities|roles|permissions|grants", "the rosters; --json for any of them")
 	verb("orc introspect [--only <field>] [--json]", "who am I, and what may I do")
 	verb("orc check-control <agent>", "exit 0 if you control it, 8 if not")
+	verb("orc check-permission <name>", "exit 0 if you hold it, 8 if not")
 	verb("orc env <identity>", "the export block — discloses a key")
 	verb("orc verify", "walk the store and report damage")
 	verb("orc doctor", "which guards are in force, and which are not")
@@ -197,7 +199,8 @@ func brief(p style.Palette) string {
 	group("the fleet", "bootstrap", "new", "remove")
 	group("who may what", "assign", "grant", "revoke", "move")
 	group("running them", "employ", "fire", "tend", "budget", "attach", "poke", "refresh")
-	group("reading it", "status", "list", "introspect", "check-control", "env", "verify", "doctor")
+	group("reading it", "status", "list", "introspect", "check-control", "check-permission",
+		"env", "verify", "doctor")
 	group("yours", "owner")
 	line("")
 	line("  %s", p.Muted("orc help for all of it: every form, the model, the patterns, the load table"))
@@ -211,7 +214,7 @@ func brief(p style.Palette) string {
 func verbs() []string {
 	return []string{
 		"bootstrap", "new", "assign", "remove", "grant", "revoke", "move",
-		"status", "list", "budget", "introspect", "check-control", "env", "verify",
+		"status", "list", "budget", "model", "introspect", "check-control", "check-permission", "env", "verify",
 		"doctor", "owner", "employ", "fire", "tend", "attach", "poke", "refresh", "help",
 	}
 }
@@ -257,6 +260,20 @@ var topics = map[string]topic{
 			"orc new role engineer 60 'writes code in one package'",
 			"orc new permission edit-anno 40 'write(Anno/**)'",
 		},
+	},
+	"check-permission": {
+		forms: []string{"orc check-permission <name>"},
+		does:  "exit 0 if you hold it, 8 if not",
+		detail: "The sibling of `check-control`, for the other kind of question. It\n" +
+			"exists so another tool can ask Orc about authority instead of\n" +
+			"deciding for itself: `muff assign` asks about ancestry, and\n" +
+			"`cq upgrade` asks about a permission.\n\n" +
+			"A number rather than a screen, so a shell can branch on it. A\n" +
+			"permission this fleet does not have is `2` rather than `8` — that is\n" +
+			"a fact about the store, not a refusal about policy.\n\n" +
+			"`upgrade` is builtin: every fleet has it, at floor 90, and holding it\n" +
+			"is what lets an agent rebuild and restart every tool on every machine.",
+		examples: []string{"orc check-permission upgrade"},
 	},
 	"remove": {
 		forms: []string{"orc remove identity|role|permission <name> [--from <role>]"},
@@ -315,6 +332,25 @@ var topics = map[string]topic{
 			"With no arguments it reports; with a role and a number it sets what that\n" +
 			"role may keep employed.",
 		examples: []string{"orc budget", "orc budget engineer 12"},
+	},
+	"model": {
+		forms: []string{"orc model <identity>", "orc model <identity> <model> [--effort <e>] [--now]"},
+		does:  "what it thinks with; --now restarts it",
+		detail: "With no model it reports what the identity is on and what that costs.\n" +
+			"With one it changes it, through the same budget arithmetic `employ` uses:\n" +
+			"load is model weight times effort weight, so moving an agent to opus is\n" +
+			"spending, and the boss has to be able to afford it.\n\n" +
+			"A model is fixed when Claude starts, so a running session keeps the one\n" +
+			"it was launched with. By default the change waits for the next session\n" +
+			"and the command says so; --now replaces the session immediately, which\n" +
+			"loses its context.\n\n" +
+			"Retuning an identity that is not employed costs nothing and does not\n" +
+			"employ it — it is what the next `orc employ` will start it on.",
+		examples: []string{
+			"orc model ember",
+			"orc model ember opus --effort high",
+			"orc model ember haiku --now",
+		},
 	},
 	"employ": {
 		forms: []string{"orc employ <identity> [--model <m>] [--effort <e>]"},

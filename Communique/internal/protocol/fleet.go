@@ -190,6 +190,18 @@ const (
 	OpOrcTend            Op = "orc.tend"              // orc tend
 )
 
+// OpUpgrade rebuilds and restarts every Orc tool on the machine it reaches.
+//
+// It is not a fleet verb — it goes through no other tool — but it lives here
+// because it is the other half of the same request. The server upgrades itself
+// directly, since that is local; the agent machines cannot be reached, so each
+// gets one of these and does the work on its next sync.
+//
+// That is also what makes it survive the restart in the middle. The action is on
+// disk before the server goes down, so an agent that synced during the gap simply
+// fails and retries, and an agent that had not synced yet finds it waiting.
+const OpUpgrade Op = "system.upgrade"
+
 // FleetOps are the verbs that go through Orc rather than Mailman or Macmuffin.
 var FleetOps = []Op{
 	OpOrcNewIdentity, OpOrcNewRole, OpOrcNewPermission,

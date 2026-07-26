@@ -225,6 +225,8 @@ func (a App) dispatch(args []string) error {
 		return a.introspect(rest)
 	case "check-control":
 		return a.checkControl(rest)
+	case "check-permission":
+		return a.checkPermission(rest)
 	case "env":
 		return a.env(rest)
 	case "verify":
@@ -232,6 +234,8 @@ func (a App) dispatch(args []string) error {
 	case "owner":
 		return a.owner(rest)
 
+	case "model":
+		return a.tune(rest)
 	case "employ":
 		return a.employ(rest)
 	case "fire":

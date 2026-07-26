@@ -183,7 +183,7 @@ func encodeIdentityEvent(e model.IdentityEvent) ([]byte, error) {
 		if !g.Until().IsZero() {
 			stored.Until = clock.Format(g.Until())
 		}
-	case model.OpEmploy:
+	case model.OpEmploy, model.OpModel:
 		stored.Model = e.Model().String()
 		stored.Effort = e.Effort().String()
 	case model.OpFire:
@@ -259,14 +259,17 @@ func decodeIdentityEvent(path string, stored storedEvent) (model.IdentityEvent, 
 		}
 		return wrapIdentity(model.GrantPermission(by, at, g))
 
-	case model.OpEmploy:
+	case model.OpEmploy, model.OpModel:
 		m, err := model.ParseModel(stored.Model)
 		if err != nil {
-			return bad("employ event names a model orc cannot budget: %s", err)
+			return bad("%s event names a model orc cannot budget: %s", stored.Op, err)
 		}
 		effort, err := model.ParseEffort(stored.Effort)
 		if err != nil {
-			return bad("employ event has a bad effort: %s", err)
+			return bad("%s event has a bad effort: %s", stored.Op, err)
+		}
+		if model.IdentityOp(stored.Op) == model.OpModel {
+			return wrapIdentity(model.Retune(by, at, m, effort))
 		}
 		return wrapIdentity(model.Employ(by, at, m, effort))
 

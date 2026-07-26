@@ -218,12 +218,18 @@ const (
 	OpRevoke IdentityOp = "revoke"
 	OpEmploy IdentityOp = "employ"
 	OpFire   IdentityOp = "fire"
+	// OpModel changes what an identity thinks with, without employing or firing
+	// it. It is separate from OpEmploy because retuning an identity that is not
+	// on the worklist must not put it there — "run this on opus next time" and
+	// "start this now" are different intents, and one op for both would make the
+	// first quietly do the second.
+	OpModel IdentityOp = "model"
 )
 
 // Valid reports whether the op is one this build knows.
 func (o IdentityOp) Valid() bool {
 	switch o {
-	case OpRole, OpMove, OpGrant, OpRevoke, OpEmploy, OpFire:
+	case OpRole, OpMove, OpGrant, OpRevoke, OpEmploy, OpFire, OpModel:
 		return true
 	default:
 		return false
@@ -232,7 +238,7 @@ func (o IdentityOp) Valid() bool {
 
 // IdentityOps lists the vocabulary, for tests that must be total.
 func IdentityOps() []IdentityOp {
-	return []IdentityOp{OpRole, OpMove, OpGrant, OpRevoke, OpEmploy, OpFire}
+	return []IdentityOp{OpRole, OpMove, OpGrant, OpRevoke, OpEmploy, OpFire, OpModel}
 }
 
 // IdentityEvent is one line of an identity's journal.
@@ -296,6 +302,23 @@ func Employ(by user.Name, at time.Time, m Model, e Effort) (IdentityEvent, error
 			"employ needs an effort level: low, medium, high, xhigh, or max (got %s)", e)}
 	}
 	return newIdentityEvent(IdentityEvent{op: OpEmploy, by: by, at: at, model: m, effort: e})
+}
+
+// Retune is `orc model <identity> <model>`: change what it thinks with.
+//
+// Both halves are always carried, even when only one was asked for, because load is
+// the product of the two and an event that recorded half of it would leave the
+// journal unable to say what a session cost.
+func Retune(by user.Name, at time.Time, m Model, e Effort) (IdentityEvent, error) {
+	if !m.Valid() {
+		return IdentityEvent{}, fault.Usage{Reason: fmt.Sprintf(
+			"a model orc can budget: haiku, sonnet, or opus (got %s)", m)}
+	}
+	if !e.Valid() {
+		return IdentityEvent{}, fault.Usage{Reason: fmt.Sprintf(
+			"an effort level: low, medium, high, xhigh, or max (got %s)", e)}
+	}
+	return newIdentityEvent(IdentityEvent{op: OpModel, by: by, at: at, model: m, effort: e})
 }
 
 // Fire is `orc fire <identity>`: take it off the worklist.
@@ -381,6 +404,12 @@ func (i Identity) With(e IdentityEvent) (Identity, error) {
 
 	case OpEmploy:
 		i.employed = true
+		i.model, i.effort = e.model, e.effort
+
+	case OpModel:
+		// Employment is untouched: this says what the identity thinks with, not
+		// whether it is thinking. An employed identity's load changes with it,
+		// which is why the caller has to have afforded it first.
 		i.model, i.effort = e.model, e.effort
 
 	case OpFire:

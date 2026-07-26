@@ -323,6 +323,12 @@ pre.code {
 
 .folded > .inner { border-left: 1px solid var(--frame); margin-left: 1ch; }
 
+/* Prose inside a fold is set off from the rule that marks its depth. Without
+   this the first letter of every line touches the border, and a document reads
+   as if it were pinned to the edge of the tree rather than sitting inside it.
+   A card's body has the same gap for the same reason; this is the library's. */
+.inner > .body { padding-left: 1.5ch; }
+
 /* --- the editor --------------------------------------------------------- */
 
 /* It sits over the page rather than in it, because it is outside the container

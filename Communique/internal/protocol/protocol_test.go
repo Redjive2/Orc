@@ -302,6 +302,7 @@ func TestActionArgumentRules(t *testing.T) {
 		protocol.OpOrcPoke:            {Identity: "atlas"},
 		protocol.OpOrcRefresh:         {Identity: "atlas"},
 		protocol.OpOrcTend:            {},
+		protocol.OpUpgrade:            {},
 	}
 
 	// The optional operands, which the loop above cannot cover because it takes

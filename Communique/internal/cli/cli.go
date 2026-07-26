@@ -29,6 +29,7 @@ import (
 	"orc/cq/internal/source"
 	"orc/cq/internal/store"
 	"orc/cq/internal/style"
+	"orc/cq/internal/upgrade"
 	"orc/theme"
 )
 
@@ -66,6 +67,12 @@ func Main(app App, args []string) (code int) {
 	err := app.dispatch(args)
 	if err == nil {
 		return fault.ExitOK
+	}
+	// A supervised child's exit status is the server's outcome, not a failure of
+	// the supervisor, so it is passed through rather than re-classified.
+	var status exitStatus
+	if errors.As(err, &status) {
+		return status.Status()
 	}
 	code = fault.Exit(err)
 	app.complain(err)
@@ -109,6 +116,8 @@ func (a App) dispatch(args []string) error {
 		return a.queue(args[1:])
 	case "admin":
 		return a.admin(args[1:])
+	case "upgrade":
+		return a.upgrade(args[1:])
 	case "help", "-h", "--help":
 		return a.help(args[1:])
 	default:
@@ -187,10 +196,24 @@ func (a App) serve(args []string) error {
 	keyFile := fs.String("tls-key", "", "TLS key")
 	noAdmin := fs.Bool("no-admin", false, "do not serve the admin panel")
 	metaOnly := fs.Bool("admin-metadata-only", false, "withhold other users' bodies")
+	supervise := fs.Bool("supervise", true, "run under a supervisor so the server can restart itself")
+	source := fs.String("source", a.look("CQ_SOURCE", ""), "checkout to build from on upgrade")
+	binDir := fs.String("bin", a.look("CQ_BIN", ""), "where upgrade installs binaries")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	_ = metaOnly // the agent decides what to send; this is recorded for symmetry
+
+	// Become the supervisor, unless this process already is one's child or the
+	// caller asked for a plain process. A supervisor that forked a supervisor
+	// would go on doing it, which is the classic way this design goes wrong; the
+	// marker in the environment is what stops it.
+	//
+	// `a.Listen != nil` is a test serving in-process. There is no exec there and
+	// nothing to restart, so supervising would fork the test binary.
+	if *supervise && !a.supervised() && a.Listen == nil {
+		return a.supervise(append([]string{"serve"}, args...))
+	}
 
 	state, err := store.Open(*stateDir)
 	if err != nil {
@@ -205,10 +228,26 @@ func (a App) serve(args []string) error {
 		return err
 	}
 
+	// restart is what the upgrade endpoint calls when the new binaries are on
+	// disk. Nil when nothing is supervising this process, and the endpoint then
+	// says so rather than exiting into nothing.
+	restart := make(chan struct{}, 1)
+	var askRestart func()
+	if a.supervised() {
+		askRestart = func() {
+			select {
+			case restart <- struct{}{}:
+			default: // already asked; one restart is enough
+			}
+		}
+	}
+
 	srv, err := server.New(server.Options{
 		State: state, Creds: creds, Admin: !*noAdmin,
 		Logger: a.logger(), Flavour: flavour,
-		Secure: *certFile != "",
+		Secure:  *certFile != "",
+		Upgrade: upgrade.Options{Source: *source, Target: *binDir},
+		Restart: askRestart,
 	})
 	if err != nil {
 		return err
@@ -242,13 +281,44 @@ func (a App) serve(args []string) error {
 		Handler:           srv,
 		ReadHeaderTimeout: server.ReadHeaderTimeout,
 	}
-	if *certFile != "" {
-		err = httpServer.ListenAndServeTLS(*certFile, *keyFile)
-	} else {
-		err = httpServer.ListenAndServe()
+
+	serving := make(chan error, 1)
+	go func() {
+		if *certFile != "" {
+			serving <- httpServer.ListenAndServeTLS(*certFile, *keyFile)
+			return
+		}
+		serving <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serving:
+		return fault.IO{Op: "serve", Subject: *addr, Err: err}
+
+	case <-restart:
+		// Drained, not dropped. A request in flight when the upgrade landed is a
+		// request somebody is waiting on, and finishing it costs a few seconds
+		// against a restart that is already going to take longer than that.
+		//
+		// Nothing else needs saving: the queue and the snapshots are on disk and
+		// fsynced before each reply, so what comes back reads exactly the state
+		// that went down. That is the property that makes restarting mid-flight
+		// safe — not this shutdown, which only spares the requests in the air.
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		if err := httpServer.Shutdown(ctx); err != nil {
+			// A connection that would not close in time is not worth staying up
+			// for. Said out loud, then on with the restart.
+			a.tell("cq: %d s was not enough to drain: %v", int(shutdownGrace.Seconds()), err)
+		}
+		// The supervisor reads this and starts the new binary.
+		return exitStatus(ExitRestart)
 	}
-	return fault.IO{Op: "serve", Subject: *addr, Err: err}
 }
+
+// shutdownGrace bounds draining. Long enough for a page load and a sync round to
+// finish, short enough that a wedged connection cannot hold a restart open.
+const shutdownGrace = 15 * time.Second
 
 // --- sync ----------------------------------------------------------------
 
@@ -261,6 +331,13 @@ func (a App) sourceFor(m mirror) *source.CLI {
 	src := source.NewCLI(m.User)
 	src.Look = a.Env
 	src.Key = m.Key
+	// Where this machine builds from, for a queued upgrade. Its zero value has no
+	// source, and the action then refuses with that reason — which is right for a
+	// machine that installs binaries rather than building them.
+	src.Upgrade = upgrade.Options{
+		Source: a.look("CQ_SOURCE", ""),
+		Target: a.look("CQ_BIN", ""),
+	}
 	src.Warn = func(format string, args ...any) { a.logger().Warn(fmt.Sprintf(format, args...)) }
 	return src
 }

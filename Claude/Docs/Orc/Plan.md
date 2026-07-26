@@ -1154,6 +1154,40 @@ Smaller notes:
   `tend --watch` under "not built yet" — a claim this stream falsified. Those two
   lines moved; `attach`'s stayed, since it is stream B's to move.
 
+### `orc model`, as built
+
+A command to change what a running identity thinks with, tied into the three things
+that had to know about it.
+
+**A new event, not a reuse of `employ`.** `OpEmploy` sets employed *and* the model,
+so retuning through it would put an unemployed identity on the worklist. `OpModel`
+sets the two halves of load and leaves employment alone — "run this on opus next
+time" and "start this now" are different intents, and one op for both would make the
+first quietly do the second.
+
+**Auth is `employ`'s, exactly.** `s.controls(who, …)`, so directing an agent is the
+boss's call and nobody retunes themselves: raising your own load would be granting
+yourself budget. Reading is not directing, so `orc model <identity>` with no model
+reports and asks only what `status` asks.
+
+**Load goes through the same arithmetic**, `s.affordable`, including its rule that
+re-employing at the same or lower load is not new spending. A second way to change
+load that skipped the budget would make the budget advisory. Retuning something that
+is not employed costs nothing and is checked again when it is employed.
+
+**Taking effect is the interesting part.** A model is fixed when Claude starts, so a
+running session keeps the one it was launched with, and making the change land means
+replacing the session and losing its context. That is not a decision to make on
+somebody's behalf inside a command they ran to change a setting, so the default says
+so and names both ways to do it; `--now` is how they ask.
+
+Two things the tests found. The first budget test used `lead`'s `spawn(24)`, which
+comfortably covers opus/max — it proved nothing until it was given a budget that
+actually binds. And `orc status` does not show the model of an *unemployed* identity,
+so the journal-replay test reads it back through `orc model` instead; whether a card
+should show what an identity would be started on is a separate question, and a
+separate stream's file.
+
 ### Milestone 3, stream B (the clean view), as built
 
 `attach` without `--direct` is Orc's own view now. The shape held: the screen is a

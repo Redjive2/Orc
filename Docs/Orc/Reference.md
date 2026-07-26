@@ -24,10 +24,12 @@ Orc exposes the following commands:
 | `poke <identity> [message]`                 | Nudge the identity to continue working                                     |
 | `refresh <identity>`                        | Create a new Code session to replace the old one for the identity          |
 | `move <identity> <boss>`                    | Move the identity to be under the boss; lower authority/perms as needed    |
+| `model <identity> [<model>] [--effort <e>]`† | Show, or change, what an identity thinks with; `--now` replaces the running session |
 | `employ <identity> [--model <m>] [--effort <e>]` | Add the identity to the work list; populate it as needed automatically |
 | `fire <identity>`                           | Remove the identity from the work list; do not repopulate it               |
 | `introspect [--only <field name>]`          | Shows information on the active agent in this leaf session. Can show one only one field with no formatting for remote authorization and other purposes. |
 | `check-control <agent>`†                    | Exit `0` if the caller controls the agent, `8` if not                      |
+| `check-permission <name>`†                  | Exit `0` if the caller holds it, `8` if not, `2` if no such permission     |
 | `env <identity>`†                           | Print the export block for a manual shell; discloses a key                 |
 | `tend [--watch <dur>]`†                     | Reconcile the work list: populate what is employed, depopulate what is not |
 | `doctor`†                                   | Check every invariant and guard, and report which are in force             |
@@ -76,6 +78,8 @@ Terms:
 | `--direct`     | `attach`                  | Hand the terminal to the real Claude session, not Orc's view |
 | `--worktree`   | `new identity`            | Make the workspace a git worktree of the main repo          |
 | `--watch <dur>`| `tend`                    | Keep reconciling on an interval, as a backstop              |
+| `--effort <e>`  | `model`, `employ`         | The effort half of the load: low, medium, high, xhigh, max  |
+| `--now`         | `model`                   | Replace the running session so the change takes effect now  |
 | `--only <f>`   | `introspect`              | Print one field, raw, with no formatting                    |
 | `--json`       | `status`, `introspect`, `list`, `budget` | Print the stable JSON shape instead of the screen |
 | `--yes`        | `remove`, `fire`, `owner rename`, `owner reset` | Required when stdin is not a terminal, which for an agent is always |
@@ -131,6 +135,33 @@ Orc sets the first two for every session it populates. That is the same
 credential contract every other Orc tool reads, so an agent Orc started needs no
 further setup to use `mailman`, `muff`, `anno`, or `dock`.
 
+### Builtin permissions
+
+Almost every permission is one somebody made. The exceptions are capabilities that
+live in *another tool* and so have nobody to define them:
+
+| Permission | Floor | Clause      | Is                                                     |
+|------------|-------|-------------|--------------------------------------------------------|
+| `upgrade`  | 90    | `write(**)` | rebuild and restart every Orc tool, on every machine   |
+
+They are created at `bootstrap` and are otherwise ordinary: assignable to a role,
+listed by `orc list permissions`, refused to anybody below the floor. Nothing about
+them is a special case in the derivation.
+
+`bootstrap` is safe to run twice, and that is what tops these up on a fleet created
+before one existed — an existing permission is never rewritten, so re-running it
+cannot disturb a fleet that already has them.
+
+The clause is named after the effect rather than the command on purpose: an upgrade
+replaces every binary on the machine, and a permission that claimed less would be
+one somebody hands out without reading. The floor is the whole of the policy — 90
+sits above every ordinary role in a fleet whose agents are 1–99, so holding it is a
+deliberate act rather than something a role drifts into.
+
+`check-permission` is how another tool asks. It answers with an exit code, the way
+`check-control` does, so the tool that needs the answer never holds a copy of the
+model — see `Docs/Communique/Reference.md` for how `cq upgrade` uses it.
+
 ## §1.3 Authority, permissions, and roles
 
 See `Auth_Perm_Role.md`. In short: authority is a number on a role, the user is
@@ -144,6 +175,23 @@ anything but one line.
 
 `status` shows both numbers whenever they differ, and says which one capped the
 other.
+
+## §1.3.1 Changing what an agent runs on
+
+`model` and `effort` are set when an identity is employed and can be changed after
+with `orc model`. They are the two halves of load — a session costs its model weight
+times its effort weight — so changing either is spending, and it goes through the
+same budget arithmetic `employ` does. A boss who cannot afford the new load is
+refused, and shown which half of the arithmetic refused it.
+
+Changing them on an identity that is **not** employed costs nothing and does not
+employ it: it is what the next `orc employ` will start it on.
+
+A model is fixed when a Code session starts, so a **running** session keeps the one
+it was launched with. `orc model` says so rather than acting: replacing the session
+costs its context, which is not a decision a settings change should make on the
+operator's behalf. `--now` is how to ask for it, and `orc refresh` does the same
+thing by hand.
 
 ## §1.4 Load
 

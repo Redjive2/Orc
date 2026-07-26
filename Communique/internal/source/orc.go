@@ -111,6 +111,20 @@ func (o *Orc) OwnerCredential(ctx context.Context) (user, key string, err error)
 	return user, key, nil
 }
 
+// MayUse asks Orc whether the ambient identity holds a permission.
+//
+// Orc answers with an exit code — 0 held, 8 not, 2 no such permission — the way
+// `muff assign` asks about control. cq keeps no copy of the answer and no idea what
+// a floor is: it asks, and repeats what it was told.
+//
+// Ambient credential on purpose. The question is about whoever is running this
+// command, which is exactly what an agent's shell presents, and pinning it to the
+// mirrored account would answer for somebody else.
+func (o *Orc) MayUse(ctx context.Context, permission string) error {
+	_, err := o.run(ctx, "check-permission", permission)
+	return err
+}
+
 // Fleet reads the whole Orc store, as Orc derives it.
 //
 // `orc status --json` and nothing else: the shape it prints is the derived fleet

@@ -253,11 +253,20 @@ func TestOwnerReset(t *testing.T) {
 	// refused for an unrelated reason (nobody is their own subordinate), which would
 	// make this assertion pass whether or not the role was there.
 	shape := r.ok("chief", "status", "--json")
-	for _, want := range []string{`"roles"`, `"permissions"`} {
-		if strings.Contains(shape.stdout, want) && !strings.Contains(shape.stdout, want+": null") &&
-			!strings.Contains(shape.stdout, want+": []") {
-			t.Errorf("the reset fleet still has %s:\n%s", want, shape.stdout)
+	if strings.Contains(shape.stdout, `"roles"`) && !strings.Contains(shape.stdout, `"roles": null`) &&
+		!strings.Contains(shape.stdout, `"roles": []`) {
+		t.Errorf("the reset fleet still has roles:\n%s", shape.stdout)
+	}
+	// The permissions the operator made are gone; the *builtin* ones are back,
+	// because a reset ends in a bootstrap and a fleet without them is one where
+	// nobody can be given a capability that lives in another tool.
+	for _, gone := range []string{"edit-anno", "lead"} {
+		if strings.Contains(shape.stdout, gone) {
+			t.Errorf("the reset fleet still has the %s permission:\n%s", gone, shape.stdout)
 		}
+	}
+	if !strings.Contains(shape.stdout, "upgrade") {
+		t.Errorf("the reset fleet has no builtin permissions:\n%s", shape.stdout)
 	}
 }
 

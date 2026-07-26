@@ -22,6 +22,7 @@ import (
 	"orc/cq/internal/fault"
 	"orc/cq/internal/protocol"
 	"orc/cq/internal/store"
+	"orc/cq/internal/upgrade"
 	"orc/cq/internal/web"
 	"orc/theme"
 )
@@ -52,6 +53,18 @@ const (
 	needNothing
 	// needToken is the sync endpoint, which agents reach with a bearer token.
 	needToken
+	// needEither is a browser *or* a provisioned machine.
+	//
+	// One route has it: the upgrade. It has to be reachable from the admin panel,
+	// which is a session, and from `cq upgrade` on an agent machine, which has a
+	// sync token and no password. Both are credentials the operator handed out on
+	// purpose, so both are the operator asking.
+	//
+	// The narrower gate on top of it is Orc's: `cq upgrade` refuses unless the
+	// identity running it holds the builtin `upgrade` permission, floor 90. That
+	// is the check that stops an *agent* with a shell and the machine's token,
+	// which is the case an operator actually worries about.
+	needEither
 )
 
 func (c class) String() string {
@@ -89,6 +102,16 @@ type Options struct {
 	// Flavour is the colour scheme the site is drawn in. It comes from the
 	// same setting as every other Orc tool, so one change restyles them all.
 	Flavour theme.Flavour
+	// Upgrade says where this machine's checkout and binaries are. Its zero value
+	// has no source, and the upgrade endpoint then refuses with that reason —
+	// which is right for a server that installs binaries rather than building.
+	Upgrade upgrade.Options
+	// Restart asks whatever is supervising this process for a new one.
+	//
+	// Nil means nothing is, and the endpoint says so rather than pretending: a
+	// server that exited with nothing to start it again would be a button that
+	// takes the site down and leaves it down.
+	Restart func()
 }
 
 // Server answers HTTP for cq.
@@ -104,6 +127,9 @@ type Server struct {
 	heartbeat time.Duration
 	limiter   *auth.Limiter
 	events    *broker
+
+	upgrade upgrade.Options
+	restart func()
 
 	assets  http.Handler
 	index   []byte
@@ -137,6 +163,9 @@ func New(opts Options) (*Server, error) {
 		now:      opts.Now,
 		lifetime: opts.SessionLifetime,
 		secure:   opts.Secure,
+
+		upgrade: opts.Upgrade,
+		restart: opts.Restart,
 
 		heartbeat: opts.Heartbeat,
 		limiter:   auth.NewLimiter(),
@@ -259,6 +288,10 @@ func (s *Server) routes() {
 	s.route("DELETE /api/v1/fleet/roles/{name}", needSession, s.removeRole)
 	s.route("DELETE /api/v1/fleet/permissions/{name}", needSession, s.removePermission)
 	s.route("POST /api/v1/fleet/tend", needSession, s.tendFleet)
+
+	// Rebuilding and restarting the whole fleet. See upgrade.go for why this is
+	// one request that becomes one local upgrade plus one queued action each.
+	s.route("POST /api/v1/upgrade", needEither, s.upgradeAll)
 
 	// The task verbs, one route per Macmuffin command that changes something.
 	// See tasks.go for why this is a route each rather than one pass-through.
@@ -425,6 +458,28 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		switch s.classOf(r) {
 		case needNothing:
 			next.ServeHTTP(w, r)
+
+		case needEither:
+			// A token if there is one, else the session path below. Tried in that
+			// order because a machine presenting a token has no cookie, and a
+			// browser has no token — so whichever is present is the one meant.
+			if _, err := s.bearer(r); err == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			sess, err := s.creds.Session(cookieValue(r), s.now())
+			if err != nil {
+				s.deny(w, r)
+				return
+			}
+			if !safeMethod(r.Method) {
+				if err := sess.CheckCSRF(r.Header.Get("X-CSRF-Token")); err != nil {
+					s.log.Warn("csrf check failed", "path", r.URL.Path)
+					s.fail(w, r, fault.Unauthenticated{Reason: "csrf"})
+					return
+				}
+			}
+			next.ServeHTTP(w, r.WithContext(withSession(r, sess)))
 
 		case needToken:
 			token, err := s.bearer(r)

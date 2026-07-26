@@ -301,6 +301,10 @@ func describe(action protocol.Action) string {
 	case protocol.OpOrcTend:
 		// It takes no operand: what it is about is the whole fleet.
 		return "the whole work list"
+	case protocol.OpUpgrade:
+		// Nor does this. Without a case it fell through to the puid default and
+		// read "system.upgrade #0", which names nothing and looks like a bug.
+		return "pull, rebuild, and restart this machine"
 	default:
 		return fmt.Sprintf("#%d", action.Args.PUID)
 	}

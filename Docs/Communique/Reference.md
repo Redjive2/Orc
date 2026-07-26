@@ -14,6 +14,7 @@ cq <command> <args...>
 | `admin operator` | Set or change the login password                  |
 | `admin token`    | Mint a sync token; printed once, stored hashed    |
 | `queue`          | What is waiting, and what did not work            |
+| `upgrade`        | Rebuild and restart every tool, everywhere        |
 
 ## §1.1 Flags
 
@@ -119,6 +120,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `DELETE fleet/roles/<n>`               | `orc remove role --yes`                  |
 | `DELETE fleet/permissions/<n>`         | `orc remove permission [--from] --yes`   |
 | `POST fleet/tend`                      | `orc tend`                               |
+| `POST upgrade`                         | pull, rebuild, restart — here and queued out |
 | `GET admin/state`                      | `admin mail` — the whole store           |
 | `GET library`                          | the repository's structure, no text      |
 | `GET library/file?path=`               | one file, with its text                  |
@@ -207,6 +209,68 @@ Either lens missing from the agent's `PATH` is carried into the snapshot as a
 note rather than shown as emptiness. I am at a browser on another machine, so
 without it the tabs would tell me nothing in the tree has sections or
 annotations — a statement about the fleet made from a fact about one machine.
+
+## Upgrading
+
+`cq upgrade --yes`, the **rebuild everything** button in the admin panel, and
+`POST /api/v1/upgrade` are the same request. It pulls the tree, rebuilds every Orc
+tool, and restarts — on the machine serving the site *and* on every agent machine.
+
+Two halves, because the two are reachable in opposite directions:
+
+- **The server** upgrades itself: a local `git pull --ff-only`, `sh/build --to`,
+  and a restart. It needs a supervisor, because a process cannot exec its own
+  replacement and still be there to report on it.
+- **Each agent machine** gets a queued `system.upgrade` action and does the work on
+  its next sync. The server cannot reach them; that is the whole architecture.
+
+The order is deliberate: queue the agents, answer the caller, *then* restart. A
+server that restarted first would come back to a queue it had not written yet.
+
+### The supervisor
+
+`cq serve` runs a child `cq serve` and starts a new one when the child asks, by
+exiting `75` — `EX_TEMPFAIL`, "try again". `--supervise=false` opts out, and the
+endpoint then says it cannot restart itself rather than exiting into nothing.
+
+After a restart the supervisor `exec`s its own path, so it becomes the new binary
+too: same pid, so whatever watches *it* — systemd, a terminal — sees nothing. A
+restart that fails immediately backs off, so a bad build is a log somebody can read
+rather than a busy loop.
+
+The build happens **before** the restart. The other order looks equivalent and is
+not: restarting first brings the old binary back up, and restarting after a failed
+build brings nothing up at all. A failed build leaves the server exactly as it was.
+
+### Nothing is lost mid-flight
+
+- The queue and the snapshots are on disk and fsynced before each reply, so what
+  comes back reads exactly the state that went down.
+- In-flight requests are drained for up to 15s before the process goes.
+- Sessions survive: they are in the credential store, not in memory.
+- An agent that synced during the gap fails and retries on its next round — which
+  is what it already does for any unreachable server.
+- Replacing a binary on unix leaves running processes on their old inode, so an
+  `orc-session` supervisor and its agent carry on and pick the new build up when
+  they next exec. `orc tend` reconciles whatever did not.
+
+### Who may
+
+`cq upgrade` needs Orc's builtin `upgrade` permission — floor 90, executive agents
+only. cq asks with `orc check-permission upgrade` and repeats what it is told; it
+holds no copy of the model and does not know what a floor is.
+
+The check is on the **client**, and that is not an oversight. The server has no Orc
+fleet: it runs on another machine, authenticates with a password and a token, and
+has never heard of an identity. Teaching it the model would be exactly the second
+copy of authority this tree exists to avoid. The server's own gate is the one that
+was already there — a session or a sync token — and Orc's answer is the narrower
+one on top, for the case an operator actually worries about: an agent with a shell
+on a machine that has the token.
+
+`$CQ_SOURCE` is the checkout to pull; `$CQ_BIN` is where binaries are installed,
+defaulting to the directory the running one is in. A machine with neither refuses
+and says so, which is right for one that installs binaries rather than building.
 
 ## Driving Orc
 
