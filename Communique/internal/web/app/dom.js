@@ -29,6 +29,21 @@ export function mount(el, ...children) {
   return el;
 }
 
+// findByName walks a tree for the first field with this name.
+//
+// Written by hand rather than with querySelector because it has to work in the
+// tests' stub DOM as well as a browser — and because the thing it looks for is
+// one attribute, which is less code than escaping a selector.
+export function findByName(root, name) {
+  if (!root || !name) return null;
+  if (root.getAttribute && root.getAttribute("name") === name) return root;
+  for (const child of root.childNodes || []) {
+    const found = findByName(child, name);
+    if (found) return found;
+  }
+  return null;
+}
+
 // A box-drawn rule, so the page frames things the way the CLI does.
 export function rule(label = "", width = 78) {
   const text = label ? `╭─ ${label} ` : "╭";

@@ -212,12 +212,56 @@ test("an interrupted read is offered a retry", () => {
   assert.match(text(views.queue({ queue: [doubtfulRead] }, {})), /try again/);
 });
 
-test("something already on its way offers nothing to do", () => {
+// An action still waiting has never left this machine. Cancelling means it never
+// goes — nothing was attempted, so there is nothing to reason about afterwards.
+test("something still waiting can be cancelled", () => {
   const waiting = { action: { id: "d".repeat(32), op: "read", args: { puid: 1 } }, state: "queued" };
   const out = text(views.queue({ queue: [waiting] }, {}));
   assert.match(out, /waiting/);
+  assert.match(out, /cancel/);
+  // Not the words for a thing that already happened: it has not.
   assert.doesNotMatch(out, /try again/);
   assert.doesNotMatch(out, /forget it/);
+  assert.doesNotMatch(out, /remove/);
+});
+
+// The one row with no button. It may be applying this second, so the server
+// refuses to delete it and the button is absent rather than failing.
+test("something already with the agent offers nothing to do", () => {
+  const gone = { action: { id: "d".repeat(32), op: "read", args: { puid: 1 } }, state: "sent" };
+  const out = text(views.queue({ queue: [gone] }, {}));
+  assert.match(out, /with the agent/);
+  assert.doesNotMatch(out, /cancel/);
+  assert.doesNotMatch(out, /remove/);
+  assert.doesNotMatch(out, /forget it/);
+});
+
+// "remove" on something that has not gone is a lie about what the press does,
+// and it is the press somebody makes in a hurry.
+test("the word matches what pressing it would do", () => {
+  const rows = [
+    { state: "queued", want: "cancel" },
+    { state: "failed", want: "forget it" },
+    { state: "in_doubt", want: "forget it" },
+    { state: "done", want: "remove" },
+  ];
+  for (const { state, want } of rows) {
+    const entry = { action: { id: "d".repeat(32), op: "read", args: { puid: 1 } }, state };
+    const out = text(views.queue({ queue: [entry] }, {}));
+    assert.match(out, new RegExp(want), `a ${state} row should offer "${want}": ${out}`);
+  }
+});
+
+test("cancelling hands the entry to the action", () => {
+  const waiting = { action: { id: "d".repeat(32), op: "send", args: { to: ["bob"], subject: "oops" } }, state: "queued" };
+  const asked = [];
+  const nodes = views.queue({ queue: [waiting] }, { drop: (e) => asked.push(e) });
+
+  const button = findAll(nodes, (n) => n.tagName === "BUTTON" && n.textContent === "cancel")[0];
+  assert.ok(button, "no cancel button");
+  button.listeners.click.forEach((fn) => fn({ target: button }));
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].action.id, "d".repeat(32));
 });
 
 test("the queue leads with what needs a decision", () => {

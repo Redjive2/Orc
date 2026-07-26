@@ -101,8 +101,8 @@ export function message(state, detail, actions) {
       h("a", { href: "#/inbox", class: "muted" }, "← inbox"),
     ),
     ...cards,
-    composer(m, actions),
-    ccForm(m, actions),
+    composer(state, m, actions),
+    ccForm(state, m, actions),
     h("p", {},
       h("button", { class: "quiet", onclick: () => actions.markRead(m) }, "mark read"),
       " ",
@@ -116,10 +116,17 @@ export function message(state, detail, actions) {
 // Only for mail that is in one: a conversation is what `cc` addresses, so a
 // message with no thread has nothing to add anyone to, and offering the control
 // anyway would be offering a button that cannot work.
-function ccForm(m, actions) {
+function ccForm(state, m, actions) {
   if (!m.convo || !m.convo.uid) return null;
 
-  const who = h("input", { name: "cc", placeholder: "carol", autocomplete: "off" });
+  const key = draftKey("cc", m.convo.uid);
+  const draft = drafted(state, key);
+
+  const who = h("input", {
+    name: "cc", placeholder: "carol", autocomplete: "off",
+    value: draft.cc ?? "",
+    oninput: (e) => actions.draft(key, "cc", e.target.value),
+  });
   const button = h("button", { class: "quiet", type: "submit" }, "add to conversation");
   const problem = h("p", { class: "error" });
 
@@ -135,7 +142,7 @@ function ccForm(m, actions) {
 
       button.disabled = true;
       actions.cc(m, got.names[0])
-        .then((ok) => { if (ok) { who.value = ""; problem.textContent = ""; } })
+        .then((ok) => { if (ok) { who.value = ""; actions.forget(key); problem.textContent = ""; } })
         .finally(() => { button.disabled = false; });
     },
   },
@@ -197,9 +204,38 @@ export function reSubject(subject) {
   return s.startsWith("RE: ") ? s : `RE: ${s}`;
 }
 
-function composer(m, actions) {
-  const subject = h("input", { name: "subject", value: reSubject(m.subject) });
-  const body = h("textarea", { name: "body", placeholder: "…" });
+// draftKey names the form a draft belongs to.
+//
+// One key per thing being written: a reply belongs to its message, a cc to its
+// conversation, and there is only ever one new message. Keying by message means
+// two half-written replies in two threads do not overwrite each other.
+export function draftKey(kind, id = "") {
+  return id ? `${kind}:${id}` : kind;
+}
+
+// drafted reads one form's draft. Absent is empty rather than missing, so a
+// view can ask for a draft that has never been typed into.
+export function drafted(state, key) {
+  return (state && state.drafts && state.drafts[key]) || {};
+}
+
+function composer(state, m, actions) {
+  const key = draftKey("reply", m.mid || m.puid);
+  const draft = drafted(state, key);
+
+  const subject = h("input", {
+    name: "subject",
+    value: draft.subject ?? reSubject(m.subject),
+    oninput: (e) => actions.draft(key, "subject", e.target.value),
+  });
+  // Set as a property rather than an attribute, for the reason editor.js gives:
+  // a textarea's attribute is its *default*, and the text somebody is part-way
+  // through is not a default.
+  const body = h("textarea", {
+    name: "body", placeholder: "…",
+    oninput: (e) => actions.draft(key, "body", e.target.value),
+  });
+  body.value = draft.body ?? "";
   const button = h("button", { type: "submit" }, "queue reply");
 
   return h("form", {
@@ -207,7 +243,9 @@ function composer(m, actions) {
     onsubmit: (e) => {
       e.preventDefault();
       button.disabled = true;
-      actions.reply(m, subject.value, body.value).finally(() => { button.disabled = false; });
+      actions.reply(m, subject.value, body.value)
+        .then(() => { actions.forget(key); })
+        .finally(() => { button.disabled = false; });
     },
   },
     h("label", { for: "subject" }, "subject"),
@@ -252,9 +290,24 @@ export function compose(state, actions) {
     return [h("p", { class: "muted" }, "nothing has synced yet, so there is nowhere to send from")];
   }
 
-  const to = h("input", { name: "to", placeholder: "bob, carol", autocomplete: "off" });
-  const subject = h("input", { name: "subject", autocomplete: "off" });
-  const body = h("textarea", { name: "body", placeholder: "…" });
+  const key = draftKey("compose");
+  const draft = drafted(state, key);
+
+  const to = h("input", {
+    name: "to", placeholder: "bob, carol", autocomplete: "off",
+    value: draft.to ?? "",
+    oninput: (e) => actions.draft(key, "to", e.target.value),
+  });
+  const subject = h("input", {
+    name: "subject", autocomplete: "off",
+    value: draft.subject ?? "",
+    oninput: (e) => actions.draft(key, "subject", e.target.value),
+  });
+  const body = h("textarea", {
+    name: "body", placeholder: "…",
+    oninput: (e) => actions.draft(key, "body", e.target.value),
+  });
+  body.value = draft.body ?? "";
   const button = h("button", { type: "submit" }, "queue message");
   const problem = h("p", { class: "error" });
 
@@ -284,6 +337,7 @@ export function compose(state, actions) {
           // the writer's message, and losing it to a network error would be
           // the worst thing this form could do.
           to.value = subject.value = body.value = "";
+          actions.forget(key);
           problem.textContent = "";
         })
         .finally(() => { button.disabled = false; });
@@ -385,19 +439,24 @@ function queueRow(entry, actions) {
     // is more use than a control that refuses.
     controls.push(h("span", { class: "muted" }, "check your sent mail, then write it again"));
   }
-  // Every *settled* row, not only the unresolved ones. A done action is a record
-  // of something that already happened, and the record was previously impossible
-  // to remove from the browser at all — so the queue only ever grew, and the rows
-  // worth reading sank below the ones that had worked.
+  // Three things somebody means by "get rid of this", and the word says which.
   //
-  // In-flight rows have no button, and that is the server's rule rather than a
-  // choice made here: an action the agent may still report on cannot be dropped,
-  // because the report would have nowhere to land.
-  if (settled(entry) && actions) {
+  //   - *waiting*: it has never left this machine. Cancelling means it never
+  //     goes, and nothing has happened that anybody has to reason about.
+  //   - *failed* or *in doubt*: forgetting the record, not the effect.
+  //   - *done*: removing a note about something that already happened.
+  //
+  // A row that is *with the agent* has no button, and that is the server's rule
+  // rather than a choice made here: it may be applying this second, and the
+  // result would have nowhere to land.
+  if ((settled(entry) || entry.state === "queued") && actions) {
     controls.push(h("button", {
+      // Quiet, like the others. Cancelling is the direction that makes *less*
+      // happen, and colouring it as a hazard would be telling somebody to
+      // hesitate over the one press here that cannot cost them anything.
       class: "quiet",
       onclick: (e) => hold(e.target, () => actions.drop(entry)),
-    }, unresolved ? "forget it" : "remove"));
+    }, label(entry)));
   }
 
   return h("article", { class: `card ${unresolved ? "failed" : "pending"}` },
@@ -408,6 +467,14 @@ function queueRow(entry, actions) {
     entry.error ? h("div", { class: "body" }, h("pre", {}, entry.error)) : null,
     controls.length > 0 ? h("div", { class: "meta" }, ...spaced(controls)) : null,
   );
+}
+
+// label is what the button offers to do, which depends on whether the action has
+// happened yet. "remove" on something that has not gone is a lie about what the
+// press does, and it is the press somebody makes in a hurry.
+function label(entry) {
+  if (entry.state === "queued") return "cancel";
+  return entry.state === "failed" || entry.state === "in_doubt" ? "forget it" : "remove";
 }
 
 // describe says what an action was for, in the terms the reader used.

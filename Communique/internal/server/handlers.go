@@ -725,8 +725,10 @@ func (s *Server) dropAction(w http.ResponseWriter, r *http.Request) {
 // clearBody names what to sweep up. Empty means the done ones, which is the
 // housekeeping case and the safe one.
 type clearBody struct {
-	// States to clear. Only settled ones can go — an action in flight is one the
-	// agent may still report on, and forgetting it would lose that report.
+	// States to clear. Only settled ones: clearing is housekeeping over records of
+	// things that have already happened. A waiting action has not happened, and
+	// stopping one is a decision about that action — so it is cancelled on its own
+	// row rather than swept up with a pile.
 	States []string `json:"states,omitempty"`
 }
 
@@ -757,12 +759,13 @@ func (s *Server) clearQueue(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range body.States {
 		got := store.State(raw)
 		if !got.Settled() {
-			// Named rather than ignored: a caller asking to clear `queued` has a
-			// wrong idea about what the queue is, and silently doing nothing would
-			// leave them with it.
+			// Named rather than ignored: a caller asking to sweep the waiting pile
+			// has a wrong idea about what clearing is for, and silently doing
+			// nothing would leave them with it.
 			s.fail(w, r, fault.Usage{Reason: fmt.Sprintf(
-				"%q is not a state that can be cleared; an action is dropped once the agent "+
-					"has reported on it, so only done, failed, and in_doubt can go", raw)})
+				"%q is not a state that can be cleared; clearing tidies away records of what has "+
+					"already happened, so only done, failed, and in_doubt can go — an action that is "+
+					"still waiting is cancelled on its own row", raw)})
 			return
 		}
 		wanted[got] = true

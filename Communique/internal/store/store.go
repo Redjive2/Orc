@@ -157,11 +157,15 @@ type Meta struct {
 type Store struct {
 	root string
 
-	// seq guards sequence allocation. Two goroutines enqueuing at once would
-	// otherwise pick the same number; the O_EXCL create below is the backstop
-	// for two *processes*, which the design does not expect but does not
-	// silently corrupt either.
-	seq sync.Mutex
+	// queue guards the queue directory: allocating a sequence number, handing
+	// actions to a sync, and removing one. Two goroutines enqueuing at once would
+	// otherwise pick the same number, and — the reason this grew past allocation —
+	// a cancel could read an action as "waiting" while a sync was collecting it,
+	// then delete something the agent had already been handed.
+	//
+	// The O_EXCL create below is the backstop for two *processes*, which the
+	// design does not expect but does not silently corrupt either.
+	queue sync.Mutex
 }
 
 // Open prepares a store at root, creating it if needed.
@@ -307,8 +311,8 @@ func (s *Store) Enqueue(machine protocol.MachineID, op protocol.Op, args protoco
 		return protocol.Action{}, fault.Internal{Where: "store.Enqueue", Detail: "zero timestamp"}
 	}
 
-	s.seq.Lock()
-	defer s.seq.Unlock()
+	s.queue.Lock()
+	defer s.queue.Unlock()
 
 	entries, err := s.entries()
 	if err != nil {
@@ -409,6 +413,12 @@ func (s *Store) MarkSent(ids []protocol.ActionID, at time.Time) error {
 	if at.IsZero() {
 		return fault.Internal{Where: "store.MarkSent", Detail: "zero timestamp"}
 	}
+	// Under the queue lock, so that collecting an action and cancelling one
+	// cannot interleave. A cancel that read "waiting" a moment before this ran
+	// would otherwise delete an action the agent is being handed.
+	s.queue.Lock()
+	defer s.queue.Unlock()
+
 	return s.update(ids, func(e *Entry) bool {
 		// A completed action is not walked back to sent by a re-delivery.
 		if e.State != Queued {

@@ -3,6 +3,7 @@ package store_test
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"orc/cq/internal/fault"
@@ -165,25 +166,62 @@ func TestDropRemovesASettledAction(t *testing.T) {
 	}
 }
 
-// TestDropRefusesAnActionInFlight: it may be at the agent this second. Deleting
-// it here would leave the agent applying something the server has forgotten, and
+// TestAWaitingActionCanBeCancelled.
+//
+// It has never left this machine: no agent has seen it, nothing was attempted,
+// and removing it means it simply never goes. Refusing that was the difference
+// between a queue and a list of regrets — a message written by mistake could
+// only be watched on its way out.
+func TestAWaitingActionCanBeCancelled(t *testing.T) {
+	s := open(t)
+
+	queued, err := s.Enqueue("studio", protocol.OpSend,
+		protocol.Args{To: []string{"bob"}, Subject: "oops", Body: "sent too soon"}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Drop(queued.ID); err != nil {
+		t.Fatalf("a waiting action would not cancel: %v", err)
+	}
+	if _, err := s.Entry(queued.ID); !errors.Is(err, fault.ErrNotFound) {
+		t.Errorf("the entry is still there: %v", err)
+	}
+
+	// And it is not handed to the next sync, which is the whole point.
+	pending, err := s.Pending("studio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range pending {
+		if a.ID == queued.ID {
+			t.Error("a cancelled action was still collected")
+		}
+	}
+}
+
+// TestDropRefusesAnActionWithTheAgent: it may be applying this second. Deleting
+// it here would leave the agent doing something the server has forgotten, and
 // then reporting a result for an action that no longer exists.
-func TestDropRefusesAnActionInFlight(t *testing.T) {
+func TestDropRefusesAnActionWithTheAgent(t *testing.T) {
 	s := open(t)
 
 	queued, err := s.Enqueue("studio", protocol.OpRead, protocol.Args{PUID: 1}, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Drop(queued.ID); !errors.Is(err, fault.ErrConflict) {
-		t.Errorf("a queued action was dropped: %v", err)
-	}
-
 	if err := s.MarkSent([]protocol.ActionID{queued.ID}, at); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Drop(queued.ID); !errors.Is(err, fault.ErrConflict) {
-		t.Errorf("an action already collected by a sync was dropped: %v", err)
+
+	err = s.Drop(queued.ID)
+	if !errors.Is(err, fault.ErrConflict) {
+		t.Fatalf("an action already collected by a sync was dropped: %v", err)
+	}
+	if !strings.Contains(err.Error(), "wait for it to report") {
+		t.Errorf("the refusal should say what to do instead: %v", err)
+	}
+	if _, err := s.Entry(queued.ID); err != nil {
+		t.Errorf("the entry was removed anyway: %v", err)
 	}
 }
 
@@ -327,5 +365,65 @@ func TestAnInterruptedLibraryVerbMayBeRetried(t *testing.T) {
 				t.Errorf("%s in doubt should be retryable: %v", tc.op, err)
 			}
 		})
+	}
+}
+
+// TestCancellingDoesNotRaceASync is why the queue lock covers collection as well
+// as allocation.
+//
+// The hazard is narrow and it is the one that matters: a cancel reads an action
+// as "waiting", a sync collects it, and the removal then lands on something the
+// agent has already been handed — deleting an action that is about to be applied
+// and whose result will have nowhere to go. Whichever wins is fine; both winning
+// is not.
+func TestCancellingDoesNotRaceASync(t *testing.T) {
+	for range 40 {
+		s := open(t)
+		action, err := s.Enqueue("studio", protocol.OpRead, protocol.Args{PUID: 1}, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		var dropErr, sentErr error
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			dropErr = s.Drop(action.ID)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			sentErr = s.MarkSent([]protocol.ActionID{action.ID}, at)
+		}()
+		close(start)
+		wg.Wait()
+
+		if sentErr != nil {
+			t.Fatalf("MarkSent: %v", sentErr)
+		}
+
+		entry, err := s.Entry(action.ID)
+		switch {
+		case errors.Is(err, fault.ErrNotFound):
+			// The cancel won: it is gone, and it must not have been handed out.
+			if dropErr != nil {
+				t.Fatalf("the action is gone but the cancel reported %v", dropErr)
+			}
+		case err != nil:
+			t.Fatalf("Entry: %v", err)
+		default:
+			// The sync won: it is with the agent, and the cancel must have been
+			// refused rather than quietly doing nothing.
+			if entry.State != store.Sent {
+				t.Fatalf("the action survived in state %q", entry.State)
+			}
+			if !errors.Is(dropErr, fault.ErrConflict) {
+				t.Fatalf("the action went to the agent but the cancel reported %v", dropErr)
+			}
+		}
 	}
 }

@@ -83,20 +83,37 @@ func retryable(e Entry) error {
 	}
 }
 
-// Drop removes one settled action from the queue.
+// Drop removes one action from the queue.
 //
-// Only a settled one. An action still waiting to be collected, or collected and
-// not yet reported on, may be in flight at the agent this second; deleting it
-// here would leave the agent applying something the server has forgotten, and
-// then reporting a result for an action that no longer exists.
+// It covers two things somebody means by "get rid of this", and the difference
+// is only in what has already happened:
+//
+//   - **Cancelling.** An action still *waiting* has never left this machine. No
+//     agent has seen it, nothing has been attempted, and removing it means it
+//     simply never goes. There is nothing to be careful about.
+//   - **Forgetting.** A settled action is a record of something that already
+//     happened. Removing it discards the record, not the effect.
+//
+// The one state that refuses is `sent`: collected by a sync and not yet reported
+// on, so it may be at the agent this second. Deleting it would leave the agent
+// applying something the server has forgotten, and then reporting a result for an
+// action that no longer exists.
 //
 // Dropping what is already gone is quiet. The state asked for is the state in
-// place, and two browser tabs showing the same failed action must not turn the
-// second click into an error about something that already happened.
+// place, and two browser tabs showing the same row must not turn the second click
+// into an error about something that already happened.
 func (s *Store) Drop(id protocol.ActionID) error {
 	if err := id.Validate(); err != nil {
 		return err
 	}
+
+	// Read and remove under one lock, and MarkSent takes the same one. Without
+	// that, a cancel could see "waiting", a sync could collect the action, and
+	// the removal would land on something the agent had already been handed —
+	// which is the exact hazard the `sent` refusal below exists to prevent.
+	s.queue.Lock()
+	defer s.queue.Unlock()
+
 	entry, err := s.Entry(id)
 	if err != nil {
 		if errors.Is(err, fault.ErrNotFound) {
@@ -104,14 +121,10 @@ func (s *Store) Drop(id protocol.ActionID) error {
 		}
 		return err
 	}
-	if !entry.State.Settled() {
-		return fault.Conflict{Reason: "this action is still in flight; it can be dropped once the agent has reported on it"}
+	if entry.State == Sent {
+		return fault.Conflict{Reason: "this action has already gone to the agent, so it cannot be called back; " +
+			"wait for it to report, then decide what to do about the result"}
 	}
-
-	// The same lock Enqueue takes, so a drop cannot race a sequence number being
-	// chosen and land on a file another action is about to create.
-	s.seq.Lock()
-	defer s.seq.Unlock()
 
 	path := s.queuePath(entry.Action.Seq)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
