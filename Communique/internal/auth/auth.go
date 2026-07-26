@@ -571,6 +571,14 @@ func hashSession(cookie string) string {
 // It is deliberately not a token bucket: the thing worth slowing is *guessing*,
 // so the delay grows with consecutive failures and resets the moment one
 // succeeds. A legitimate operator who mistypes once notices nothing.
+//
+// That last sentence is a requirement, not a description of what falls out. The
+// first failure is recorded and imposes no wait; the delay starts from the second
+// consecutive one. Without that, one typo followed by an immediate retry — which is
+// what a phone does, where the keyboard is small and the password manager refills
+// the box for you — is refused, and the refusal is the first thing a new operator
+// meets. Guessing is unaffected: an attacker's second attempt is where the
+// exponential starts, and it doubles from there.
 type Limiter struct {
 	mu       sync.Mutex
 	attempts map[string]attempt
@@ -614,7 +622,13 @@ func (l *Limiter) Fail(source string, now time.Time) {
 
 	a := l.attempts[source]
 	a.failures++
-	delay := l.Base << min(a.failures-1, 16)
+	if a.failures < 2 {
+		// Recorded, so the next failure is the second — but no wait. One mistype
+		// costs nothing.
+		l.attempts[source] = a
+		return
+	}
+	delay := l.Base << min(a.failures-2, 16)
 	if delay > l.Max || delay <= 0 {
 		delay = l.Max
 	}

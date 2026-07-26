@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"orc/cq/internal/fault"
+	"orc/cq/internal/protocol"
 )
 
 // The login document is deliberately not the application. An unauthenticated
@@ -55,7 +56,7 @@ var loginPage = template.Must(template.New("login").Parse(`<!doctype html>
   <input id="password" name="password" type="password" autocomplete="current-password"
          autofocus required>
   <button type="submit">enter</button>
-  {{if .Failed}}<p class="bad">not authenticated</p>{{end}}
+  {{if .Message}}<p class="bad">{{.Message}}</p>{{end}}
 </form>
 `))
 
@@ -83,23 +84,70 @@ func (s *Server) getLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
-	s.renderLogin(w, r, false)
+	s.renderLogin(w, r, http.StatusOK, "")
 }
 
-func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, failed bool) {
+// renderLogin serves the password box, with a reason when there is one.
+//
+// The status travels with it so a client that reads statuses still learns what
+// happened, while the person at the keyboard gets a form they can use. Those are
+// not in tension: an HTML body with a 429 is a complete answer to both.
+func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, status int, message string) {
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; style-src "+styleHash+"; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if failed {
-		w.WriteHeader(http.StatusUnauthorized)
+	if status != http.StatusOK {
+		w.WriteHeader(status)
 	}
 	data := struct {
-		Style  template.CSS
-		Failed bool
-	}{Style: template.CSS(loginStyle), Failed: failed}
+		Style   template.CSS
+		Message string
+	}{Style: template.CSS(loginStyle), Message: message}
 	if err := loginPage.Execute(w, data); err != nil {
 		s.log.Warn("could not write the login page", "error", err)
 	}
+}
+
+// refuseLogin answers a login attempt that never reached the password check.
+//
+// Rate limiting and the origin check both refuse before `postLogin` runs, and both
+// used to answer with the API's JSON error — which, in a browser, replaces the login
+// form with `{"error":{...}}` and leaves somebody staring at a page with no way back
+// to the box they were typing in. It is the failure a phone hits first, because a
+// mistyped password there is followed by an immediate retry.
+//
+// So the shape of the answer follows the shape of the request, not the shape of the
+// error: a navigation gets the page, a fetch gets the JSON it can branch on.
+// The status is the same either way. A client that branches on statuses needs to
+// tell "wrong password" from "slow down" — 401 and 429 are that distinction, and
+// answering both as 401 while setting Retry-After says two things at once.
+func (s *Server) refuseLogin(w http.ResponseWriter, r *http.Request, status int, message string, err error) {
+	if navigating(r) {
+		s.renderLogin(w, r, status, message)
+		return
+	}
+	s.log.Info("login refused", "path", r.URL.Path, "status", status, "error", err)
+	s.write(w, r, status, protocol.NewAPIError(err))
+}
+
+// navigating reports whether this request is a browser loading a page, as opposed to
+// a program calling the API.
+//
+// Fetch metadata first, because the browser sets it itself and it answers exactly
+// this question. `Accept` is the fallback for clients that send none — and the test
+// is for html rather than against json, since a header that mentions neither is far
+// more likely to be curl than a browser.
+func navigating(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Mode") {
+	case "navigate":
+		return true
+	case "cors", "no-cors", "same-origin", "websocket":
+		return false
+	}
+	if r.Header.Get("Sec-Fetch-Dest") == "document" {
+		return true
+	}
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
 // postLogin exchanges a password for a session.
@@ -111,7 +159,7 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 
 	if err := r.ParseForm(); err != nil {
 		s.limiter.Fail(source, s.now())
-		s.renderLogin(w, r, true)
+		s.renderLogin(w, r, http.StatusBadRequest, "that form could not be read")
 		return
 	}
 	password := r.PostFormValue("password")
@@ -123,7 +171,7 @@ func (s *Server) postLogin(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, r, fault.Unauthenticated{})
 			return
 		}
-		s.renderLogin(w, r, true)
+		s.renderLogin(w, r, http.StatusUnauthorized, "not authenticated")
 		return
 	}
 

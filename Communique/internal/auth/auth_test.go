@@ -483,10 +483,19 @@ func TestLimiterSlowsRepeatedFailures(t *testing.T) {
 		t.Fatalf("a fresh source should be allowed")
 	}
 
+	// One failure costs nothing. A password typed wrong once on a phone is followed
+	// by an immediate retry, and refusing that is how the guard meets an operator
+	// before a guesser ever does.
+	l.Fail("1.2.3.4", now)
+	if ok, _ := l.Allow("1.2.3.4", now); !ok {
+		t.Errorf("one mistype should not impose a wait")
+	}
+
+	// The second consecutive failure is where slowing starts.
 	l.Fail("1.2.3.4", now)
 	ok, wait := l.Allow("1.2.3.4", now)
 	if ok {
-		t.Errorf("a source that just failed should wait")
+		t.Errorf("a second consecutive failure should wait")
 	}
 	if wait <= 0 {
 		t.Errorf("wait = %v, want a positive delay", wait)

@@ -489,9 +489,21 @@ func TestLoginRateLimitSlowsGuessing(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status %d, want 401", w.Code)
 	}
+
+	// One mistype costs nothing: the right password straight after it works. This
+	// is the case the guard is *not* for, and the one a person meets first — on a
+	// phone especially, where the retry is immediate.
+	if got := h.do(t, "POST", "/login", "password="+password, form); got.Code != http.StatusSeeOther {
+		t.Fatalf("a correct password after one mistype was refused: status %d", got.Code)
+	}
+
+	// Guessing is what is slowed. Two consecutive failures, and the next attempt
+	// waits — even with the right password, since a guesser would have one too.
+	h.do(t, "POST", "/login", "password=wrong", form)
+	h.do(t, "POST", "/login", "password=wrong", form)
 	w = h.do(t, "POST", "/login", "password="+password, form)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("a second attempt was not slowed: status %d", w.Code)
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("repeated guessing was not slowed: status %d", w.Code)
 	}
 	if w.Header().Get("Retry-After") == "" {
 		t.Errorf("a rate-limited response should say how long to wait")
@@ -580,5 +592,102 @@ func TestTheFaviconIsServedToAStranger(t *testing.T) {
 	body := rec.Body.Bytes()
 	if len(body) < 4 || body[0] != 0 || body[1] != 0 || body[2] != 1 || body[3] != 0 {
 		t.Errorf("what was served is not an icon (first bytes %v)", body[:min(4, len(body))])
+	}
+}
+
+// TestABrowserNeverGetsRawJSONFromTheLoginForm.
+//
+// Both refusals on the login path — rate limiting and the origin check — happen in
+// middleware, before `postLogin` runs, and both used to answer with the API's JSON
+// error. In a browser that replaces the password box with `{"error":{…}}`, leaving
+// somebody with nothing to type into and no way back except editing the URL.
+//
+// It is a phone that meets this first: the keyboard is small, the retry after a
+// mistype is immediate, and the password manager will refill and resubmit for you.
+func TestLoginRefusalsAreThePageForABrowser(t *testing.T) {
+	h := newHarness(t)
+	// What a browser sends when a form is submitted: fetch metadata saying this is
+	// a navigation, and an Accept that asks for a document.
+	browser := func(r *http.Request) {
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		r.Header.Set("Sec-Fetch-Mode", "navigate")
+		r.Header.Set("Sec-Fetch-Dest", "document")
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+	}
+
+	// Guess until the limiter refuses.
+	var w *httptest.ResponseRecorder
+	for range 3 {
+		w = h.do(t, "POST", "/login", "password=wrong", browser)
+	}
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429 — the limiter should have refused by now", w.Code)
+	}
+	body := w.Body.String()
+	if strings.HasPrefix(strings.TrimSpace(body), "{") {
+		t.Errorf("a browser was answered with raw JSON:\n%s", body)
+	}
+	// The form is still there, so the next attempt is a thing somebody can make.
+	if !strings.Contains(body, `type="password"`) {
+		t.Errorf("the refusal did not leave a password box:\n%s", body)
+	}
+	// And it says how long, since this is the one refusal meant to be retried.
+	if !strings.Contains(body, "try again in") {
+		t.Errorf("the refusal does not say how long to wait:\n%s", body)
+	}
+
+	// A cross-site form post is refused the same way, for the same reason.
+	h.now = at.Add(time.Hour)
+	w = h.do(t, "POST", "/login", "password=wrong", func(r *http.Request) {
+		browser(r)
+		r.Header.Set("Sec-Fetch-Site", "cross-site")
+	})
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("a cross-site login post gave %d, want 401", w.Code)
+	}
+	if strings.HasPrefix(strings.TrimSpace(w.Body.String()), "{") {
+		t.Errorf("a cross-site refusal was raw JSON:\n%s", w.Body.String())
+	}
+}
+
+// And a program still gets JSON, with a status it can branch on: 429 for "slow
+// down" is a different instruction from 401 for "wrong password".
+func TestLoginRefusalsStayJSONForAnAPIClient(t *testing.T) {
+	h := newHarness(t)
+	api := func(r *http.Request) {
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("Accept", "application/json")
+		r.Header.Set("Sec-Fetch-Mode", "cors")
+	}
+
+	var w *httptest.ResponseRecorder
+	for range 3 {
+		w = h.do(t, "POST", "/login", "password=wrong", api)
+	}
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("status %d, want 429", w.Code)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(w.Body.String()), "{") {
+		t.Errorf("an API client did not get JSON:\n%s", w.Body.String())
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Errorf("no Retry-After on a rate-limited response")
+	}
+}
+
+// TestOneMistypeCostsNothing. The limiter's whole design note says an operator who
+// mistypes once notices nothing; before this it was refused on the very next attempt,
+// which is what a phone does within a second of getting it wrong.
+func TestAMistypeDoesNotLockYouOut(t *testing.T) {
+	h := newHarness(t)
+	form := func(r *http.Request) { r.Header.Set("Content-Type", "application/x-www-form-urlencoded") }
+
+	if got := h.do(t, "POST", "/login", "password=wrong", form); got.Code != http.StatusUnauthorized {
+		t.Fatalf("a wrong password gave %d, want 401", got.Code)
+	}
+	// Immediately, on the same clock: no waiting, no second page to get past.
+	if got := h.do(t, "POST", "/login", "password="+password, form); got.Code != http.StatusSeeOther {
+		t.Errorf("the correct password straight after a mistype gave %d, want 303", got.Code)
 	}
 }

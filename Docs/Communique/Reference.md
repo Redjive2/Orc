@@ -30,6 +30,17 @@ cq <command> <args...>
 `cq serve` refuses to start until a password and a token are set. Nothing on the
 site is visible without logging in.
 
+Repeated login failures from one source are slowed, exponentially and per source,
+resetting the moment one succeeds. The *first* failure imposes no wait: a mistyped
+password followed straight away by the right one has to work, because that is what
+a phone does. The second consecutive failure is where the delay starts.
+
+Every refusal on the login path answers in the shape of the request. A browser
+submitting the form gets the login page back with the reason on it — including
+when it was refused for rate limiting or origin before the password was even
+looked at — and a program calling the API gets JSON and a status it can branch on:
+401 for a wrong password, 429 with `Retry-After` for a wait.
+
 `cq sync --nudge` is what Mailman and Macmuffin call after every action that
 changed something. It coalesces, never blocks its caller, and never fails it —
 an agent parsing `mailman send` never learns cq exists. `--watch` is the backstop

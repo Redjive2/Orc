@@ -420,6 +420,18 @@ func (s *Server) checkOrigin(next http.Handler) http.Handler {
 		if s.crossSite(r) {
 			s.log.Warn("cross-site request refused", "method", r.Method, "path", r.URL.Path,
 				"origin", r.Header.Get("Origin"), "site", r.Header.Get("Sec-Fetch-Site"))
+			if r.URL.Path == "/login" {
+				// Refused before the password was even looked at, and answered as
+				// the page rather than as JSON: somebody submitting the login form
+				// is looking at a browser window, whatever the reason for the
+				// refusal.
+				// Still 401, as every other cross-site refusal is: only the
+				// *shape* of the answer changes here, not what it means.
+				s.refuseLogin(w, r, http.StatusUnauthorized,
+					"that did not come from this site — open the page again and retry",
+					fault.Unauthenticated{Reason: "cross-site request"})
+				return
+			}
 			s.fail(w, r, fault.Unauthenticated{Reason: "cross-site request"})
 			return
 		}
@@ -461,9 +473,16 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 		}
 		source := clientIP(r)
 		if ok, wait := s.limiter.Allow(source, s.now()); !ok {
-			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())+1))
+			seconds := int(wait.Seconds()) + 1
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", seconds))
 			s.log.Warn("login attempt refused by rate limit", "source", source, "wait", wait)
-			s.fail(w, r, fault.Unauthenticated{Reason: "too many attempts"})
+			// The page, with the wait named. A refusal that removes the password box
+			// leaves somebody with nothing to do but guess at the URL — and this is
+			// the one refusal that is *meant* to be followed by another attempt.
+			s.refuseLogin(w, r, http.StatusTooManyRequests,
+				fmt.Sprintf("too many attempts — try again in %d second%s",
+					seconds, map[bool]string{true: "", false: "s"}[seconds == 1]),
+				fault.Unauthenticated{Reason: "too many attempts"})
 			return
 		}
 		next.ServeHTTP(w, r)
