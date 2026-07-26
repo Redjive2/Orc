@@ -375,7 +375,16 @@ func (w *watcher) draw() error {
 	// Home the cursor and clear, then draw. Every line ends \r\n because the
 	// terminal is raw: without the carriage return each row would start where the
 	// last one ended.
-	_, err = io.WriteString(w.app.Stdout, "\x1b[H\x1b[2J"+strings.ReplaceAll(out, "\n", "\r\n"))
+	//
+	// Except the last one, which ends nothing. The pane is exactly as tall as the
+	// terminal, so a newline after its final row asks for a row that is not there
+	// and the terminal makes one by scrolling everything up — taking the header off
+	// the top of the screen. The next draw then homes the cursor to a screen that
+	// has already moved, and the top of the pane is a line of the previous frame.
+	// One byte, and it is the difference between a stable screen and one that eats
+	// its own header.
+	body := strings.ReplaceAll(strings.TrimSuffix(out, "\n"), "\n", "\r\n")
+	_, err = io.WriteString(w.app.Stdout, "\x1b[H\x1b[2J"+body)
 	return err
 }
 

@@ -28,6 +28,27 @@ const (
 	KeyBack    = 0x7f
 	KeyBackAlt = 0x08
 	KeyKill    = 0x15 // ^U clears the line, as a shell does
+	KeyEscape  = 0x1b // the start of an arrow key, a function key, a paste marker
+)
+
+// Where a terminal's escape sequence has got to.
+//
+// A key that is not a character arrives as several bytes: ESC, then usually `[`,
+// then the ones that say which key. Only the ESC is a control character, so
+// dropping control bytes and keeping the rest left the tail of every arrow key in
+// the buffer as text — an up arrow composed `[A`. That was worse than untidy: it
+// made the buffer non-empty, and a non-empty buffer turns the first ^\ d into a
+// warning about unsent text rather than a detach. Somebody who pressed an arrow key
+// once could not leave on the first try, and what they had "typed" was two
+// characters they never typed.
+//
+// The state is carried between calls because a terminal is free to split a sequence
+// across reads, and a half-consumed one that reset would put its own tail on screen.
+const (
+	escNone = iota // ordinary text
+	escStart       // ESC seen; the next byte says what kind
+	escCSI         // ESC [ … — runs until a byte in the final range
+	escSS3         // ESC O x — exactly one more byte
 )
 
 // DetachKey is what follows ^\ to detach. It matches the raw proxy's sequence, so one
@@ -66,6 +87,7 @@ type Composer struct {
 	armed   bool // ^\ seen; the next key decides
 	full    bool // the limit was hit, so the pane can say so
 	dropped bool // something unprintable was dropped
+	esc     int  // part-way through a terminal escape sequence
 }
 
 // Text is what has been composed.
@@ -101,6 +123,14 @@ func (c *Composer) Feed(in []byte) Intent {
 		}
 		in = in[size:]
 
+		// Mid-sequence bytes are the terminal talking about a key, not text. They
+		// are swallowed before anything else looks at them, so a `d` inside an
+		// escape sequence cannot be read as the second half of a detach.
+		if c.esc != escNone {
+			c.esc = escaped(c.esc, r)
+			continue
+		}
+
 		if c.armed {
 			c.armed = false
 			if r == DetachKey {
@@ -114,6 +144,8 @@ func (c *Composer) Feed(in []byte) Intent {
 		}
 
 		switch r {
+		case KeyEscape:
+			c.esc = escStart
 		case KeyDetach:
 			c.armed = true
 		case KeySend:
@@ -140,6 +172,37 @@ func (c *Composer) Feed(in []byte) Intent {
 }
 
 // insert adds one rune, refusing what should not reach a session.
+// escaped advances the escape-sequence state by one rune and says where it is now.
+//
+// It is deliberately generous about what ends a sequence. Guessing an end too early
+// puts a byte or two of terminal chatter in the buffer, which is what this exists to
+// stop; guessing too late swallows a character somebody typed. Both are small, and
+// the shapes below cover every key a terminal sends for the arrows, Home, End, the
+// function keys, and bracketed paste's markers.
+func escaped(state int, r rune) int {
+	switch state {
+	case escStart:
+		switch r {
+		case '[':
+			return escCSI
+		case 'O':
+			return escSS3
+		}
+		// ESC followed by anything else is a two-byte sequence — alt-x on most
+		// terminals — and it is over.
+		return escNone
+	case escCSI:
+		// Parameters and intermediates run 0x20–0x3f; the byte that ends it is
+		// 0x40–0x7e. `~` ends the arrows' longer cousins and paste's markers.
+		if r >= 0x40 && r <= 0x7e {
+			return escNone
+		}
+		return escCSI
+	default: // escSS3: exactly one byte says which key.
+		return escNone
+	}
+}
+
 func (c *Composer) insert(r rune) {
 	// Control characters other than newline are dropped rather than shown. A
 	// terminal sends them constantly — arrow keys arrive as escape sequences —

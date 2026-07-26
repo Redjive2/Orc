@@ -116,6 +116,38 @@ func TestDrawRendersTheFeed(t *testing.T) {
 	}
 }
 
+// The pane is exactly as tall as the terminal, so its last row must not end in a
+// newline.
+//
+// A newline after the final row asks for a row that is not there, and the terminal
+// makes one by scrolling everything up — which takes the header off the top of the
+// screen. The next draw homes the cursor to a screen that has already moved, so the
+// top of the pane shows a line of the frame before it. One byte, and it is the
+// difference between a stable screen and one that eats its own header.
+func TestTheLastRowDoesNotScrollTheScreen(t *testing.T) {
+	for _, height := range []int{10, 20, 24, 50} {
+		var out bytes.Buffer
+		w := watcherFor(t, &out)
+		w.height = height
+
+		if err := w.draw(); err != nil {
+			t.Fatal(err)
+		}
+
+		got := out.String()
+		if strings.HasSuffix(got, "\n") {
+			t.Errorf("height %d: the screen ends in a newline, so the terminal scrolls "+
+				"a row and the header goes with it", height)
+		}
+		// And it is still a full pane: the count is rows minus the one break the
+		// last row does not need.
+		if breaks := strings.Count(got, "\n"); breaks != height-1 {
+			t.Errorf("height %d: %d line breaks, want %d — the pane no longer fills "+
+				"the terminal", height, breaks, height-1)
+		}
+	}
+}
+
 // A feed that will not read is worth saying on the screen rather than tearing the
 // view down: the session is still running, and the operator may want --direct.
 func TestABrokenFeedKeepsThePane(t *testing.T) {
