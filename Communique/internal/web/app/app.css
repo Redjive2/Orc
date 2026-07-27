@@ -439,7 +439,6 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .chart { margin: .5rem 0 .9rem; }
 .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 2ch; }
 .chart-label { color: var(--text); }
-.chart-peak { white-space: nowrap; }
 .chart-bars {
   display: flex; align-items: flex-end; gap: 1px;
   height: 5.5rem; margin: .25rem 0 .15rem;
@@ -451,7 +450,14 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
    says — four scattered minutes drawn side by side are a picture of continuous
    work assembled out of a quiet afternoon. */
 .chart-bars .bar.empty { height: 2px; background: var(--frame); }
-.chart-axis { display: flex; justify-content: space-between; font-size: .85em; }
+/* A bar past the ceiling is cut off at the top rather than drawn as an ordinary
+   maximum. Without the mark, a scale set to exclude a spike would restate the
+   spike as the largest thing on the chart — which is the one thing the person who
+   set it was trying to stop it doing. */
+.chart-bars .bar.over { border-top: 3px dotted var(--bg); }
+.chart-head .quiet { padding: 0 .5ch; }
+.chart-scale { margin-left: auto; white-space: nowrap; }
+.chart-axis { display: flex; justify-content: space-between; gap: 2ch; font-size: .85em; }
 
 .work { display: grid; gap: .1rem; margin: .3rem 0; }
 .work-row {

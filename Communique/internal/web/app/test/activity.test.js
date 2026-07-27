@@ -211,6 +211,45 @@ test("a bar has a real height and a colour that runs with it", () => {
   assert.ok(Math.max(...hues) > 0, "a smaller bar is not further towards green");
 });
 
+// Fitting to the peak is the right default and a poor fixed rule: it re-scales on
+// every sync, so the same height means a different number a minute later, and two
+// windows of one quantity cannot be put side by side.
+test("a set ceiling is what bars are drawn against, not the peak", () => {
+  const state = withSeries({ ember: busy });
+  // The peak of "new tokens" across `busy` is 500; half that clips the taller bar.
+  const bars = slots(view.activity({ ...state, chartScale: { "new tokens": 250 } }, null))
+    .filter((b) => b.className.startsWith("bar") && b.className !== "bar empty");
+  const heights = bars.map((b) => Number(/height:([\d.]+)%/.exec(b.attributes.get("style"))[1]));
+  // 200 of 250 is 80%, and 500 is clipped to the ceiling rather than drawn past it.
+  assert.ok(heights.includes(100), `heights were ${heights}`);
+  assert.ok(heights.some((n) => n > 75 && n < 85), `heights were ${heights}`);
+});
+
+// A scale set to exclude a spike must not restate the spike as the largest ordinary
+// thing on the chart, which is the one thing the person who set it was stopping.
+test("a bar over the ceiling is marked as clipped, and the chart says so", () => {
+  const drawn = view.activity({ ...withSeries({ ember: busy }), chartScale: { turns: 3 } }, null);
+  // Across every chart, because only the one that was given a ceiling should have
+  // a clipped bar and this is what checks the others were left alone.
+  const over = drawn.flatMap((n) => all(n, (x) => (x.className || "").includes("bar over")));
+  assert.equal(over.length, 1, "expected exactly the one bar past the ceiling");
+  assert.match(text(drawn), /clipped at 3 — peak was 5/);
+});
+
+test("a ceiling can be set per chart and offered from the chart", () => {
+  let asked = null;
+  const drawn = view.activity(withSeries({ ember: busy }), {
+    setChartScale: (label, ceiling, peak) => { asked = { label, ceiling, peak }; },
+    poke() {}, pace() {}, paceSync() {}, setActivityWindow() {},
+  });
+  const buttons = drawn.flatMap((n) => all(n, (x) => x.tagName === "BUTTON" && x.textContent === "scale…"));
+  assert.equal(buttons.length, 3, "one control per chart");
+  for (const fn of buttons[2].listeners.click) fn({});
+  // Opened on this chart, and told what the peak is, so the form can say what a
+  // ceiling would be relative to.
+  assert.deepEqual(asked, { label: "turns", ceiling: undefined, peak: 5 });
+});
+
 // A period this build cannot read is not a reason to lay out a hundred thousand
 // elements, or none: the server picks it, and the two can disagree.
 test("a series with no period draws no chart rather than an infinite one", () => {

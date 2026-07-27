@@ -53,6 +53,11 @@ let state = {
   // form that sets it: it is the third of the three cycles the tab reports, and one
   // nobody could see without opening a dialog was one they could not check.
   syncPace: null,
+  // A ceiling per chart, by label. Empty means fit to the peak, which is the right
+  // default and a poor fixed rule: it re-scales on every sync, so the same height
+  // means a different number one minute later, and two windows of one quantity
+  // cannot be put side by side.
+  chartScale: {},
   // Which messages are ticked, as keys rather than as messages: a selection
   // has to survive the redraw a sync causes, and the message objects are
   // replaced wholesale by every sync while their keys are not.
@@ -513,6 +518,29 @@ const actions = {
   async setActivityWindow(window) {
     set({ activityWindow: window });
     await refresh();
+  },
+  // The y-axis ceiling, per chart. Unlike the window this is not a fetch — the
+  // values are already here and only the scale they are drawn against changes, so
+  // it redraws without going near the server.
+  //
+  // Anything at all is allowed above zero, including a ceiling under the peak: a
+  // chart of one enormous spike and forty ordinary minutes is unreadable at the
+  // spike's scale, and clipping it to see the forty is the reason somebody opens
+  // this. Bars past the ceiling are drawn clipped and marked rather than at full
+  // height, so the scale never quietly restates the number it was set to exclude.
+  async setChartScale(label, ceiling, peak) {
+    const got = await dialog.ask({
+      title: `scale ${label}`,
+      note: `the peak in this window is ${peak.toLocaleString()}. ` +
+        "0 fits the chart to whatever the peak is, which is the default and re-scales " +
+        "on every sync. anything else holds still, so two windows can be compared — " +
+        "bars over it are drawn clipped and say so.",
+      submit: "set it",
+      fields: [{ name: "top", label: "ceiling", kind: "number", value: ceiling || 0, min: 0 }],
+    });
+    if (!got) return;
+    const top = Number(got.top);
+    set({ chartScale: { ...state.chartScale, [label]: Number.isFinite(top) && top > 0 ? top : 0 } });
   },
   // Pacing: how often a cycle looks, for the fleet or for one agent.
   //

@@ -205,11 +205,13 @@ function over(state, series, actions) {
 
   const all = names.flatMap((name) => series.identities[name] || []);
   const slots = axis(state.activityWindow, series.period, all);
+  const drawn = (label, of) =>
+    chart(label, slots, all, of, series.period, (state.chartScale || {})[label], actions);
   return [
     head,
-    chart("new tokens", slots, all, (b) => tok(b).input + tok(b).output + tok(b).cache_create, series.period),
-    chart("cache reads", slots, all, (b) => tok(b).cache_read, series.period),
-    chart("turns", slots, all, (b) => b.turns || 0, series.period),
+    drawn("new tokens", (b) => tok(b).input + tok(b).output + tok(b).cache_create),
+    drawn("cache reads", (b) => tok(b).cache_read),
+    drawn("turns", (b) => b.turns || 0),
     h("h3", {}, "what it read and wrote"),
     ...work(names, series),
   ];
@@ -308,35 +310,61 @@ function into(slots, buckets, of) {
 // judge against its neighbours; the same bar in green against a red one is not. It
 // runs green through amber to red because that is what the reading means here —
 // spend — and nobody has to be told which end is which.
-function chart(label, slots, buckets, of, period) {
+function chart(label, slots, buckets, of, period, ceiling, actions) {
   if (slots.length === 0) return null;
   const values = into(slots, buckets, of);
   const peak = Math.max(...values);
   const step = slots.length > 1 ? slots[1] - slots[0] : span(period);
+  // The ceiling is whatever was set for this chart, and the peak when nothing was.
+  // Fitting to the peak is the right default and the wrong fixed rule: it re-scales
+  // on every sync, so a chart watched over an afternoon silently changes what its
+  // height means, and two charts of the same quantity over different windows cannot
+  // be compared at all.
+  const top = ceiling > 0 ? ceiling : peak;
 
   const bars = values.map((v, i) => {
-    const share = peak > 0 ? v / peak : 0;
+    const share = top > 0 ? v / top : 0;
+    // A bar past the ceiling is clipped and marked. Drawing it at full height like
+    // an ordinary maximum would be the scale quietly lying about the number it was
+    // set to exclude.
+    const over = v > top;
     return h("span", {
-      class: v > 0 ? "bar" : "bar empty",
+      class: `bar${v > 0 ? "" : " empty"}${over ? " over" : ""}`,
       // Every bar says its own slot and its own number. There is no room for an
       // axis label per column and no honest way to leave the reading out — a
       // shape without figures is a mood.
-      title: `${when(slots[i], step)} · ${number(v)}`,
+      title: `${when(slots[i], step)} · ${number(v)}${over ? ` (over the ${number(top)} ceiling)` : ""}`,
       // A floor under any bar that is not zero, because the interesting minute on
       // a chart with one huge peak is usually one of the small ones, and a bar
       // rounded to nothing is indistinguishable from an idle slot. An empty slot
       // carries no inline style at all and takes its sliver from the sheet.
-      style: v > 0 ? `height:${Math.max(4, share * 100).toFixed(1)}%;background:${heat(share)}` : "",
+      style: v > 0
+        ? `height:${Math.min(100, Math.max(4, share * 100)).toFixed(1)}%;background:${heat(share)}`
+        : "",
     });
   });
 
   return h("div", { class: "chart" },
     h("div", { class: "chart-head" },
       h("span", { class: "chart-label" }, label),
-      h("span", { class: "chart-peak muted" }, `peak ${number(peak)} per ${every(step)}`)),
+      h("span", { class: "chart-scale muted" },
+        ceiling > 0 ? `top ${number(ceiling)}` : `peak ${number(peak)}`,
+        ` per ${every(step)}`),
+      actions
+        ? h("button", {
+          class: "quiet",
+          onclick: () => actions.setChartScale(label, ceiling, peak),
+        }, "scale…")
+        : null),
     h("div", { class: "chart-bars" }, ...bars),
     h("div", { class: "chart-axis muted" },
       h("span", {}, when(slots[0], step)),
+      // The ceiling belongs on the axis and not only in the heading: it is the one
+      // number that says what a full-height bar means, and a chart read without it
+      // is a shape.
+      h("span", {}, ceiling > 0 && peak > ceiling
+        ? `clipped at ${number(ceiling)} — peak was ${number(peak)}`
+        : ""),
       h("span", {}, when(slots[slots.length - 1], step))));
 }
 
