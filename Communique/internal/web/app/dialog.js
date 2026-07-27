@@ -165,7 +165,15 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
       // then looking back up and working out which of five boxes it meant — and
       // with several things wrong it could only ever name one of them.
       const problem = h("p", { class: "field-error" });
-      const row = { field: f, input, problem, marked: false };
+      // What the value will actually be, when that is not what was typed.
+      //
+      // A name may be written with capitals and spaces now, and is sent
+      // lower-cased with dashes. That is a kindness only if it is visible: a task
+      // somebody called "Fix The Parser" appears in every listing afterwards as
+      // `fix-the-parser`, and finding that out later — from a board that seems to
+      // have renamed it — is worse than the refusal this replaced.
+      const becomes = h("p", { class: "field-becomes" });
+      const row = { field: f, input, problem, becomes, marked: false };
       inputs.set(f.name, row);
 
       // verify marks this one field, and says whether it is wrong.
@@ -184,24 +192,52 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
         return bad;
       };
       row.verify = verify;
+      // bad is the same question asked without marking anything, for the submit
+      // button — which has to know whether the form is sound on every keystroke,
+      // and must not turn the whole sheet red to find out.
+      row.bad = () => Boolean(fault(f, input));
+
+      // showBecomes draws the "queued as" line, and nothing when the value goes
+      // through unchanged — which is the overwhelming majority of the time, and a
+      // line saying so on every field would be noise standing in for information.
+      const tidier = check.tidierOf(f.check);
+      const showBecomes = () => {
+        const raw = String(input.value ?? "").trim();
+        const as = tidier ? tidier(raw) : raw;
+        mount(becomes, tidier && as !== "" && as !== raw && !fault(f, input)
+          ? h("span", {}, `queued as “${as}”`)
+          : null);
+      };
+      row.showBecomes = showBecomes;
 
       // When to complain, which is most of whether this is help or nagging.
       //
-      // Not while somebody is first typing: a name is invalid for as long as it
-      // is half-written, and a box that turns red on the first keystroke is a box
-      // that is red the whole time it is being filled in. So the first word comes
-      // when they leave the field — and after that, on every keystroke, so the
-      // message goes away as it is fixed rather than sitting there until the next
-      // attempt to submit.
-      input.addEventListener("blur", () => { if (String(input.value ?? "") !== "") verify(); });
-      input.addEventListener("input", () => { if (row.marked) verify(); });
-      input.addEventListener("change", () => { if (row.marked) verify(); });
+      // As it is typed, once there is something in the box. The earlier rule waited
+      // for the field to be left, on the reasoning that a half-written name is
+      // invalid and a box that reddens on the first keystroke stays red the whole
+      // time. That is true of a length rule and false of these: every prefix of a
+      // good name is a good name, so the only way to see the message while typing
+      // one is to type a character that will never be allowed — which is exactly
+      // when somebody should be told, rather than four fields later.
+      //
+      // An *empty* box is still left alone until it is left or submitted. A sheet
+      // that opens with every required field already marked has told the reader
+      // nothing except that they have not filled it in yet.
+      const live = () => {
+        if (String(input.value ?? "").trim() !== "" || row.marked) verify();
+        showBecomes();
+        settle();
+      };
+      input.addEventListener("blur", () => { if (String(input.value ?? "") !== "") verify(); settle(); });
+      input.addEventListener("input", live);
+      input.addEventListener("change", live);
 
       return h("label", { class: "field" },
         h("span", {}, f.label),
         input,
         f.hint ? h("span", { class: "muted hint" }, f.hint) : null,
         problem,
+        becomes,
         ...extras);
     });
 
@@ -213,7 +249,7 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
     // means a form with three problems is submitted three times, each attempt
     // revealing one more — and the third refusal reads as the site being broken
     // rather than as the form having said what it wanted all along.
-    const check = () => {
+    const inspect = () => {
       const out = {};
       const problems = [];
       for (const [name, row] of inputs) {
@@ -226,8 +262,28 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
       return problems.length > 0 ? { problems } : { values: out };
     };
 
+    // The button, held out of `go` so `settle` can reach it.
+    //
+    // aria-disabled rather than disabled, deliberately. A `disabled` button cannot
+    // be focused, is skipped by the tab order, and announces nothing — so somebody
+    // who cannot see the four red fields gets a form with no way forward and no
+    // explanation. This one stays reachable and still refuses: pressing it marks
+    // every problem and moves the cursor to the first, which is the answer to
+    // "why can I not queue this?" rather than a wall.
+    const submitButton = h("button", { type: "submit", class: danger ? "danger" : "" }, submit);
+
+    // settle keeps the button in step with the form, on every keystroke.
+    const settle = () => {
+      let bad = false;
+      for (const [, row] of inputs) {
+        if (row.bad()) { bad = true; break; }
+      }
+      submitButton.setAttribute("aria-disabled", bad ? "true" : "false");
+      submitButton.classList.toggle("off", bad);
+    };
+
     const go = () => {
-      const got = check();
+      const got = inspect();
       if (got.problems) {
         // A summary only when there is more than one, and never instead of the
         // messages themselves: with a single problem the line beside the box is
@@ -240,6 +296,7 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
         // rather than told that something, somewhere, is wrong.
         const first = got.problems[0].input;
         if (typeof first.focus === "function") first.focus();
+        settle();
         return;
       }
       mount(trouble);
@@ -255,9 +312,14 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
       ...rows,
       trouble,
       h("div", { class: "controls" },
-        h("button", { type: "submit", class: danger ? "danger" : "" }, submit),
+        submitButton,
         h("button", { type: "button", class: "quiet", onclick: () => done(null) }, "cancel"),
         h("span", { class: "muted" }, "esc cancels")));
+
+    // Once at the start, so a sheet whose defaults are already sound opens with a
+    // live button and one that needs filling in opens saying so.
+    settle();
+    for (const [, row] of inputs) row.showBecomes();
 
     return {
       elements: [h("h2", {}, title), note ? h("p", { class: "muted" }, note) : null, form],
@@ -366,5 +428,8 @@ function value(field, input) {
   const raw = String(input.value ?? "").trim();
   if (field.kind === "number") return Number.parseInt(raw, 10);
   if (field.kind === "choice" && /^-?[0-9]+$/.test(raw)) return Number.parseInt(raw, 10);
-  return raw;
+  // A name goes as the tools spell it, not as it was typed. The sheet has already
+  // said so under the box; this is where it becomes true.
+  const tidier = check.tidierOf(field.check);
+  return tidier ? tidier(raw) : raw;
 }

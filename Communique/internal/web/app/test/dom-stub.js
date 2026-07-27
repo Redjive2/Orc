@@ -41,6 +41,24 @@ class Element extends Node {
     this.className = "";
     this.listeners = {};
   }
+  // classList, enough of it for the application: the toggle a dialog uses to dim
+  // a submit that will not go yet, and the reads a test does to see whether it
+  // did. Backed by className, so a stub element answers the same question two
+  // ways and cannot answer it twice differently.
+  get classList() {
+    const el = this;
+    const parts = () => el.className.split(/\s+/).filter(Boolean);
+    return {
+      contains: (c) => parts().includes(c),
+      add(c) { if (!parts().includes(c)) el.className = [...parts(), c].join(" "); },
+      remove(c) { el.className = parts().filter((p) => p !== c).join(" "); },
+      toggle(c, on) {
+        const want = on === undefined ? !parts().includes(c) : Boolean(on);
+        if (want) this.add(c); else this.remove(c);
+        return want;
+      },
+    };
+  }
   setAttribute(k, v) { this.attributes.set(k, String(v)); }
   getAttribute(k) { return this.attributes.has(k) ? this.attributes.get(k) : null; }
   removeAttribute(k) { this.attributes.delete(k); }

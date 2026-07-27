@@ -39,11 +39,35 @@ const RESERVED_MAILBOX = new Set([".", "..", "all", "any", "none", "system", "ma
 const RESERVED_LABEL = new Set([".", "..", "all", "any", "none",
   "identity", "role", "permission", "authority"]);
 
+// tidy is what a typed name becomes before anybody judges it.
+//
+// The rule underneath allows lower-case letters, digits, and `. _ -`, and that is
+// not negotiable: these names are directory names, socket paths, and words in a
+// command line on the agent's machine. What *is* negotiable is whether somebody
+// has to type them that way. Two of the refusals were pure friction —
+//
+//   - a capital, which every tool downstream lower-cases anyway, so refusing it
+//     was refusing something that would have worked;
+//   - a space, which is how a person naturally writes "fix the parser" and which
+//     `-` spells for a machine.
+//
+// — so both are absorbed here rather than reported, and the sheet shows what the
+// name will be. Everything else is still refused, and named: turning `%` into
+// something silently would be guessing at what somebody meant.
+//
+// Length is preserved deliberately. One space becomes one dash rather than a run
+// of them collapsing, so the position in a message about the *next* character
+// still counts to the same place in what was typed. `a  b` becoming `a--b` is
+// valid and is what it looks like.
+export function tidy(raw) {
+  return String(raw ?? "").trim().toLowerCase().replace(/\s/g, "-");
+}
+
 // name is the shared half of both rules. `what` names the kind of thing for the
 // message, because "name is reserved" without saying what sort of name leaves
 // somebody guessing which of the two sets they fell into.
 function name(raw, what, reserved) {
-  const s = String(raw ?? "").trim().toLowerCase();
+  const s = tidy(raw);
 
   if (s === "") return `${what} cannot be empty`;
   // Checked before anything else and against the raw spelling, as ParseName does:
@@ -64,8 +88,7 @@ function name(raw, what, reserved) {
     for (let i = 0; i < chars.length; i++) {
       const c = chars[i];
       if (!/[a-z0-9._-]/.test(c)) {
-        const shown = c === " " ? "a space" : `“${c}”`;
-        return `${what} has ${shown} at position ${i + 1}; use letters, digits, and . _ -`;
+        return `${what} has “${c}” at position ${i + 1}; use letters, digits, and . _ -`;
       }
     }
     return `${what} must start with a letter or digit`;
@@ -178,6 +201,28 @@ export function paths(raw, what = "the paths") {
   return "";
 }
 
+// segment checks one name in the library tree: a file or a folder, not a path.
+//
+// Mirrors protocol.checkPath, which the server applies to the whole path this
+// ends up part of. Spaces and capitals are *not* touched here, unlike a name: a
+// file is a file, `Reference.md` is its name, and there is no downstream tool
+// that wants it lower-cased.
+//
+// What it refuses is the separator, because the box asks for a name and a value
+// with a `/` in it silently makes directories, and `.` and `..`, which name
+// somewhere other than a new file.
+export function segment(raw, what = "the name") {
+  const s = String(raw ?? "").trim();
+  if (s === "") return `${what} cannot be empty`;
+  if (s === "." || s === "..") return `${what} cannot be “${s}”`;
+  if (s.includes("/") || s.includes("\\")) {
+    return `${what} cannot hold a separator; it names one file in the folder you are in`;
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(s)) return `${what} has a control character in it`;
+  return "";
+}
+
 // nonempty is the check a field with no syntax of its own still wants: a subject,
 // a description, a line of prose.
 export function nonempty(raw, what = "it") {
@@ -186,7 +231,18 @@ export function nonempty(raw, what = "it") {
 
 // CHECKS maps the name a field spec uses to the function, so a form can say
 // `check: "mailbox"` in data rather than importing anything.
-export const CHECKS = { mailbox, label, span, paths, nonempty };
+export const CHECKS = { mailbox, label, span, paths, segment, nonempty };
+
+// TIDIED are the checks whose value is absorbed rather than refused, so a caller
+// naming one gets the tidying with it. Keyed the same way, so a field says
+// `check: "label"` and both halves follow.
+const TIDIED = new Set(["mailbox", "label"]);
+
+// tidierOf returns the function that turns what was typed into what will be sent,
+// or null where a field sends exactly what it was given.
+export function tidierOf(spec) {
+  return typeof spec === "string" && TIDIED.has(spec) ? tidy : null;
+}
 
 // of returns the check a field asked for, or null.
 //

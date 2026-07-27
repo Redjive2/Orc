@@ -256,7 +256,7 @@ test("a clause field brings its cheat sheet", async () => {
 test("a name that the tool would refuse is refused here, with the reason", async () => {
   dialog.ask({ title: "hire", fields: [{ name: "who", label: "name", check: "mailbox" }] });
   const box = inputs()[0];
-  box.value = "my agent";
+  box.value = "my/agent";
   submit();
 
   assert.match(said(), /position 3/, `it did not say where: ${said()}`);
@@ -371,18 +371,33 @@ test("focus goes to the first field that needs fixing", async () => {
 // When to complain, which is most of whether this helps or nags. A name is
 // invalid for as long as it is half-written, so a box that reddens on the first
 // keystroke is red the whole time it is being filled in.
-test("a field is not marked while it is still being typed", async () => {
+// An empty box is left alone. A sheet that opens with every required field
+// already red has told the reader nothing except that they have not started.
+test("an untouched field is not marked", async () => {
   dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] });
   const box = inputs()[0];
   type(box, "r");
   type(box, "re");
   type(box, "rev");
-  assert.equal(marked().length, 0, "it complained while the name was still being typed");
+  assert.equal(marked().length, 0, "it complained about a name that is only half-written");
+  type(box, "");
+  assert.equal(marked().length, 0, "it complained about an empty box");
+  press("Escape");
+});
 
-  // The first word comes on leaving the field.
-  type(box, "rev iewer");
-  blur(box);
-  assert.equal(marked().length, 1, "it said nothing when the field was left with a bad value");
+// The rule that replaced "wait until they leave the field".
+//
+// Waiting made sense against a length rule, where a good value passes through
+// bad ones on the way. It makes none against these: every prefix of a good name
+// is a good name, so the only way to see this while typing one is to type a
+// character that will never be allowed — which is the moment to say so, not four
+// fields later.
+test("a character that can never be allowed is named as it is typed", async () => {
+  dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] });
+  const box = inputs()[0];
+  type(box, "rev%");
+  assert.equal(marked().length, 1, "it waited for the field to be left");
+  assert.match(said(), /position 4/, said());
   press("Escape");
 });
 
@@ -427,7 +442,7 @@ test("a check that does not exist does not break the sheet", async () => {
 test("one() carries the field's check, and not only its label", async () => {
   dialog.one({ title: "hire an agent", label: "name", check: "mailbox" });
   const box = inputs()[0];
-  box.value = "my agent";
+  box.value = "my/agent";
   submit();
 
   assert.match(said(), /position 3/, `one() dropped the check: ${said()}`);
@@ -439,4 +454,77 @@ test("one() carries required, so an optional single field may be left blank", as
   const done = dialog.one({ title: "t", label: "note", required: false });
   submit();
   assert.equal(await done, "");
+});
+
+// --- what cannot be queued, and what a name becomes ------------------------
+
+// said is a summary; this is the button. The complaint on the field is only
+// half the answer to "why did nothing happen when I pressed queue" — the other
+// half is that the button says so before it is pressed.
+function submitButton() {
+  return find(document.body, (n) => n.tagName === "BUTTON"
+    && n.getAttribute("aria-disabled") !== null);
+}
+
+test("the submit refuses while a field is wrong, and offers itself when it is not", async () => {
+  dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] });
+  const box = inputs()[0];
+
+  // Empty and required: nothing to queue yet.
+  assert.equal(submitButton().getAttribute("aria-disabled"), "true",
+    "an unfilled form offered to queue itself");
+
+  type(box, "rev%");
+  assert.equal(submitButton().getAttribute("aria-disabled"), "true",
+    "a form with a bad name offered to queue itself");
+
+  type(box, "reviewer");
+  assert.equal(submitButton().getAttribute("aria-disabled"), "false",
+    "a sound form still refused to queue");
+  press("Escape");
+});
+
+// aria-disabled rather than disabled, so it is still reachable — and pressing it
+// has to do something, or it is a wall with no explanation for anybody who
+// cannot see the red field.
+test("pressing a refusing submit says what is wrong rather than nothing", async () => {
+  let settled = false;
+  dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] })
+    .then(() => { settled = true; });
+
+  submit();
+  assert.equal(settled, false, "it queued a form it had said was not ready");
+  assert.match(said(), /cannot be empty/, said());
+  assert.equal(marked().length, 1, "it refused without marking the field");
+  press("Escape");
+});
+
+// The lift, end to end: a name written the way a person writes one goes through,
+// and what goes out is what the tools spell.
+test("a name typed with capitals and spaces is queued as the tools spell it", async () => {
+  const done = dialog.ask({
+    title: "a new task",
+    fields: [{ name: "name", label: "name", check: "label" }],
+  });
+  const box = inputs()[0];
+  type(box, "Fix The Parser");
+
+  assert.equal(marked().length, 0, `it refused a name a person would write: ${said()}`);
+  // And says so, because the board will show the tidied name afterwards and
+  // finding that out from the board reads as cq having renamed it.
+  const becomes = all(document.body, (n) => n.className === "field-becomes")
+    .map((n) => n.textContent).join(" ");
+  assert.match(becomes, /fix-the-parser/, `it did not say what the name becomes: ${becomes}`);
+
+  submit();
+  assert.deepEqual(await done, { name: "fix-the-parser" });
+});
+
+test("a name that needs no tidying says nothing about it", async () => {
+  dialog.ask({ title: "t", fields: [{ name: "n", label: "name", check: "label" }] });
+  type(inputs()[0], "reviewer");
+  const becomes = all(document.body, (n) => n.className === "field-becomes")
+    .map((n) => n.textContent).join("");
+  assert.equal(becomes, "", `it explained a name that was already what it will be: ${becomes}`);
+  press("Escape");
 });

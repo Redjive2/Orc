@@ -262,7 +262,7 @@ func (o Op) Idempotent() bool {
 		return false
 	case OpOrcAssignRole, OpOrcAssignAuthority, OpOrcAssignPerm, OpOrcMove,
 		OpOrcBudget, OpOrcTend, OpOrcToolkit, OpOrcFire, OpOrcRevoke, OpOrcEditPermission,
-		OpOrcInstructSet, OpOrcInstructClear:
+		OpOrcInstructSet, OpOrcInstructClear, OpOrcPace:
 		// Each sets a state to what was asked for rather than stepping it. An
 		// identity already under that boss stays there; a role already at that
 		// authority is unchanged; `tend` reconciles to the same place however many
@@ -728,6 +728,21 @@ type Args struct {
 	Load    int    `json:"load,omitempty"`
 	Message string `json:"message,omitempty"`
 
+	// `orc pace`'s operands. Cycle is "wake" or "tend"; the rest are the settings
+	// on the layer named by Identity, Role, or neither for the fleet's own.
+	//
+	// Durations travel as the strings a person typed rather than as numbers,
+	// because that is what the store holds and what `orc pace` parses: a number of
+	// nanoseconds on the wire would be a second spelling of the same value, and
+	// the two would eventually disagree about what "20m" means.
+	Cycle     string `json:"cycle,omitempty"`
+	After     string `json:"after,omitempty"`
+	Every     string `json:"every,omitempty"`
+	Watch     string `json:"watch,omitempty"`
+	PaceOff   bool   `json:"pace_off,omitempty"`
+	PaceOn    bool   `json:"pace_on,omitempty"`
+	PaceClear bool   `json:"pace_clear,omitempty"`
+
 	// An absolute directory on the machine that applies the action.
 	//
 	// Workspace is deliberately not `Path`: that field means "relative to the
@@ -825,6 +840,12 @@ type argRule struct {
 	// is the wake message. What the layer becomes travels in `text`, the library's
 	// own operand.
 	prompt bool
+	// cycle and optPace are `orc pace`'s: which cycle, and the settings. Every
+	// setting is optional — a form that clears a layer sends none of them — so
+	// they are one permission rather than one requirement each.
+	cycle       bool
+	optIdentity bool
+	optPace     bool
 }
 
 var argRules = map[Op]argRule{
@@ -904,9 +925,29 @@ func (a Action) Validate() error {
 		return fault.Field("Action", "queued", "queue time is missing")
 	}
 
+	return CheckArgs(a.Op, a.Args)
+}
+
+// CheckArgs is Validate's second half: everything an action carries that the
+// caller chose, without the envelope the queue puts around it.
+//
+// It is exported because of where the answer has to be given. An action is only
+// assembled inside the store, so a task named `%parser` was refused by
+// Action.Validate several layers below the request that named it — and the server
+// reduces a storage failure to "internal error" on purpose, because a storage
+// failure is about a path on a disk the caller has no business seeing. A caller's
+// own bad operand went through that reduction too, and came back as a 500 saying
+// nothing. Checking it before it is handed over means the refusal is written where
+// the operand was read, and reads as what it is.
+//
+// Validate still calls it, so there is one definition and no way for the two to
+// disagree.
+func CheckArgs(op Op, args Args) error {
+	a := Action{Op: op, Args: args}
+
 	rule, ok := argRules[a.Op]
 	if !ok {
-		return fault.Internal{Where: "protocol.Action.Validate", Detail: "no argument rule for operation " + string(a.Op)}
+		return fault.Internal{Where: "protocol.CheckArgs", Detail: "no argument rule for operation " + string(a.Op)}
 	}
 
 	// The PUID default of zero is a legitimate puid, so presence is decided by
@@ -1175,6 +1216,16 @@ type SyncResponse struct {
 	Protocol   int       `json:"protocol"`
 	ServerTime time.Time `json:"server_time"`
 	Actions    []Action  `json:"actions,omitempty"`
+	// Pace is how often the server would like to be synced.
+	//
+	// It travels *back* rather than out with the snapshot, and that direction is
+	// the whole design: the browser talks to the server, and the thing that has to
+	// change is a watcher on the agent machine which the server can never reach.
+	// A response is the only moment the two are in contact.
+	//
+	// Empty from a server that has none, which a watcher reads as "keep the
+	// interval you have" rather than as "stop".
+	Pace string `json:"pace,omitempty"`
 }
 
 // Validate checks the version, then that the batch is ordered and unique —
@@ -1185,6 +1236,15 @@ func (r SyncResponse) Validate() error {
 	}
 	if r.ServerTime.IsZero() {
 		return fault.Field("SyncResponse", "server_time", "server time is missing")
+	}
+	if r.Pace != "" {
+		if err := checkDuration("SyncResponse", "pace", r.Pace); err != nil {
+			return err
+		}
+		if got, _ := time.ParseDuration(r.Pace); got < MinSyncPace {
+			return fault.Field("SyncResponse", "pace",
+				"%s is under %s, which is a busy-wait rather than a mirror", r.Pace, MinSyncPace)
+		}
 	}
 	if err := validateEach("SyncResponse", "actions", r.Actions); err != nil {
 		return err
@@ -1330,10 +1390,36 @@ func checkName(typ, field, value string) error {
 	if value == "" {
 		return fault.Field(typ, field, "name is empty")
 	}
-	if !name.MatchString(value) {
-		return fault.Field(typ, field, "name %q must match %s", value, name)
+	if name.MatchString(value) {
+		return nil
 	}
-	return nil
+
+	// The character, at its position, rather than the regular expression it failed.
+	// A pattern is a precise description of the rule and no description at all of
+	// the mistake: somebody who has typed `%parser` and been shown
+	// `^[a-z0-9][a-z0-9._-]{0,63}$` has to become a reader of regular expressions
+	// before they can rename their task.
+	for i, r := range value {
+		if !allowedInName(r) {
+			shown := fmt.Sprintf("%q", r)
+			if r == ' ' {
+				shown = "a space"
+			}
+			return fault.Field(typ, field,
+				"name %q has %s at position %d; use letters, digits, and . _ -", value, shown, i+1)
+		}
+	}
+	if len(value) > MaxNameLen {
+		return fault.Field(typ, field, "name %q is longer than %d characters", value, MaxNameLen)
+	}
+	return fault.Field(typ, field, "name %q must start with a letter or digit", value)
+}
+
+// MaxNameLen is how long a name may be, as the pattern spells it.
+const MaxNameLen = 64
+
+func allowedInName(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
 }
 
 func checkNames(typ, field string, values []string) error {

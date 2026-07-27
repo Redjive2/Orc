@@ -861,6 +861,20 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, machine string,
 		return
 	}
 
+	// Checked here, before the store, because of what the store's failures become.
+	// serverSide flattens anything it does not recognise into "internal error" so
+	// that a path on the server's disk never reaches a browser — and a task named
+	// `%parser` went through that same reduction, because the only thing that
+	// checked it was Action.Validate, several layers down inside Enqueue. The
+	// person who typed the name got a 500 and the word "internal", with no mention
+	// of the character that caused it.
+	//
+	// The operands are the caller's own, so their refusal is theirs to read.
+	if err := protocol.CheckArgs(op, args); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
 	action, err := s.state.Enqueue(id, op, args, s.now())
 	if err != nil {
 		s.fail(w, r, serverSide(err))
@@ -917,5 +931,8 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 
 	s.write(w, r, http.StatusOK, protocol.SyncResponse{
 		Protocol: protocol.Version, ServerTime: now, Actions: pending,
+		// How often to come back. It rides on the response because that is the
+		// only moment the server is in contact with a watcher it can never call.
+		Pace: s.state.SyncPace(),
 	})
 }

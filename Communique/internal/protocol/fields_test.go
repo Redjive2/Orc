@@ -36,8 +36,8 @@ func TestEveryFieldIsChecked(t *testing.T) {
 		{"Message.mid empty", mutate(func(m *protocol.Message) { m.MID = "" }), "message id is empty"},
 		{"Message.mid long", mutate(func(m *protocol.Message) { m.MID = strings.Repeat("m", 129) }), "characters"},
 		{"Message.sent", mutate(func(m *protocol.Message) { m.Sent = time.Time{} }), "send time"},
-		{"Message.from", mutate(func(m *protocol.Message) { m.From = "Not Valid" }), "must match"},
-		{"Message.to", mutate(func(m *protocol.Message) { m.To = []string{"Not Valid"} }), "must match"},
+		{"Message.from", mutate(func(m *protocol.Message) { m.From = "Not Valid" }), "at position"},
+		{"Message.to", mutate(func(m *protocol.Message) { m.To = []string{"Not Valid"} }), "at position"},
 		{"Message.cc", mutate(func(m *protocol.Message) { m.CC = []string{""} }), "name is empty"},
 		{"Message.subject", mutate(func(m *protocol.Message) { m.Subject = long }), "characters"},
 		{"Message.convo", mutate(func(m *protocol.Message) { m.Convo = protocol.ConvoRef{Title: "orphan"} }), "without a uid"},
@@ -47,16 +47,16 @@ func TestEveryFieldIsChecked(t *testing.T) {
 		{"Convo.uid empty", protocol.Convo{}, "uid is empty"},
 		{"Convo.uid long", protocol.Convo{UID: strings.Repeat("u", 129)}, "characters"},
 		{"Convo.title", protocol.Convo{UID: "u", Title: long}, "characters"},
-		{"Convo.members", protocol.Convo{UID: "u", Members: []string{"BAD"}}, "must match"},
+		{"Convo.members", protocol.Convo{UID: "u", Members: []string{"BAD"}}, "at position"},
 		{"Convo.count", protocol.Convo{UID: "u", Count: -1}, "negative"},
 
 		// Receipt
-		{"Receipt.recipient", protocol.Receipt{MID: "m", Recipient: "Not Valid"}, "must match"},
+		{"Receipt.recipient", protocol.Receipt{MID: "m", Recipient: "Not Valid"}, "at position"},
 
 		// Task
-		{"Task.name", protocol.Task{Name: "Not Valid", Priority: 1, Difficulty: 1, Status: 1}, "must match"},
-		{"Task.owner", protocol.Task{Name: "t", Owner: "Not Valid", Priority: 1, Difficulty: 1, Status: 1}, "must match"},
-		{"Task.collaborators", protocol.Task{Name: "t", Collaborators: []string{"BAD"}, Priority: 1, Difficulty: 1, Status: 1}, "must match"},
+		{"Task.name", protocol.Task{Name: "Not Valid", Priority: 1, Difficulty: 1, Status: 1}, "at position"},
+		{"Task.owner", protocol.Task{Name: "t", Owner: "Not Valid", Priority: 1, Difficulty: 1, Status: 1}, "at position"},
+		{"Task.collaborators", protocol.Task{Name: "t", Collaborators: []string{"BAD"}, Priority: 1, Difficulty: 1, Status: 1}, "at position"},
 		{"Task.scope entry", protocol.Task{Name: "t", Priority: 1, Difficulty: 1, Status: 1, Scope: []string{"a\x00b"}}, "control character"},
 		{"Task.scope count", protocol.Task{Name: "t", Priority: 1, Difficulty: 1, Status: 1,
 			Scope: make([]string, protocol.MaxListItems+1)}, "exceeds the limit"},
@@ -64,10 +64,10 @@ func TestEveryFieldIsChecked(t *testing.T) {
 			Worktree: strings.Repeat("w", 4097)}, "characters"},
 
 		// AdminUser
-		{"AdminUser.name", protocol.AdminUser{Name: "Not Valid"}, "must match"},
+		{"AdminUser.name", protocol.AdminUser{Name: "Not Valid"}, "at position"},
 
 		// AdminState
-		{"AdminState.users", protocol.AdminState{Users: []protocol.AdminUser{{Name: "BAD"}}}, "must match"},
+		{"AdminState.users", protocol.AdminState{Users: []protocol.AdminUser{{Name: "BAD"}}}, "at position"},
 		{"AdminState.messages", protocol.AdminState{Messages: []protocol.Message{{}}}, "message id is empty"},
 		{"AdminState.receipts", protocol.AdminState{Receipts: []protocol.Receipt{{}}}, "message id is empty"},
 
@@ -85,8 +85,8 @@ func TestEveryFieldIsChecked(t *testing.T) {
 		}), "name is empty"},
 
 		// Action argument text
-		{"Action.args.to", act(protocol.OpSend, protocol.Args{To: []string{"BAD"}, Subject: "s", Body: "b"}), "must match"},
-		{"Action.args.user", act(protocol.OpCC, protocol.Args{ConvoUID: "c", User: "BAD"}), "must match"},
+		{"Action.args.to", act(protocol.OpSend, protocol.Args{To: []string{"BAD"}, Subject: "s", Body: "b"}), "at position"},
+		{"Action.args.user", act(protocol.OpCC, protocol.Args{ConvoUID: "c", User: "BAD"}), "at position"},
 		{"Action.args.subject", act(protocol.OpReply, protocol.Args{PUID: 1, Subject: long, Body: "b"}), "characters"},
 		{"Action.args.body", act(protocol.OpReply, protocol.Args{PUID: 1, Subject: "s", Body: huge}), "characters"},
 		{"Action.args.convo_uid", act(protocol.OpCC, protocol.Args{ConvoUID: strings.Repeat("c", 129), User: "bob"}), "characters"},

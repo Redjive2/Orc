@@ -600,6 +600,27 @@ button.fold.picked .twist { color: var(--primary); }
   border-color: var(--danger);
 }
 
+/* What a value will become, when it is not what was typed. Quiet, and beneath
+   the box rather than beside it: it is not a problem, it is the answer to a
+   question the reader is about to have when the board shows a different name
+   from the one they wrote. */
+.field-becomes:empty { display: none; }
+.field-becomes {
+  margin: 0;
+  color: var(--muted);
+  font-size: .9em;
+  font-style: italic;
+}
+
+/* A submit that will not go yet.
+   Dimmed rather than removed, and still focusable — it is aria-disabled, not
+   disabled, so pressing it says what is missing instead of doing nothing. The
+   cursor says so before the press. */
+.controls button[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
 /* No wrapping, for the same reason a code block does not wrap: a wrapped line is
    a line whose indentation lies about its depth. It scrolls instead. */
 #editor textarea {

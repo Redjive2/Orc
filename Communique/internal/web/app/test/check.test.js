@@ -30,16 +30,40 @@ test("a mailbox name is normalised before it is judged", () => {
   ok(check.mailbox("  boss  "), "padded");
 });
 
+// The two restrictions that were friction rather than rule.
+//
+// A capital was always accepted, because every tool downstream lower-cases. A
+// space was not, and a space is how a person writes a name — so it is folded to
+// the dash it would have been written as, and the sheet shows the result. This
+// is looser than the tool, which is the safe direction only because what gets
+// sent is `tidy`'s answer and not what was typed; dialog.test.js pins that half.
+test("a name may be written with capitals and spaces", () => {
+  ok(check.mailbox("My Agent"), "My Agent");
+  ok(check.label("Fix The Parser"), "Fix The Parser");
+  assert.equal(check.tidy("Fix The Parser"), "fix-the-parser");
+  assert.equal(check.tidy("  Padded Name  "), "padded-name");
+});
+
+// Length is preserved, so a message about the character *after* a space still
+// counts to the same place in what was typed.
+test("each space becomes one dash, and runs are not collapsed", () => {
+  assert.equal(check.tidy("a  b"), "a--b");
+  assert.equal(check.mailbox("a  b!"), check.mailbox("a--b!"));
+  assert.match(check.mailbox("a  b!"), /position 5/);
+});
+
 test("a mailbox name may not contain what the tool forbids", () => {
-  for (const n of ["my agent", "agent!", "a/b", "señor", "a+b"]) {
+  // Everything else is still refused rather than guessed at: turning `%` into
+  // something would be inventing what somebody meant.
+  for (const n of ["agent!", "a/b", "señor", "a+b", "%parser"]) {
     bad(check.mailbox(n), n);
   }
 });
 
 test("a mailbox name says where the bad character is", () => {
-  const got = check.mailbox("my agent");
+  const got = check.mailbox("my/agent");
   assert.match(got, /position 3/, got);
-  assert.match(got, /space/, got);
+  assert.match(got, /\//, got);
 });
 
 test("a mailbox name must start with a letter or digit", () => {

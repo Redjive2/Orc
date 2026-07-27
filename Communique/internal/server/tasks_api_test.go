@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"orc/cq/internal/protocol"
@@ -177,5 +178,43 @@ func TestTaskRoutesRefuseWhatMacmuffinWould(t *testing.T) {
 	// Nothing was queued by any of them.
 	if entries := queueOf(t, h, cookie); len(entries) != 0 {
 		t.Errorf("a refused request still queued something: %d entries", len(entries))
+	}
+}
+
+// TestABadOperandIsRefusedAsTheCallersOwn. Creating a task called
+// `%invalid-character` answered 500 with the word "internal" and nothing else.
+//
+// Nothing was broken on the server. The name was refused, correctly, by
+// Action.Validate — but that runs inside Enqueue, several layers below the
+// request, and every failure from the store passes through serverSide, which
+// flattens what it does not recognise so that a path on the server's disk cannot
+// reach a browser. A caller's own operand went through the same reduction, and
+// the one person who could fix it was told nothing at all.
+func TestABadOperandIsRefusedAsTheCallersOwn(t *testing.T) {
+	h := newHarness(t)
+	cookie, csrf := h.login(t)
+	putSnapshot(t, h, "studio")
+
+	for _, tc := range []struct{ name, path, body, mentions string }{
+		{"a new task", "/api/v1/tasks",
+			`{"machine":"studio","name":"%invalid-character","priority":3,"difficulty":3}`, "%"},
+		{"a new step", "/api/v1/tasks/parser/subtasks",
+			`{"machine":"studio","sub":"one two"}`, "a space"},
+		{"an agent to assign to", "/api/v1/tasks/parser/assign",
+			`{"machine":"studio","user":"not a name"}`, "a space"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := h.do(t, "POST", tc.path, tc.body, h.withCookie(cookie), withCSRF(csrf))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400: %s", w.Code, w.Body)
+			}
+			// The character it objected to, so the person who typed it knows which
+			// one to take out. "internal error" named nothing, and a message that
+			// says only "invalid name" about a name somebody has now read four
+			// times is barely better.
+			if body := w.Body.String(); !strings.Contains(body, tc.mentions) {
+				t.Errorf("the refusal does not say what was wrong (%q): %s", tc.mentions, body)
+			}
+		})
 	}
 }

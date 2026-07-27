@@ -133,6 +133,9 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `POST fleet/roles/<n>/permissions`     | `orc assign permission`                  |
 | `POST fleet/roles/<n>/budget`          | `orc budget <role> <load>`               |
 | `DELETE fleet/roles/<n>`               | `orc remove role --yes`                  |
+| `POST fleet/pace`                      | `orc pace <cycle> [<who>] [flags]`       |
+| `GET/POST sync/pace`                   | how often each machine syncs — the server's own |
+| `GET activity?since=<dur>`             | the series: what each agent cost and touched |
 | `PATCH fleet/permissions/<n>`          | `orc edit permission <name> --floor …`   |
 | `DELETE fleet/permissions/<n>`         | `orc remove permission [--from] --yes`   |
 | `PUT tasks/<n>/description`            | `muff describe <task> --set <file>`      |
@@ -453,6 +456,33 @@ cannot say what a value is *for*, and ask one question at a time — so making a
 task took three of them in a row. A sheet asks for a whole thing at once, and
 says what is wrong with a value beside the box it was typed into rather than in
 a second popup on top of the first.
+
+A sheet complains **as it is typed**, and its submit will not fire while
+anything is wrong. Waiting for a field to be left made sense against a rule a
+good value passes through bad ones to satisfy; it makes none against these,
+where every prefix of a good name is a good name — so the only way to see a
+complaint while typing one is to type a character that will never be allowed,
+which is the moment to say so. An untouched empty box is still left alone. The
+submit carries `aria-disabled` rather than `disabled`, so it stays focusable and
+pressing it marks every problem and moves the cursor to the first, instead of
+being a wall with no explanation.
+
+Names may be written **with capitals and spaces**. The rule underneath is not
+negotiable — these become directory names, socket paths, and words in a command
+line on the agent's machine — but whether somebody has to type them that way is.
+A capital was always lower-cased downstream, so refusing it refused something
+that would have worked; a space is how a person writes "fix the parser", and `-`
+is how a machine spells it. Both are folded on the way out and the sheet says
+what the name will be, because the board shows the tidied name afterwards and
+learning it there reads as cq having renamed the thing. Every other character is
+still refused, and named with its position: turning `%` into something would be
+guessing at what was meant.
+
+A refusal of what the caller sent is reported as theirs. Operands are checked in
+the handler that read them rather than deep inside the queue, because the store's
+failures are deliberately reduced to "internal error" — a path on the server's
+disk is no business of a browser — and a task named `%parser` was going through
+that same reduction. The person who typed it got a 500 and one word.
 
 An opened file offers **edit** and **delete**; a section or annotation offers to
 edit just itself, which splices back into the whole file. A directory offers
