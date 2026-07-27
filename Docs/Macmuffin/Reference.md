@@ -164,7 +164,7 @@ routine.
 Writes through `Bash` other than `anno write` are out of reach. That is stated
 rather than implied to be covered.
 
-## §1.6a Descriptions
+## §1.7 Descriptions
 
 A task's description is what the work actually *is*. Everything else a task
 carries is a fact with a shape — a score, an owner, a set of paths, a list of
@@ -192,7 +192,7 @@ and who changed it, never the text. A record folded on every command must not
 carry 32 KiB of prose. So `info` says who last described a task, and `pool` says
 which tasks have one at all.
 
-## §1.7 Notifications
+## §1.8 Notifications
 
 `invite` and `kick` tell the agent by Mailman, addressed to them and to the
 caller. The membership change is the fact and the mail is only the
@@ -202,7 +202,7 @@ touches the store, and never fails a change that already happened. A notice that
 has given up after repeated attempts is reported by `verify` rather than retried
 forever.
 
-## §1.8 Assignment
+## §1.9 Assignment
 
 `assign` notifies the agent via Mailman automatically, with a CC for you.
 
@@ -212,7 +212,7 @@ inventing one now would mean rewriting it when the real one lands. Until then
 `claim` (take it yourself) and `invite` (add a collaborator) cover the ground
 that does not need it.
 
-## §1.9 Exit codes
+## §1.10 Exit codes
 
 Shared with every Orc tool, so a script or hook branches on them uniformly:
 
@@ -226,7 +226,7 @@ Mailman it cannot reach delays a notice rather than failing a command.
 `muff-hook` does not use these: a Claude hook's contract is `0` proceeds, `2`
 blocks. See `Claude/Docs/ExitCodes.md`.
 
-## §1.10 Colour
+## §1.11 Colour
 
 Catppuccin, Macchiato by default, shared with every Orc tool — the board, the
 card, the help, confirmations, and diagnostics are all painted from the same
@@ -244,7 +244,7 @@ glyph or a word, and a test asserts that every screen, stripped of its escape
 sequences, is byte-for-byte the plain rendering. A pipe through `grep` loses
 nothing.
 
-## §1.11 JSON
+## §1.12 JSON
 
 `pool --json` and `info --json` print the board as JSON, for another program to
 read. It is the contract Communiqué mirrors through, so it is a stable shape,

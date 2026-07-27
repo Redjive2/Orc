@@ -214,23 +214,23 @@ func lastReason(s *store.Store, name user.Name, id string) string {
 	if err != nil {
 		return ""
 	}
-	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
-	for i := len(lines) - 1; i >= 0; i-- {
-		var ev store.SessionEvent
-		if err := json.Unmarshal(lines[i], &ev); err != nil {
-			continue
-		}
-		// This session's own lines, or the ones written before an id was known:
-		// a supervisor refused the lock never gets as far as naming a session.
-		if ev.ID != "" && ev.ID != id {
-			continue
-		}
-		switch ev.Op {
-		case "exit", "gave-up", "failed", "prepare", "cleanup":
-			if ev.Detail != "" {
-				return ev.Detail
-			}
-		}
+	// Two passes: this session's own lines first, then the identity's most recent
+	// reason whatever session it belonged to.
+	//
+	// The second pass is what makes this useful in the case it exists for. A
+	// supervisor that cannot exec `claude` may be killed by the deadline before it
+	// has written a single line under the new id, while the identical reason from
+	// thirty seconds ago sits in the same file under the old one. Reporting "says
+	// why" over a log that plainly says why is the failure this was written to fix.
+	if why := reasonFor(data, id); why != "" {
+		return why
+	}
+	// Labelled, because it is not this attempt's. An older reason is usually the
+	// same reason — the same missing binary, the same dead workspace — and quoting
+	// it unlabelled would let a stale one be read as current, which is worse than
+	// saying nothing at all.
+	if why := reasonFor(data, ""); why != "" {
+		return "the last session ended with: " + why
 	}
 	return ""
 }
@@ -248,4 +248,26 @@ func free(s *store.Store, name user.Name) bool {
 	}
 	release()
 	return true
+}
+
+// reasonFor scans a session log backwards for the newest failure. An empty id takes
+// the newest from any session.
+func reasonFor(data []byte, id string) string {
+	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		var ev store.SessionEvent
+		if err := json.Unmarshal(lines[i], &ev); err != nil {
+			continue
+		}
+		if id != "" && ev.ID != "" && ev.ID != id {
+			continue
+		}
+		switch ev.Op {
+		case "exit", "gave-up", "failed", "prepare", "cleanup":
+			if ev.Detail != "" {
+				return ev.Detail
+			}
+		}
+	}
+	return ""
 }

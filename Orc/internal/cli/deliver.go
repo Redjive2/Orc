@@ -34,12 +34,18 @@ import (
 // not to wait out a broken fleet: a cycle that hung on one wedged agent would stop
 // tending the others, which is a worse failure than the one it was covering.
 
-// Delivery bounds a retry. The values are small on purpose — see above.
+// Delivery bounds a retry.
 const (
 	// DeliverTries is how many times a transient failure is retried.
-	DeliverTries = 4
-	// DeliverBackoff is the first wait; each retry doubles it, so four tries span
-	// about a second and a half.
+	//
+	// Six, doubling from 150ms, spans about nine seconds. That is not a number
+	// picked for feel: a supervisor restarting a crashed child answers "the session
+	// is restarting" and waits 1s, then 2s, then 4s before its next attempt
+	// (session.FirstBackoff, doubling), so a delivery that gave up inside two
+	// seconds would fail on precisely the case it exists for — an agent that is
+	// coming back on its own, right now.
+	DeliverTries = 6
+	// DeliverBackoff is the first wait; each retry doubles it.
 	DeliverBackoff = 150 * time.Millisecond
 )
 

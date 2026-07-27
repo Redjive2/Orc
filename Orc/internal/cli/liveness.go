@@ -94,7 +94,7 @@ func (a App) employ(args []string) error {
 				a.out.Identity(who.String()), a.out.Value(m.String()), a.out.Value(e.Short()))); err != nil {
 				return err
 			}
-			return a.tendOne(s, who)
+			return a.tryNow(s, who)
 		}
 	}
 
@@ -124,7 +124,21 @@ func (a App) employ(args []string) error {
 	if err := a.say(line); err != nil {
 		return err
 	}
-	return a.tendOne(s, who)
+	return a.tryNow(s, who)
+}
+
+// tryNow reconciles one identity with the start backoff cleared.
+//
+// `tend` paces a session that keeps failing to start, which is right for a backstop
+// nobody asked to run and wrong for `orc employ`: somebody has just said "start
+// this", and answering with a silence that lasts until a timer they cannot see
+// elapses is the tool ignoring an instruction. An explicit ask always gets an
+// attempt, and if that attempt fails the pacing starts again from one.
+func (a App) tryNow(s caller, who user.Name) error {
+	if err := s.store.ClearFailedStarts(who); err != nil {
+		a.note("%s: the start record could not be cleared: %v", who, err)
+	}
+	return a.openOne(s, who)
 }
 
 // affordable refuses an employment the caller's budget does not cover, and explains
@@ -217,6 +231,12 @@ func (a App) fire(args []string) error {
 			return err
 		}
 	}
+	// Nothing is going to start it now, so the record of what stopped it starting
+	// describes a question nobody is asking. It would otherwise pace the first
+	// attempt after a re-employ, against failures from before it was fired.
+	if err := s.store.ClearFailedStarts(who); err != nil {
+		a.note("%s: the start record could not be cleared: %v", who, err)
+	}
 	return a.say(fmt.Sprintf("%s %s   it keeps its memories, mail, and tasks",
 		a.out.Warn("fired"), a.out.Identity(who.String())))
 }
@@ -282,7 +302,7 @@ func (a App) tendOnce(verbose bool) error {
 	if err != nil {
 		return err
 	}
-	acted, err := a.reconcile(s, s.fleet.Subtree(s.who), verbose)
+	acted, err := a.reconcile(s, s.fleet.Subtree(s.who), verbose, false)
 	if err != nil {
 		return err
 	}
@@ -360,7 +380,19 @@ func (a App) tendLoop(interval time.Duration) error {
 
 // tendOne reconciles a single identity, after employ or fire changed it.
 func (a App) tendOne(s caller, who user.Name) error {
-	_, err := a.reconcile(s, []user.Name{who}, false)
+	_, err := a.reconcile(s, []user.Name{who}, false, false)
+	return err
+}
+
+// openOne reconciles a single identity and speaks to a session it starts.
+//
+// The difference from tendOne is who asked. A backstop that noticed a crashed
+// session resumes a conversation that was already going; `orc employ` creates one
+// that has never been spoken to, and a Claude session nobody has said anything to
+// does nothing at all — it sits at its prompt with a system prompt it has no turn
+// in which to act on. See openWith.
+func (a App) openOne(s caller, who user.Name) error {
+	_, err := a.reconcile(s, []user.Name{who}, false, true)
 	return err
 }
 
@@ -371,7 +403,7 @@ func (a App) tendOne(s caller, who user.Name) error {
 // enforced, because that is the moment somebody asked for something; killing a
 // running agent to balance a number would destroy work to satisfy a check that
 // should have refused earlier.
-func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, err error) {
+func (a App) reconcile(s caller, names []user.Name, verbose, opening bool) (acted int, err error) {
 	for _, name := range names {
 		// Read from the store rather than from the fleet the command started with.
 		// The snapshot in `s.fleet` was derived before this command changed anything,
@@ -401,6 +433,11 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 					a.note("%s has failed to start %d time%s; the next attempt is in %s (%s)",
 						name, got.Failures, plural(got.Failures), round(left), got.Why)
 				}
+				// Counted as work, because it is: the worklist and the sessions do
+				// *not* agree, and a pass that held off and then reported "nothing to
+				// do" would be telling an operator the fleet was reconciled while an
+				// agent sat there employed and stopped.
+				acted++
 				continue
 			}
 			m, e := who.Model(), who.Effort()
@@ -461,12 +498,25 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 				a.out.Value(m.String()), a.out.Value(e.Short()), a.out.Muted(short(id)))); err != nil {
 				return acted, err
 			}
-			// A session that went mid-turn comes back sitting on an unfinished
-			// thought: the model call it was inside never returned, and nothing will
-			// finish it on its own. Resuming is not enough — it has to be told to
-			// carry on, which is what the wake cycle would eventually do and what an
-			// operator should not have to do by hand.
-			if err := a.nudgeIfInterrupted(s, name); err != nil {
+			// Speak to it.
+			//
+			// Two reasons, and they are different. A session that went mid-turn comes
+			// back sitting on an unfinished thought: the model call it was inside
+			// never returned, and nothing finishes it on its own. A session somebody
+			// has just employed has the opposite problem — nothing is unfinished and
+			// nothing has started, because a Claude session that has not been spoken
+			// to has no turn in which to act on its instructions.
+			if opening {
+				if err := a.openWith(s, name); err != nil {
+					a.note("%s was started but could not be told to begin: %v", name, err)
+				}
+				// The interruption record belongs to the session that ended, and this
+				// is a new one that has now been spoken to. Left behind it would nudge
+				// the next start for a turn nobody is in.
+				if err := s.store.ForgetEnded(name); err != nil {
+					a.note("%s: the ending could not be cleared: %v", name, err)
+				}
+			} else if err := a.nudgeIfInterrupted(s, name); err != nil {
 				a.note("%s was resumed but could not be nudged on: %v", name, err)
 			}
 
@@ -494,6 +544,41 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 		}
 	}
 	return acted, nil
+}
+
+// openWith says the first thing to a session that has just been started.
+//
+// A Claude session with no user turn does nothing. It has the fleet's, the role's,
+// and the identity's standing instructions in its system prompt — `orc employ`
+// passes them — and no occasion to act on any of them: it is at its prompt, waiting
+// for somebody to speak, and the fleet's own backstop will not notice for however
+// long the wake threshold is. An agent employed at midnight and found idle at nine
+// is an agent nobody ever said anything to.
+//
+// What it says is the **wake message**: the identity's, else its role's, else the
+// fleet's, else `continue`. The same override chain, deliberately — a fleet that has
+// written what to say to an agent that is not doing anything has already written
+// this, and a second setting to keep in step with the first would be a second thing
+// to get wrong.
+//
+// A failure to deliver is reported and does not fail the command. The session is up,
+// which is what was asked for; the wake cycle is the backstop behind this one, and a
+// fleet that refused to employ an agent because it could not immediately say hello
+// would be worse in every case than one that says so.
+func (a App) openWith(s caller, name user.Name) error {
+	message, _, err := s.store.WakeMessage(name, roleOf(s, name))
+	if err != nil || strings.TrimSpace(message) == "" {
+		message = WakeMessage
+	}
+
+	client, _, err := a.reach(s, name)
+	if err != nil {
+		return err
+	}
+	if _, err := keepTrying(func() error { return client.Poke(message) }); err != nil {
+		return err
+	}
+	return a.say("  " + a.out.Muted(fmt.Sprintf("and told to begin: %s", quoteShort(message))))
 }
 
 // nudgeIfInterrupted tells a recovered session to carry on, when the one it
@@ -610,12 +695,28 @@ func (a App) refresh(args []string) error {
 		e = model.DefaultEffort
 	}
 	if err := a.populate(s.store, who, id, m, e, false); err != nil {
+		// A refresh that could not start the replacement leaves the identity
+		// employed with nothing running, which is `tend`'s to fix — so it is paced
+		// like any other failed start rather than retried by every command.
+		if err := s.store.RecordFailedStart(who, err.Error()); err != nil {
+			a.note("%s: the failed start could not be recorded: %v", who, err)
+		}
 		return err
+	}
+	if err := s.store.ClearFailedStarts(who); err != nil {
+		a.note("%s: the start record could not be cleared: %v", who, err)
 	}
 
 	if err := a.say(fmt.Sprintf("%s %s   session %s, fresh context",
 		a.out.Good("refreshed"), a.out.Identity(who.String()), a.out.Muted(short(id)))); err != nil {
 		return err
+	}
+	// And spoken to. A refresh exists to give an agent new instructions, and a
+	// conversation with nothing in it is one where the agent has had no turn in
+	// which to read them — so a refresh that only started a session would have
+	// swapped a working agent for an idle one.
+	if err := a.openWith(s, who); err != nil {
+		a.note("%s was refreshed but could not be told to begin: %v", who, err)
 	}
 	// Session-scoped grants were tied to the session that just ended. Saying so is
 	// what makes "temporarily" mean something an operator can see.

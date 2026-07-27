@@ -22,6 +22,7 @@ const (
 	KeySend    = 0x13 // ^S
 	KeyDirect  = 0x1d // ^]
 	KeyRefresh = 0x12 // ^R
+	KeyLeave   = 0x11 // ^Q — detach, in one key
 	KeyDetach  = 0x1c // ^\ — the prefix; the next key decides
 	KeyReturn  = '\r'
 	KeyNewline = '\n'
@@ -50,6 +51,19 @@ const (
 	escCSI          // ESC [ … — runs until a byte in the final range
 	escSS3          // ESC O x — exactly one more byte
 )
+
+// DetachKeys are what may follow ^\ to detach, matching the raw proxy's set so that
+// one sequence works in both and nobody has to know which mode they are in.
+var DetachKeys = []rune{'d', 'q', '.'}
+
+func isDetachKey(r rune) bool {
+	for _, k := range DetachKeys {
+		if r == k {
+			return true
+		}
+	}
+	return false
+}
 
 // DetachKey is what follows ^\ to detach. It matches the raw proxy's sequence, so one
 // pair of fingers works in both views.
@@ -133,7 +147,7 @@ func (c *Composer) Feed(in []byte) Intent {
 
 		if c.armed {
 			c.armed = false
-			if r == DetachKey {
+			if isDetachKey(r) {
 				return Detach
 			}
 			// ^\ followed by anything else is not a detach, and the pair is not
@@ -145,9 +159,25 @@ func (c *Composer) Feed(in []byte) Intent {
 
 		switch r {
 		case KeyEscape:
+			// Not a detach, however tempting.
+			//
+			// Every arrow key, function key and paste marker begins with Escape, so
+			// a bare Escape cannot be told from the start of one without waiting to
+			// see what follows — and a detach that depends on a timeout is a detach
+			// that fires when somebody presses Left on a slow connection. `^Q`
+			// below is the easy binding instead: it is one key, it is on every
+			// layout, and nothing else in this pane wants it.
 			c.esc = escStart
 		case KeyDetach:
 			c.armed = true
+		case KeyLeave:
+			// The one-key way out.
+			//
+			// It can be a single key here and not in the proxy because in this pane
+			// a keystroke does not reach the agent: it goes into a buffer that only
+			// ^S sends. Nothing is competing for ^Q, so nothing is lost by spending
+			// it on the thing every operator needs and half of them cannot type.
+			return Detach
 		case KeySend:
 			return Send
 		case KeyDirect:

@@ -279,3 +279,56 @@ func TestPasteMarkersAreNotPastedText(t *testing.T) {
 		t.Errorf("composed %q", c.Text())
 	}
 }
+
+// TestThereIsAOneKeyWayOut.
+//
+// `^\` then a letter is the only sequence that is safe in the raw proxy, where every
+// keystroke belongs to the agent. In this pane nothing reaches the agent until ^S
+// says so, so it can afford a single key — and it needs one, because `^\` is awkward
+// on a US keyboard and can be impossible on layouts where a backslash needs AltGr.
+// An operator who cannot type the way out is an operator stuck in an attach.
+func TestLeavingTakesOneKey(t *testing.T) {
+	var c view.Composer
+	if got := c.Feed([]byte{0x11}); got != view.Detach {
+		t.Errorf("^Q asked for %v, want a detach", got)
+	}
+
+	// And it leaves whether or not something has been typed: the buffer is not the
+	// question, getting out is.
+	var typed view.Composer
+	typed.Feed([]byte("half a thought"))
+	if got := typed.Feed([]byte{0x11}); got != view.Detach {
+		t.Errorf("^Q with text asked for %v, want a detach", got)
+	}
+}
+
+// The prefix takes any of the three letters, matching the raw proxy, so one habit
+// works in both and nobody has to know which mode they are in.
+func TestTheDetachPrefixTakesAnyOfItsLetters(t *testing.T) {
+	for _, key := range []byte{'d', 'q', '.'} {
+		var c view.Composer
+		if got := c.Feed([]byte{0x1c, key}); got != view.Detach {
+			t.Errorf("^\\ %q asked for %v, want a detach", key, got)
+		}
+	}
+
+	// A letter that is not one of them is not a detach, and the pair is not text
+	// either — a control byte in a prompt would be sent to the agent.
+	var c view.Composer
+	if got := c.Feed([]byte{0x1c, 'x'}); got != view.Nothing {
+		t.Errorf("^\\ x asked for %v, want nothing", got)
+	}
+}
+
+// TestAnArrowKeyStillIsNotADetach. Every arrow, function key and paste marker begins
+// with Escape, so a bare Escape cannot be told from the start of one without a
+// timeout — and a detach on a timeout fires when somebody presses Left on a slow
+// connection.
+func TestEscapeIsNotAWayOut(t *testing.T) {
+	for _, seq := range []string{"\x1b[A", "\x1b[D", "\x1bOP", "\x1b[200~pasted\x1b[201~"} {
+		var c view.Composer
+		if got := c.Feed([]byte(seq)); got == view.Detach {
+			t.Errorf("%q detached", seq)
+		}
+	}
+}

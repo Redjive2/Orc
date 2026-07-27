@@ -56,7 +56,7 @@ func TestPaneShowsWhatHappened(t *testing.T) {
 		"outside write(Macmuffin/**)", // with its reason, on its own line
 		"waiting for input",           // the state that matters most
 		"compose",                     // the mode is never in doubt
-		"^S send", "^\\ d detach",     // and how to get out
+		"^S send", "^Q leave",         // and how to get out
 		"mail 2", "task extract-common-source",
 	} {
 		if !strings.Contains(got, want) {

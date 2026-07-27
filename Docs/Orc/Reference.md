@@ -21,7 +21,7 @@ Orc exposes the following commands:
 | `list identities\|roles\|permissions\|grants`†| The flat rosters: one line per thing, filtered to your own branch          |
 | `budget`†                                   | What each identity may keep employed, and what it is spending              |
 | `budget <role> <load>`†                     | Set the load a role may keep on the work list                              |
-| `attach <identity>`                         | Attach to the Claude Code session within Orc                               |
+| `attach <identity>`                         | Hand your terminal to the session — **Ctrl-\ then d** leaves it running    |
 | `poke <identity> [message]`                 | Nudge the identity to continue working                                     |
 | `wake [<identity>…] [--every <dur>]`†      | Poke whatever has gone quiet; `--every` runs it as a cycle                  |
 | `refresh <identity>`                        | Create a new Code session to replace the old one for the identity          |
@@ -80,7 +80,7 @@ Terms:
 | `--until <dur>`| `grant`                   | Give the grant a wall-clock expiry instead of a session one |
 | `--model <m>`  | `employ`                  | Which model the session runs; defaults to `sonnet`          |
 | `--effort <e>` | `employ`                  | How hard it thinks; defaults to `medium`                    |
-| `--direct`     | `attach`                  | Hand the terminal to the real Claude session, not Orc's view |
+| `--view`       | `attach`                  | Orc's composed pane instead of the terminal; `^Q` leaves     |
 | `--watch <dur>`| `tend`                    | Keep reconciling on an interval, as a backstop              |
 | `--every <dur>` | `wake`                    | Run the wake cycle on an interval instead of once            |
 | `--after <dur>` | `wake`                    | How long a waiting session may stay waiting (default 10m)    |
@@ -437,6 +437,39 @@ worrying of the two.
 The cycle's memory lives in the running process, not the store — a wake is a fact
 about this cycle's last pass rather than about the fleet, so a restarted cycle looks
 at a quiet fleet with fresh eyes.
+
+An agent with **no session at all** is reported rather than passed over: employed,
+costing budget on the worklist, and running nothing is a louder kind of stopped than
+silence, and a cycle that said "all working" over it would be answering the wrong
+question. `orc tend` is what starts it, and `orc wake --tend` makes the cycle do it
+— for the machine where a cron entry running `wake` is the only thing there is.
+
+### Reaching a session that is not ready
+
+`poke`, `wake`, and the nudge `tend` sends all end at a session's socket, and that
+socket is legitimately missing for short stretches: a session that has just started
+has its state file before it has a listener, and a supervisor restarting a crashed
+child has no pty to type into until the child is back. Both are a fleet working
+correctly, and one attempt against them is a coin toss.
+
+So a delivery is retried — six attempts over about nine seconds, which outlasts a
+supervisor's first restart backoff — and only for refusals that mean *not yet*. A
+message that cannot be typed, an identity nobody controls, and a session that has
+been stopped are answered once. The distinction travels over the socket: a
+supervisor marks a refusal it expects to outgrow, so a client can tell the two apart
+rather than guessing from the text.
+
+Where the fleet says an agent should be running and it is not, `poke` and `wake`
+start it and then deliver, instead of refusing with advice to run `tend` first. An
+identity that is **not employed** is still refused: starting a session nobody
+employed spends budget on a decision the caller did not make.
+
+A start that keeps failing is paced. The first retry is immediate — most failures
+are a moment of a busy machine — and after that the wait widens to a cap of fifteen
+minutes, so an agent that cannot start does not fork a doomed supervisor every time
+somebody types `orc status`. It never stops trying, because a fleet that gave up
+needs a person to notice, and `orc employ` clears the pacing: an explicit ask always
+gets an attempt.
 
 ## §1.5 Changing what an agent runs on
 

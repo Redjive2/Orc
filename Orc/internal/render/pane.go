@@ -403,7 +403,11 @@ func paneCompose(b *strings.Builder, s Screen, p style.Palette, inner int, compo
 
 // paneFooter draws the keys and what is waiting.
 func paneFooter(b *strings.Builder, s Screen, p style.Palette, inner int) error {
-	keys := " ^S send · ^\\ d detach · ^] direct · ^R refresh "
+	// Leaving comes first, and as the one key rather than the two. It is the thing
+	// somebody needs when they are stuck, and a list that opened with "send" put the
+	// way out third — behind a sequence that is hard to type on half of the world's
+	// keyboards.
+	keys := " ^Q leave · ^S send · ^] terminal · ^R refresh "
 
 	right := ""
 	if s.Facts.Mail >= 0 {

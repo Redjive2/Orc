@@ -30,8 +30,21 @@ import (
 // writes to the session except the composed buffer, and only when ^S says so — which
 // is what makes it safe to watch a working agent with.
 func (a App) attach(args []string) error {
-	var direct bool
-	rest, err := flagged(args, options{switches: map[string]*bool{"--direct": &direct}})
+	// `--direct` is the default, and `--view` asks for the composed pane.
+	//
+	// It was the other way round, and that was wrong about what somebody attaches
+	// *for*. The composed pane is built from the session's transcript and the hook's
+	// feed, so it shows what an agent has said and done — but not what its terminal
+	// is drawing. Anything Claude renders in its own interface, and anything written
+	// before the first event, is simply not there: the pane is often blank while the
+	// session is perfectly busy, which reads as an attach that does not work.
+	//
+	// Attaching is the thing an operator reaches for when they want to *see*. The
+	// mode that shows everything is the one that should need no flag.
+	var direct, composed bool
+	rest, err := flagged(args, options{switches: map[string]*bool{
+		"--direct": &direct, "--view": &composed,
+	}})
 	if err != nil {
 		return err
 	}
@@ -56,21 +69,41 @@ func (a App) attach(args []string) error {
 		}
 	}
 
-	if !direct {
+	if composed && direct {
+		return fault.Usage{Reason: "attach shows the terminal or the composed pane; name one"}
+	}
+	if composed {
 		return a.cleanView(s, who)
 	}
 	return a.proxy(s, who)
 }
 
-// The detach sequence: Ctrl-\ then d.
+// The detach sequence: Ctrl-\ then one of d, q, or `.`.
 //
-// It is two keys rather than one because every single key worth pressing belongs to
-// the session: ^C interrupts the agent, ^D ends its input, ^] is used by its own UI.
-// A prefix nobody types by accident is the only kind that can be safe.
-const (
-	detachPrefix = 0x1c // ^\
-	detachKey    = 'd'
-)
+// A prefix is unavoidable here. Every single key worth pressing belongs to the
+// session — ^C interrupts the agent, ^D ends its input, ^] is used by its own
+// interface — so the only safe shape is a prefix nobody types by accident followed
+// by a letter.
+//
+// Three letters rather than one because the prefix is already the hard part. `^\` is
+// awkward on a US keyboard and worse on the layouts where a backslash needs AltGr:
+// somebody who has managed to press it should not then also have to remember which
+// letter. `d` for detach, `q` for the people whose fingers say quit, and `.` because
+// that is how ssh's own escape ends a session and the muscle memory is already
+// there.
+const detachPrefix = 0x1c // ^\
+
+// detachKeys are what may follow the prefix.
+var detachKeys = []byte{'d', 'q', '.'}
+
+func isDetachKey(b byte) bool {
+	for _, k := range detachKeys {
+		if b == k {
+			return true
+		}
+	}
+	return false
+}
 
 // proxy is `attach --direct`: the operator's terminal, wired to the session.
 func (a App) proxy(s caller, who user.Name) error {
@@ -111,7 +144,14 @@ func (a App) proxy(s caller, who user.Name) error {
 	signal.Notify(signals, attachSignals()...)
 	defer signal.Stop(signals)
 
-	if _, err := io.WriteString(a.Stdout, fmt.Sprintf("\r\n[orc: attached to %s — ^\\ d to detach]\r\n", who)); err != nil {
+	// Said in full, and said as two keystrokes rather than as a glyph pair: "^\ d"
+	// reads as one thing to press, and somebody who tries to press it as one thing
+	// concludes the detach does not work. The session keeps running either way, and
+	// saying so is what stops an operator sitting in an attach they do not want to
+	// be in because they are afraid leaving will stop the agent.
+	if _, err := io.WriteString(a.Stdout, fmt.Sprintf(
+		"\r\n[orc: attached to %s — to leave, press Ctrl-\\ and then d. the session keeps running.]\r\n",
+		who)); err != nil {
 		return err
 	}
 
@@ -183,7 +223,7 @@ func scanDetach(in []byte, armed *bool) (out []byte, detach bool) {
 	for _, b := range in {
 		if *armed {
 			*armed = false
-			if b == detachKey {
+			if isDetachKey(b) {
 				return out, true
 			}
 			out = append(out, detachPrefix, b)

@@ -50,6 +50,16 @@ type Request struct {
 type Reply struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// Again marks a refusal that will not be one in a moment: a session between a
+	// crash and its restart has no pty to type into, and answers so.
+	//
+	// It travels because the type does not. A reply carries a *string*, so a client
+	// reconstructing an error gets `errors.New(reply.Error)` and cannot tell "not
+	// yet" from "no" — which made a poke during a restart, the case retrying exists
+	// for, the one case that was never retried. A supervisor from before this field
+	// leaves it false and behaves exactly as it did; a client from before it ignores
+	// the field, which json.Unmarshal does by default.
+	Again bool `json:"again,omitempty"`
 	// Status fields, for OpStatus.
 	ID       string `json:"id,omitempty"`
 	Child    int    `json:"child,omitempty"`
@@ -186,9 +196,27 @@ func writeReply(w io.Writer, reply Reply) error {
 	return err
 }
 
+// rebuild turns a refusal back into an error of the right kind.
+//
+// Typed on this side from the one bit the wire carries, so a caller can tell a
+// session that is coming back from one that has refused. Everything else stays a
+// plain error: inventing a richer type from a string would be guessing at a fault
+// the supervisor never sent.
+func rebuild(reply Reply) error {
+	if reply.Again {
+		return fault.Unavailable{Peer: "the session", Err: errors.New(reply.Error)}
+	}
+	return errors.New(reply.Error)
+}
+
 func replyFor(err error) Reply {
 	if err != nil {
-		return Reply{Error: err.Error()}
+		// Unavailable is the supervisor's "not yet": it is what Poke, Resize, and
+		// Attach return while there is no child to talk to. Every other fault it
+		// raises is a decision — a message that cannot be typed, a session already
+		// stopping — and a client must not spin on those.
+		var unavailable fault.Unavailable
+		return Reply{Error: err.Error(), Again: errors.As(err, &unavailable)}
 	}
 	return Reply{OK: true}
 }
@@ -252,7 +280,7 @@ func (c *Client) ask(req Request) (Reply, error) {
 		return Reply{}, fault.Parse{Path: c.path, Reason: "the session replied with something that is not json"}
 	}
 	if !reply.OK {
-		return reply, errors.New(reply.Error)
+		return reply, rebuild(reply)
 	}
 	return reply, nil
 }
