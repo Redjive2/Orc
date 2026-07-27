@@ -49,6 +49,10 @@ let state = {
   // rather than a form value because changing it is a *fetch*: the server bounds
   // what it will hand over, so the browser cannot widen a chart it already has.
   activity: null, activityWindow: "48h",
+  // How often the server asks to be synced. Held here rather than read out of the
+  // form that sets it: it is the third of the three cycles the tab reports, and one
+  // nobody could see without opening a dialog was one they could not check.
+  syncPace: null,
   // Which messages are ticked, as keys rather than as messages: a selection
   // has to survive the redraw a sync causes, and the message objects are
   // replaced wholesale by every sync while their keys are not.
@@ -1212,9 +1216,14 @@ async function refresh() {
     // it every few seconds for a screen nobody is looking at would be paying for a
     // chart continuously to see it occasionally.
     let activity = state.activity;
+    let syncPace = state.syncPace;
     if (route.startsWith("/manage/activity")) {
       activity = await api.activity(state.activityWindow)
         .catch((err) => ({ unreachable: String(err.message || err) }));
+      // A cheap setting rather than a series, and it fails its own way: an
+      // interval that will not read is one line missing from a row, not a reason
+      // to lose the tab that draws the charts.
+      syncPace = await api.syncPace().catch(() => state.syncPace);
     }
 
     let detail = state.detail;
@@ -1227,7 +1236,7 @@ async function refresh() {
     }
 
     set({
-      activity,
+      activity, syncPace,
       session, adminEnabled: session.admin, machines: session.machines || [],
       inbox: inbox.messages || [], archive: archive.messages || [],
       sent: sent.messages || [],

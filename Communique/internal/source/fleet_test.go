@@ -211,6 +211,58 @@ func TestFleetReadsWhatOrcDerived(t *testing.T) {
 	}
 }
 
+// TestFleetCarriesThePaceAndThePrices: the cycles and the price list survive the
+// decode.
+//
+// They did not, and nothing said so. A field cq's protocol does not declare is
+// dropped in silence — the tab drew "nothing set — the built-in pace" against a
+// fleet that had been paced, and the price list simply had no card. Both are read
+// from a screen and neither is checked anywhere else, so a decode that quietly
+// keeps half the snapshot is a whole feature that looks like it never ran.
+//
+// Written as orc spells it. The point of the fixture is the field names, so copying
+// them from cq's own tags would be the test agreeing with itself.
+func TestFleetCarriesThePaceAndThePrices(t *testing.T) {
+	o := &source.Orc{Command: "orc", Run: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if len(args) == 0 || args[0] != "status" {
+			return nil, errNoOrc{}
+		}
+		return []byte(`{
+			"root": "/store", "operator": "boss",
+			"pace": {"wake_after": "20m", "wake_every": "5m", "tend_watch": "30s"},
+			"tariff": [{"setting": "model.sonnet", "weight": 4,
+			            "suggested": 6, "measured": 1.4, "turns": 90}],
+			"identities": [
+				{"name": "boss", "operator": true, "authority": 100, "asked_for": 100},
+				{"name": "atlas", "boss": "boss", "authority": 40, "asked_for": 40,
+				 "pace": {"wake_after": "5m", "tend_off": true,
+				          "from": {"wake_after": "identity", "tend_off": "role"}}}
+			]
+		}`), nil
+	}}
+
+	got := o.Fleet(t.Context())
+	if got.Pace.WakeAfter != "20m" || got.Pace.WakeEvery != "5m" || got.Pace.TendWatch != "30s" {
+		t.Errorf("the fleet's own cycles were dropped: %+v", got.Pace)
+	}
+	if len(got.Tariff) != 1 || got.Tariff[0].Setting != "model.sonnet" ||
+		got.Tariff[0].Weight != 4 || got.Tariff[0].Suggested != 6 {
+		t.Errorf("the price list was dropped: %+v", got.Tariff)
+	}
+	atlas := got.Identities[1]
+	if atlas.Pace.WakeAfter != "5m" || !atlas.Pace.TendOff {
+		t.Errorf("an identity's own cycles were dropped: %+v", atlas.Pace)
+	}
+	// Which layer said so, and not only what it said: an exception that has taken
+	// effect and one that has not look alike without it.
+	if atlas.Pace.From["wake_after"] != "identity" || atlas.Pace.From["tend_off"] != "role" {
+		t.Errorf("where each setting came from was dropped: %+v", atlas.Pace.From)
+	}
+	if err := got.Validate(); err != nil {
+		t.Errorf("a paced fleet does not validate: %v", err)
+	}
+}
+
 // TestFleetSaysWhyRatherThanShowingNothing: a machine with no orc is not a failed
 // sync, and an empty panel says neither "no agents here" nor "orc is broken".
 func TestFleetSaysWhyRatherThanShowingNothing(t *testing.T) {

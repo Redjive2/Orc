@@ -308,6 +308,39 @@ test("a fleet with nothing set says so rather than showing blanks", () => {
   assert.match(got, /default pace/);
 });
 
+// All three cycles are one question — how often does any of this happen — and the
+// answer has to be readable without opening the forms that set it.
+test("the fleet says what its own cycles do", () => {
+  const state = {
+    fleet: [{
+      machine: "sandy", operator: "rdm",
+      pace: { wake_after: "20m", wake_every: "5m", tend_watch: "30s" },
+      identities: [{ name: "ember", activity: "idle" }],
+    }],
+    syncPace: { watch: "2m", floor: "10s" },
+  };
+  const got = text(view.activity(state, { pace() {}, poke() {}, paceSync() {}, setActivityWindow() {} }));
+  assert.match(got, /wake after 20m/);
+  assert.match(got, /look every 5m/);
+  assert.match(got, /tend every 30s/);
+  assert.match(got, /sync every 2m/);
+});
+
+// A cycle nobody has set and a cycle somebody has stopped look alike as blanks and
+// are not alike at all: one is waiting for a default and the other is a decision.
+test("a stopped fleet cycle is not shown as an unset one", () => {
+  const state = {
+    fleet: [{
+      machine: "sandy", operator: "rdm",
+      pace: { wake_off: true, wake_after: "20m", tend_watch: "30s" },
+      identities: [{ name: "ember", activity: "idle" }],
+    }],
+  };
+  const got = text(view.activity(state, { pace() {}, poke() {}, paceSync() {}, setActivityWindow() {} }));
+  assert.match(got, /not woken/);
+  assert.ok(!/wake after 20m/.test(got), "a stopped cycle still advertised its interval");
+});
+
 // Sync is the third cycle and the odd one: it belongs to the link between two
 // machines rather than to a fleet, so it is set at the server and is not per agent.
 test("sync is offered once, beside the fleet's cycles", () => {

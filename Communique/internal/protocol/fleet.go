@@ -123,6 +123,19 @@ type Fleet struct {
 	// nobody knew to expect.
 	Toolkit    []FleetToolkit  `json:"toolkit,omitempty"`
 	Vocabulary FleetVocabulary `json:"vocabulary,omitzero"`
+	// Pace is the fleet's own layer — the default every identity falls back to,
+	// and what a browser edits when it means "all of them" rather than "this one".
+	// Distinct from each identity's resolved pace above, which is the answer
+	// rather than the setting.
+	Pace FleetPace `json:"pace,omitzero"`
+	// Tariff is what this fleet charges per model and per effort, with what orc's
+	// own measurement suggests instead.
+	//
+	// The suggestion travels rather than being computed here from the same
+	// buckets: a second implementation of the normalisation would be a second
+	// opinion about what a fleet should charge, and the two would drift the first
+	// time either rounded differently.
+	Tariff []FleetTariff `json:"tariff,omitempty"`
 	// Prompts are the standing instructions agents run under: the fleet's layer,
 	// each role's, each identity's, and every wake message. The text travels with
 	// them because the tab is an editor rather than a listing, and one that had to
@@ -170,9 +183,16 @@ type FleetID struct {
 	// Buckets is what this identity has cost and touched, by the hour, for as far
 	// back as a snapshot carries. The server keeps the long series; this is the
 	// window that keeps it current — see store.MergeActivity.
-	Buckets   []ActivityBucket `json:"buckets,omitempty"`
-	Budget    int              `json:"spawn_budget"`
-	HasBudget bool             `json:"has_spawn_budget"`
+	Buckets []ActivityBucket `json:"buckets,omitempty"`
+	// Pace is what this identity's cycles resolve to, and which layer said so.
+	//
+	// Resolved by orc rather than layered here: the fleet's, the role's and the
+	// identity's are three records, and a browser that had them all and picked
+	// would be a second implementation of the precedence — wrong in exactly the
+	// case somebody set an exception and wants to see it take effect.
+	Pace      FleetPace `json:"pace,omitzero"`
+	Budget    int       `json:"spawn_budget"`
+	HasBudget bool      `json:"has_spawn_budget"`
 
 	// The worklist half, and then what is actually running. Separate because the
 	// states where they disagree are the ones worth mirroring: employed with no
@@ -186,6 +206,39 @@ type FleetID struct {
 	Session   string `json:"session,omitempty"`
 	Restarts  int    `json:"restarts,omitempty"`
 	LastExit  string `json:"last_exit,omitempty"`
+}
+
+// FleetPace is how often something is woken and tended, as orc resolved it.
+//
+// A value and the layer it came from, because those are two different things a
+// person needs: "woken after 20m" answers what will happen, and "from the role"
+// answers why, which is the question anybody who has just set an identity's own
+// and seen no change is actually asking.
+//
+// Off is a value rather than an absent interval. A cycle nobody has set and a cycle
+// somebody has stopped look alike from the outside and are not alike at all: one is
+// waiting for a default and the other is a decision.
+type FleetPace struct {
+	WakeAfter string `json:"wake_after,omitempty"`
+	WakeEvery string `json:"wake_every,omitempty"`
+	TendWatch string `json:"tend_watch,omitempty"`
+	WakeOff   bool   `json:"wake_off,omitempty"`
+	TendOff   bool   `json:"tend_off,omitempty"`
+	// From says which layer set each value: `system`, `role`, or `identity`.
+	// Absent where nothing set it and the built-in stands.
+	From map[string]string `json:"from,omitempty"`
+}
+
+// FleetTariff is one line of the price list: what a setting costs, and what the
+// fleet's own measurement would charge for it instead.
+type FleetTariff struct {
+	Setting string `json:"setting"`
+	Weight  int    `json:"weight"`
+	// Suggested and Measured are absent where nothing was observed, which is not
+	// the same as a suggestion of zero: a combination nobody ran proposes nothing.
+	Suggested int     `json:"suggested,omitempty"`
+	Measured  float64 `json:"measured,omitempty"`
+	Turns     int     `json:"turns,omitempty"`
 }
 
 // ActivityBucket is one hour of one identity's work, on one model at one effort.

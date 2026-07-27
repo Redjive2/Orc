@@ -53,7 +53,7 @@ export function activity(state, actions) {
       h("div", { class: "meta" }, summary(list)),
       h("div", { class: "body" },
         ...(f.problems || []).map((p) => h("p", { class: "warn" }, p)),
-        fleetPace(f, actions),
+        fleetPace(f, actions, state.syncPace),
         ...(list.length === 0
           ? [h("p", { class: "muted" }, "nobody yet")]
           : list.map((id) => row(f, id, actions))),
@@ -314,13 +314,20 @@ function layer(from) {
 
 // fleetPace is the row of controls for the fleet's own layer, which is what
 // somebody is setting when they mean "all of them" rather than "this one".
-export function fleetPace(f, actions) {
+export function fleetPace(f, actions, sync) {
   if (!actions) return null;
   const pace = f.pace || {};
   const said = [];
-  if (pace.wake_after) said.push(`wake after ${pace.wake_after}`);
+  if (pace.wake_off) said.push("not woken");
+  else if (pace.wake_after) said.push(`wake after ${pace.wake_after}`);
   if (pace.wake_every) said.push(`look every ${pace.wake_every}`);
-  if (pace.tend_watch) said.push(`tend every ${pace.tend_watch}`);
+  if (pace.tend_off) said.push("not tended");
+  else if (pace.tend_watch) said.push(`tend every ${pace.tend_watch}`);
+  // Beside the other two rather than only inside its own dialog. All three are the
+  // answer to one question — how often does any of this happen — and an interval
+  // somebody has to open a form to read is one they cannot check at a glance.
+  if (sync && sync.watch) said.push(`sync every ${sync.watch}`);
+  else if (sync) said.push("sync as each watcher was started");
 
   return h("div", { class: "controls" },
     h("span", { class: "muted" }, "the fleet:"),
