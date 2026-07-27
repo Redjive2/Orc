@@ -52,13 +52,15 @@ var commands = []entry{
 	},
 	{
 		name: "overview", args: "<dir>",
-		does: "trees for every file in a directory",
-		detail: "The same as `index`, for a whole directory at once, so a package can be\n" +
-			"understood without opening it file by file.\n\n" +
-			"A file that will not parse is skipped with a note on stderr rather than\n" +
-			"failing the run: one unreadable file in a directory should not cost the\n" +
-			"other thirty.\n\n" +
-			"It ends with the folders directly inside, and what each holds. A folder\n" +
+		does: "trees for every annotated file in a tree",
+		detail: "The same as `index`, for a whole tree at once, so a package — or a whole\n" +
+			"repository — can be understood without opening it file by file. Each tree\n" +
+			"is headed by its path relative to the directory you named.\n\n" +
+			"The sweep is dock's: .git, node_modules, vendor, target and any\n" +
+			"dot-directory are never walked. A file anno cannot read at all is passed\n" +
+			"over in silence — over a tree those are images and archives, not\n" +
+			"mistakes — and one it read but could not parse is noted on stderr.\n\n" +
+			"It ends with the folders that had nothing to show, and why. A folder\n" +
 			"holding nothing annotated appears in no tree, and one just made is then\n" +
 			"indistinguishable from one that was never created.",
 		examples: []string{"anno overview internal/tree", "anno overview . --json"},

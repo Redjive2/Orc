@@ -14,14 +14,30 @@ anno <command> <args...>
 | `anno find <folder path><chain>`          | Returns the content and index of the specified annotation |
 | `anno write <file path><chain> <content>` | Writes `<content>` to the specified annotation            |
 
-`overview` reads one directory, not a tree, and ends with the folders directly
-inside it and what each holds — a count of files and folders, or **empty**, or
-**cannot be read**. Without this a folder you have just made appears nowhere,
-since an overview is a tree per annotated file and a new folder has none, and
-nothing distinguishes it from a folder that was never created. A directory of
-folders and nothing annotated therefore exits 0 with them listed rather than
-"not found"; one with neither is still not found. `--json` is unchanged: it is
-an array of trees, and the folders are for the person who asked.
+`overview` sweeps the whole tree beneath the folder, by the same rules `dock`
+uses: `.git`, `.hg`, `.svn`, `node_modules`, `vendor`, `target` and any
+dot-directory are never walked, and symlinks are passed over so nothing appears
+twice. Each tree is headed by its path relative to the folder you asked about,
+so four packages holding a `cli.go` are four distinguishable headers.
+
+A file it cannot read at all — an image, an archive, anything with a NUL in it —
+is passed over in silence, because over a tree those are the majority and a
+refusal per file would bury the trees you came for. A text file it read but
+could not parse is still named on stderr: somebody may well have meant to
+annotate that one. A file with no annotations is simply not drawn.
+
+It ends with the folders that had nothing to show, and why: **empty**,
+**nothing annotated**, **not walked**, or **cannot be read**. A folder whose
+trees are already on the screen is not in that list. Without it a folder you
+have just made appears nowhere, since an overview is a tree per annotated file
+and a new folder has none, and nothing distinguishes it from a folder that was
+never created. A directory of folders and nothing annotated therefore exits 0
+with them listed rather than "not found"; one with neither is still not found.
+The folder you named is different: if it does not exist, is not a directory, or
+cannot be read, that is exit 5 rather than a one-row listing.
+
+`--json` is unchanged in shape: an array of trees, each carrying its full path,
+and the folders are for the person who asked.
 
 ## §1.1 Chains
 

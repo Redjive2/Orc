@@ -59,8 +59,22 @@ type layout struct {
 }
 
 // Index renders a whole tree, including the file row.
-func Index(t tree.Tree, p style.Palette) (string, error) {
+func Index(t tree.Tree, p style.Palette) (string, error) { return IndexAs(t, "", p) }
+
+// IndexAs is Index with the file row named explicitly.
+//
+// A tree knows its file by base name, which is right when somebody named that file:
+// they typed the path, and repeating it back adds nothing. It is wrong in an
+// overview of a whole tree, where four packages each hold a `cli.go` and four
+// identical headers say nothing about which one is being read. There the caller
+// knows the root the sweep started from and can name each file relative to it.
+//
+// An empty name means the tree's own, so the common case says nothing extra.
+func IndexAs(t tree.Tree, name string, p style.Palette) (string, error) {
 	rows := flatten(t)
+	if name != "" && len(rows) > 0 {
+		rows[0].name = "[" + name + "]"
+	}
 	l, err := measure(rows)
 	if err != nil {
 		return "", err

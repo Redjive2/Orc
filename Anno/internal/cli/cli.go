@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"orc/anno/internal/edit"
 	"orc/anno/internal/guard"
@@ -249,9 +248,17 @@ func (a App) index(args []string) error {
 	return err
 }
 
-// overview renders every readable file in a directory. Files Anno cannot parse
-// are reported and skipped: an overview of a directory should not fail because
-// one file in it is a binary.
+// overview renders every readable file under a directory, walking the whole tree.
+//
+// It read one directory at a time until it did not: understanding a package meant
+// running the command once per folder, and "what is annotated in this tree?" was a
+// question nobody could ask. It sweeps now, by Dock's rules — see sweep.go — so that
+// two tools pointed at one repository agree about what is in it.
+//
+// Files Anno cannot parse are reported and skipped: an overview should not fail
+// because one file in it is a binary. Files it cannot *read* at all are passed over
+// without a word, because over a whole tree those are images and archives rather
+// than mistakes.
 func (a App) overview(args []string) error {
 	args, asJSON, err := takeFlag(args, "--json")
 	if err != nil {
@@ -261,25 +268,54 @@ func (a App) overview(args []string) error {
 		return fault.Usage{Reason: fmt.Sprintf("overview takes one directory path, got %d arguments", len(args))}
 	}
 	dir := args[0]
-	files, err := listDir(dir)
+	found, err := sweep(dir)
 	if err != nil {
 		return err
 	}
 
 	shown := 0
 	trees := []jsonTree{}
-	for _, path := range files {
+	// Which folders bore something, so the listing at the end can be about the rest.
+	// Marked up the whole ancestry: a tree three levels down means every folder above
+	// it has something to show, and listing them as barren would contradict the
+	// screen directly above the listing.
+	annotated := map[string]bool{}
+	for _, path := range found.files {
 		t, err := load(path)
 		if err != nil {
-			a.skip(path, err)
+			// Over a whole tree, most files are not source: images, archives,
+			// lockfiles, anything with a NUL in it. Naming each one would bury the
+			// output in refusals about files nobody expected an annotation in.
+			//
+			// So a file Anno cannot even *read* is passed over in silence, and one
+			// it read but could not parse is still reported — that second kind is a
+			// text file somebody may well have meant to annotate, and it is the
+			// whole reason this note exists.
+			if !unreadable(err) {
+				a.skip(path, err)
+			}
 			continue
+		}
+		// A file with no annotations is passed over. Reading one directory, an empty
+		// box was a fair answer — somebody had named that folder and every file in
+		// it was worth accounting for. Over a tree it is not: a repository is mostly
+		// files nobody ever annotated, and a hundred empty boxes would bury the six
+		// trees somebody came for.
+		if t.Empty() {
+			continue
+		}
+		for at := filepath.Dir(path); len(at) >= len(dir); at = filepath.Dir(at) {
+			annotated[at] = true
+			if at == dir {
+				break
+			}
 		}
 		if asJSON {
 			trees = append(trees, treeJSON(t))
 			shown++
 			continue
 		}
-		out, err := render.Index(t, a.Out)
+		out, err := render.IndexAs(t, within(dir, path), a.Out)
 		if err != nil {
 			a.skip(path, err)
 			continue
@@ -306,7 +342,7 @@ func (a App) overview(args []string) error {
 		return a.emitJSON(trees)
 	}
 
-	if list := render.Folders(subdirs(dir), a.Out); list != "" {
+	if list := render.Folders(found.barren(dir, annotated), a.Out); list != "" {
 		if shown > 0 {
 			if err := a.say(""); err != nil {
 				return err
@@ -562,74 +598,6 @@ func listDir(dir string) ([]string, error) {
 	}
 	slices.Sort(out)
 	return out, nil
-}
-
-// subdirs lists the folders directly inside dir, and what is in each.
-//
-// An overview draws a tree per annotated file, so a folder appears in it only
-// through the files it holds — and a folder holding none appears nowhere at all.
-// That makes a folder somebody has just made indistinguishable from one that was
-// never created, which is the moment it matters most: a new folder missing from a
-// listing reads as a folder that did not save.
-//
-// One level, like the rest of this command. `anno overview` reads a directory
-// rather than a tree, and quietly recursing here would make the folder list
-// describe a wider thing than the trees above it.
-func subdirs(dir string) []render.Folder {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-
-	var out []render.Folder
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		path := filepath.Join(dir, e.Name())
-		out = append(out, render.Folder{Name: e.Name(), Why: whatIsIn(path)})
-	}
-	slices.SortFunc(out, func(a, b render.Folder) int { return strings.Compare(a.Name, b.Name) })
-	return out
-}
-
-// whatIsIn says what a folder holds, in the words a listing uses.
-//
-// A folder that cannot be read is the one worth naming most and the one most
-// easily lost: skipping it silently says "nothing here", which is the opposite of
-// what is true — nobody can tell whether there is anything there.
-func whatIsIn(path string) string {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return "cannot be read"
-	}
-	if len(entries) == 0 {
-		return "empty"
-	}
-
-	files, folders := 0, 0
-	for _, e := range entries {
-		if e.IsDir() {
-			folders++
-			continue
-		}
-		files++
-	}
-	switch {
-	case files == 0:
-		return plural(folders, "folder", "folders")
-	case folders == 0:
-		return plural(files, "file", "files")
-	default:
-		return plural(files, "file", "files") + ", " + plural(folders, "folder", "folders")
-	}
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return fmt.Sprintf("%d %s", n, one)
-	}
-	return fmt.Sprintf("%d %s", n, many)
 }
 
 // locate chooses which reading of a target string to use.

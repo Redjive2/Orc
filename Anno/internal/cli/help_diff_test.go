@@ -14,7 +14,7 @@ const wantHelp = `anno — a minimal file annotation manager
 
 usage:
   anno index    <file>                     tree of annotations in a file
-  anno overview <dir>                      trees for every file in a directory
+  anno overview <dir>                      trees for every annotated file in a tree
   anno read     <file><chain>              content of an annotation
   anno find     <dir><chain>               content and index of matches in a directory
   anno write    <file><chain> <content>    replace an annotation's content ("-" reads stdin)

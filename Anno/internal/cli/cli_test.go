@@ -209,12 +209,61 @@ func TestOverview(t *testing.T) {
 			t.Errorf("stdout should contain %q:\n%s", want, got.stdout)
 		}
 	}
-	if strings.Contains(got.stdout, "gamma") {
-		t.Errorf("overview must not recurse into subdirectories:\n%s", got.stdout)
+	// The whole tree, not one directory.
+	//
+	// This used to assert the opposite. Reading one level meant understanding a
+	// package was a matter of running the command once per folder, and "what is
+	// annotated in this tree?" was a question nobody could ask — so it sweeps now,
+	// by the same rules Dock uses, and a file three directories down is in the
+	// answer.
+	if !strings.Contains(got.stdout, "gamma") {
+		t.Errorf("overview did not reach a file in a subdirectory:\n%s", got.stdout)
 	}
-	for _, want := range []string{"skipping", "bin", "broken"} {
-		if !strings.Contains(got.stderr, want) {
-			t.Errorf("stderr should report skipped files, missing %q:\n%s", want, got.stderr)
+
+	// A text file whose annotations do not parse is still named: somebody may well
+	// have meant to annotate it, and that note is the whole reason the line exists.
+	if !strings.Contains(got.stderr, "broken") {
+		t.Errorf("stderr should report a file it read but could not parse:\n%s", got.stderr)
+	}
+	// A file it cannot read at all is passed over in silence. Over a whole tree
+	// those are images and archives rather than mistakes, and a refusal for each
+	// would bury the trees somebody actually wanted.
+	if strings.Contains(got.stderr, "bin") {
+		t.Errorf("a binary file was reported rather than passed over:\n%s", got.stderr)
+	}
+}
+
+// TestASweepSkipsTheMachinery. A tree Anno is pointed at is usually a repository,
+// and walking `.git` is thousands of files that could never carry an annotation.
+// The exclusions are Dock's, so two tools pointed at one repository agree about
+// what is in it.
+func TestOverviewSkipsWhatDockSkips(t *testing.T) {
+	dir := workspace(t, map[string]string{
+		"kept.go":                 "// @:> section kept\nx\n",
+		".git/config.go":          "// @:> section zzgit\nx\n",
+		"node_modules/pkg/lib.go": "// @:> section zznode\nx\n",
+		"vendor/other/thing.go":   "// @:> section zzvendor\nx\n",
+		".hidden/secret.go":       "// @:> section zzdot\nx\n",
+		// Rust's build directory, at the root where Rust puts it.
+		"target/debug/out.go": "// @:> section zzbuilt\nx\n",
+		// And a Go package that happens to be called the same thing. Anno's own
+		// tree holds one, and hiding it was the tool refusing to describe itself.
+		"internal/target/parse.go": "// @:> section zzkept\nx\n",
+	})
+
+	got := run(t, "", "overview", dir).mustSucceed(t)
+	if !strings.Contains(got.stdout, "kept") {
+		t.Errorf("the ordinary file is missing:\n%s", got.stdout)
+	}
+	// Distinct tokens rather than the folder names: the listing at the end names
+	// the folders it skipped, which is the point of it, so grepping for "hidden"
+	// would match the very line that proves the skip worked.
+	if !strings.Contains(got.stdout, "zzkept") {
+		t.Errorf("a source package named `target` was skipped as a build directory:\n%s", got.stdout)
+	}
+	for _, gone := range []string{"zzgit", "zznode", "zzvendor", "zzdot", "zzbuilt"} {
+		if strings.Contains(got.stdout, gone) {
+			t.Errorf("a swept tree walked into machinery (%s):\n%s", gone, got.stdout)
 		}
 	}
 }
@@ -616,8 +665,8 @@ func TestReadsAreNotScopeChecked(t *testing.T) {
 // exactly what somebody who has just made one is checking.
 func TestOverviewNamesTheFoldersBesideTheFiles(t *testing.T) {
 	dir := workspace(t, map[string]string{
-		"a.go":            "// @:> section alpha\nx\n",
-		"sub/c.go":        "// @:> section gamma\nz\n",
+		"a.go":               "// @:> section alpha\nx\n",
+		"sub/c.go":           "// @:> section gamma\nz\n",
 		"Word Of Alex/.keep": "",
 	})
 	// A folder with nothing in it at all, which is the case that started this.
@@ -626,19 +675,44 @@ func TestOverviewNamesTheFoldersBesideTheFiles(t *testing.T) {
 	}
 
 	got := run(t, "", "overview", dir).mustSucceed(t)
-	for _, want := range []string{"brand new", "empty", "Word Of Alex", "sub"} {
+	for _, want := range []string{"brand new", "empty", "Word Of Alex", "sub/c.go"} {
 		if !strings.Contains(got.stdout, want) {
 			t.Errorf("the overview does not mention %q:\n%s", want, got.stdout)
 		}
 	}
-	// Still one level. Listing the folders must not turn this into a tree walk,
-	// or the folder list would describe something wider than the trees above it.
-	if strings.Contains(got.stdout, "gamma") {
-		t.Errorf("overview recursed:\n%s", got.stdout)
+	// The sweep reaches it, and the folder holding it is named in the tree's own
+	// header rather than in the listing below: the listing is for folders with
+	// nothing to show, and this one has shown it.
+	if !strings.Contains(got.stdout, "gamma") {
+		t.Errorf("overview did not reach a subdirectory:\n%s", got.stdout)
+	}
+	if strings.Contains(got.stdout, "sub  ") {
+		t.Errorf("a folder whose trees are on the screen was also listed as barren:\n%s", got.stdout)
 	}
 	// The annotated files are still the point, and still first.
 	if strings.Index(got.stdout, "[a.go]") > strings.Index(got.stdout, "brand new") {
 		t.Errorf("the folders are drawn above the files:\n%s", got.stdout)
+	}
+}
+
+// A branch with nothing in it is one fact, not one per folder in it. Over a whole
+// repository the uncollapsed form was forty rows restating "nothing annotated"
+// until they pushed the trees off the screen, which is the opposite of what a
+// listing beneath the trees is for.
+func TestBarrenBranchesCollapseToTheirTopmostFolder(t *testing.T) {
+	dir := workspace(t, map[string]string{
+		"a.go":                    "// @:> section alpha\nx\n",
+		"quiet/one/two/three.txt": "nothing annotated here\n",
+	})
+
+	got := run(t, "", "overview", dir).mustSucceed(t)
+	if !strings.Contains(got.stdout, "quiet") {
+		t.Errorf("the barren branch is not named at all:\n%s", got.stdout)
+	}
+	for _, deeper := range []string{"quiet/one", "quiet/one/two"} {
+		if strings.Contains(got.stdout, deeper) {
+			t.Errorf("the listing restated the branch at %s:\n%s", deeper, got.stdout)
+		}
 	}
 }
 
