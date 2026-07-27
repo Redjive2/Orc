@@ -370,6 +370,9 @@ type watcher struct {
 	notice  string
 	alarm   bool
 	warned  bool // a detach with unsent text has been warned about once
+	// waiting is what the last draw saw: whether the session was at its prompt or
+	// part-way through a turn. `send` reads it to say what it sent into.
+	waiting bool
 }
 
 func (w *watcher) resize(size pty.WinSize) {
@@ -395,6 +398,11 @@ func (w *watcher) draw() error {
 		session = view.Session{Identity: w.who}
 		w.notice, w.alarm = "the event feed will not read — ^] for the session itself", true
 	}
+
+	// Remembered for `send`, which has to say what it sent *into*: typing at a
+	// waiting prompt and typing at an agent that is mid-turn are the same bytes and
+	// two different outcomes.
+	w.waiting = session.Waiting
 
 	prose, available := view.ReadProse(session.Transcript)
 
@@ -447,8 +455,21 @@ func (w *watcher) send(client *session.Client) {
 		return
 	}
 	w.compose.Clear()
-	w.notice, w.alarm = "sent", false
 	w.warned = false
+
+	// What "sent" means depends on what it was sent into, and the difference is the
+	// one an operator cannot see from here.
+	//
+	// The bytes are typed into the session's terminal either way. If it was waiting,
+	// that is a message it takes now. If it was mid-turn, the text sits in its input
+	// until the turn ends — so nothing appears to happen, and somebody who did not
+	// know that concludes the send was lost and tries again, which is how two copies
+	// of a message end up queued.
+	if w.waiting {
+		w.notice, w.alarm = "sent", false
+		return
+	}
+	w.notice, w.alarm = "sent — it is mid-turn, so it will be read when that finishes", false
 }
 
 // confirmLeave reports whether detaching should go ahead.

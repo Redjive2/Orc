@@ -41,6 +41,12 @@ type rig struct {
 	populated map[string]string
 	populates []string
 	failStart bool
+
+	// started, when set, is called after a session's state is written, so a test
+	// about what a *new* session is told can stand a listener up on its socket the
+	// way a supervisor does. Depopulating unlinks that socket, so a refresh has to
+	// be able to create it again — which is what a real one does.
+	started func(user.Name)
 }
 
 type result struct {
@@ -108,13 +114,28 @@ func (r *rig) populate(s *store.Store, name user.Name, id string, m model.Model,
 		ID: id, Supervisor: os.Getpid(), Child: os.Getpid(),
 		Model: m.String(), Effort: e.String(), Started: clock.Format(epoch),
 		Workspace: s.WorkspaceDir(name),
+		// Named even when nothing is listening on it, because that is what a real
+		// session's state carries and it is what makes a socket *test*able: a rig
+		// that left it empty made every path that speaks to a session fail for the
+		// wrong reason — no path rather than no listener.
+		Socket: s.SocketPath(name),
 	}
 	prompt, err := session.ComposeFor(s, name)
 	if err != nil {
 		state.InstructError = err.Error()
 	}
 	state.Instructed = len(prompt)
-	return s.WriteSession(name, state)
+	if err := s.WriteSession(name, state); err != nil {
+		return err
+	}
+	// A test about what a *new* session is told listens on that socket, and
+	// depopulating unlinks it — so a refresh, which is a depopulate followed by a
+	// populate, has to be able to listen again. A real supervisor creates its
+	// socket at exactly this point.
+	if r.started != nil {
+		r.started(name)
+	}
+	return nil
 }
 
 func (r *rig) depopulate(s *store.Store, name user.Name) error {

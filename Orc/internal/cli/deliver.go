@@ -47,6 +47,19 @@ const (
 	DeliverTries = 6
 	// DeliverBackoff is the first wait; each retry doubles it.
 	DeliverBackoff = 150 * time.Millisecond
+	// OpenTries bounds the opening message a start sends, which is a different
+	// problem and gets a different budget.
+	//
+	// Populate has already waited for the session to exist; all that can still be
+	// behind is the listener, which the supervisor opens immediately after writing
+	// the state. Half a second covers that. Waiting out a supervisor's restart
+	// backoff here would be waiting for a session that has not crashed — and it
+	// would put nine seconds on the end of every `orc employ` that could not be
+	// spoken to, which is precisely the case where the operator wants to be told
+	// quickly rather than kept waiting. What is lost is one opening message, and
+	// the wake cycle is behind it: a session nobody has spoken to has said nothing,
+	// which is exactly what that cycle looks for.
+	OpenTries = 3
 )
 
 // transient reports whether an error is worth another attempt.
@@ -71,26 +84,38 @@ func transient(err error) bool {
 // loud when the answer was not immediate: "poked, on the third try" is a fleet
 // somebody should look at, and hiding it would make a machine that is limping look
 // like one that is fine.
-func keepTrying(op func() error) (tried int, err error) {
+func keepTrying(op func() error) (tried int, err error) { return keepTryingUpTo(DeliverTries, op) }
+
+// keepTryingUpTo is keepTrying with the number of attempts named, for the callers
+// whose "not yet" is a different length of not-yet.
+func keepTryingUpTo(tries int, op func() error) (tried int, err error) {
+	if tries < 1 {
+		tries = 1
+	}
 	wait := DeliverBackoff
-	for tried = 1; tried <= DeliverTries; tried++ {
+	for tried = 1; tried <= tries; tried++ {
 		err = op()
 		if err == nil || !transient(err) {
 			return tried, err
 		}
-		if tried < DeliverTries {
+		if tried < tries {
 			time.Sleep(wait)
 			wait *= 2
 		}
 	}
-	return DeliverTries, err
+	return tries, err
 }
 
 // reach opens a session's socket, waiting out the window where a session that is
 // coming up has state but no listener yet.
 func (a App) reach(s caller, who user.Name) (*session.Client, int, error) {
+	return a.reachWithin(s, who, DeliverTries)
+}
+
+// reachWithin is reach with the attempts named.
+func (a App) reachWithin(s caller, who user.Name, tries int) (*session.Client, int, error) {
 	var client *session.Client
-	tried, err := keepTrying(func() error {
+	tried, err := keepTryingUpTo(tries, func() error {
 		got, err := a.dial(s, who)
 		if err != nil {
 			return err
@@ -114,27 +139,39 @@ func (a App) reach(s caller, who user.Name) (*session.Client, int, error) {
 // nobody employed spends budget on a decision the caller did not make, and doing
 // that inside a poke would make the quietest verb in the tool the one that grows the
 // fleet.
-func (a App) tell(s caller, who user.Name, message string) (started bool, tried int, err error) {
+// The count it returns is **retries**, not attempts.
+//
+// Delivery is two steps — reach the session, then speak to it — and each reports the
+// attempts it made, counting from one. Adding those together made a poke that worked
+// perfectly report two, which tripped the "slow to answer" note on every single
+// message a fleet ever sent. A warning that fires every time is one nobody reads,
+// and one that tells an operator their healthy fleet is struggling is worse than no
+// warning at all: it is what makes a working thing feel unreliable.
+//
+// So each step's first attempt is subtracted, and what is left is the thing the
+// caller actually wants to know — how much harder than it should have been.
+func (a App) tell(s caller, who user.Name, message string) (started bool, retries int, err error) {
 	client, tried, err := a.reach(s, who)
+	retries = tried - 1
 	if err != nil {
 		if !revivable(s, who) {
-			return false, tried, err
+			return false, retries, err
 		}
 		// Employed and not running: make it so, then say the thing.
 		if err := a.tendOne(s, who); err != nil {
-			return false, tried, err
+			return false, retries, err
 		}
 		started = true
 		var again int
 		client, again, err = a.reach(s, who)
-		tried += again
+		retries += again - 1
 		if err != nil {
-			return started, tried, err
+			return started, retries, err
 		}
 	}
 
 	sent, err := keepTrying(func() error { return client.Poke(message) })
-	return started, tried + sent, err
+	return started, retries + sent - 1, err
 }
 
 // revivable reports whether a session that is not running is one the fleet says
@@ -154,11 +191,12 @@ func revivable(s caller, who user.Name) bool {
 // Silent on the first try, which is the overwhelming majority: a line saying "on
 // the first attempt" every time is one nobody reads, and the whole value of this is
 // that the exceptions stand out.
-func (a App) noteTries(what string, who user.Name, tried int) {
-	if tried <= 1 {
+func (a App) noteTries(what string, who user.Name, retries int) {
+	if retries < 1 {
 		return
 	}
-	a.note("%s %s took %d attempts; the session was slow to answer", what, who, tried)
+	a.note("%s %s needed %d retr%s; the session was slow to answer", what, who,
+		retries, map[bool]string{true: "y", false: "ies"}[retries == 1])
 }
 
 // unreached wraps a delivery failure with what was actually tried, so the operator

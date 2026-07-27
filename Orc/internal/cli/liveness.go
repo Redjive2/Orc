@@ -571,11 +571,11 @@ func (a App) openWith(s caller, name user.Name) error {
 		message = WakeMessage
 	}
 
-	client, _, err := a.reach(s, name)
+	client, _, err := a.reachWithin(s, name, OpenTries)
 	if err != nil {
 		return err
 	}
-	if _, err := keepTrying(func() error { return client.Poke(message) }); err != nil {
+	if _, err := keepTryingUpTo(OpenTries, func() error { return client.Poke(message) }); err != nil {
 		return err
 	}
 	return a.say("  " + a.out.Muted(fmt.Sprintf("and told to begin: %s", quoteShort(message))))
