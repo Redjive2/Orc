@@ -501,6 +501,12 @@ func (c *CLI) Apply(ctx context.Context, action protocol.Action) error {
 		args = []string{"read", puidQuery(action.Args.PUID)}
 	case protocol.OpArchive:
 		args = []string{"archive", puidQuery(action.Args.PUID)}
+	case protocol.OpPrune:
+		// --yes because there is nobody at this end to ask. The confirmation
+		// happened in the browser, before the action was queued; by the time it
+		// reaches here it is a decision already taken, and a prompt on a machine
+		// nobody is watching would only be a way for it to hang.
+		args = []string{"prune", puidQuery(action.Args.PUID), "--yes"}
 	case protocol.OpCC:
 		args = []string{"cc", convoQuery(action.Args.ConvoUID), action.Args.User}
 	default:

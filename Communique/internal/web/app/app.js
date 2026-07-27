@@ -35,6 +35,10 @@ let state = {
   // `picked` is the one row whose controls are on screen. A tree with a button
   // under every line is a tree nobody can read.
   library: null, files: {}, open: {}, picked: null,
+  // Which messages are ticked, as keys rather than as messages: a selection
+  // has to survive the redraw a sync causes, and the message objects are
+  // replaced wholesale by every sync while their keys are not.
+  selection: [],
   // What somebody has typed and not yet queued, keyed by which form it is in.
   //
   // Drafts are state for the same reason open folds are: the view is redrawn on
@@ -301,6 +305,74 @@ const actions = {
   },
   async markRead(m) { await run(() => api.markRead(m.puid, m.machine)); },
   async archive(m) { await run(() => api.archiveMessage(m.puid, m.machine)); },
+
+  // --- choosing several, and deleting -------------------------------------
+  //
+  // Ticking a row records it in state rather than in the DOM. A checkbox that
+  // lived only in the page would be cleared by the next sync's redraw, which for
+  // a *selection* is worse than for a draft: the boxes come back empty and the
+  // button beside them still says "delete 12", so the count and the ticks would
+  // disagree about what is about to happen.
+
+  // pick ticks or unticks one row.
+  pick(m, on) {
+    const key = views.pickKey(m);
+    const kept = (state.selection || []).filter((k) => k !== key);
+    set({ selection: on ? [...kept, key] : kept });
+  },
+
+  // pickAll ticks or unticks a whole box, which is what the header box does.
+  pickAll(messages, on) {
+    const keys = (messages || []).map(views.pickKey);
+    const kept = (state.selection || []).filter((k) => !keys.includes(k));
+    set({ selection: on ? [...kept, ...keys] : kept });
+  },
+
+  unpickAll() { set({ selection: [] }); },
+
+  // readPicked and archivePicked queue one action per message.
+  //
+  // One action each rather than one action over a list, because the queue's unit
+  // is an operation the agent can report on: twelve rows queued as one entry that
+  // half-applied would leave nobody able to say which half. Twelve entries is
+  // more rows in the queue and exactly as many facts as there are outcomes.
+  async readPicked(messages) { await queueEach(messages, (m) => api.markRead(m.puid, m.machine)); },
+  async archivePicked(messages) {
+    await queueEach(messages, (m) => api.archiveMessage(m.puid, m.machine));
+  },
+
+  // remove deletes mail, permanently.
+  //
+  // Mailman prunes the archive and refuses a query that touches anything live, so
+  // deleting from the inbox is two operations: archive, then prune. They are
+  // queued in that order and the queue keeps its order, so the second finds what
+  // the first filed. Doing it in one operation would mean a verb that archives on
+  // the way past, and cq mirrors Mailman's API rather than inventing rules for it.
+  //
+  // The confirmation is here rather than at the server for the same reason: a
+  // confirmation is a conversation with whoever is looking at the mail, and this
+  // is the only place they are.
+  async remove(messages, archived) {
+    const list = [].concat(messages).filter(Boolean);
+    if (list.length === 0) return;
+
+    const what = list.length === 1
+      ? `“${list[0].subject || "this message"}”`
+      : `${list.length} messages`;
+    if (!await dialog.confirm({
+      title: `delete ${what}?`,
+      body: archived
+        ? "this cannot be undone. it leaves on the next sync."
+        : "they are archived and then deleted, in that order. this cannot be undone, "
+          + "and it leaves on the next sync.",
+      submit: list.length === 1 ? "delete it" : `delete ${list.length}`,
+    })) return;
+
+    await queueEach(list, async (m) => {
+      if (!archived) await api.archiveMessage(m.puid, m.machine);
+      await api.pruneMessage(m.puid, m.machine);
+    });
+  },
 
   // --- the fleet ---------------------------------------------------------
   //
@@ -942,6 +1014,28 @@ async function ask(what, text) {
     text,
     note: "queued here; it leaves on the next sync, and is refused if the file changed meanwhile",
   });
+}
+
+// queueEach queues one call per message and refreshes once at the end.
+//
+// Sequentially, because the two halves of a delete have to reach the queue in
+// order and because a browser firing twelve posts at once is twelve chances for
+// the server to answer out of order. Refreshing once rather than per message
+// keeps the screen from redrawing under the reader twelve times.
+//
+// A failure stops the run and is reported. The ones already queued stay queued —
+// they are real and the queue page shows them — and stopping means somebody
+// deciding what went wrong is looking at a list that ends where the trouble
+// started, rather than one with a gap in the middle of it.
+async function queueEach(messages, call) {
+  const list = [].concat(messages).filter(Boolean);
+  try {
+    for (const m of list) await call(m);
+    set({ selection: [] });
+  } catch (err) {
+    if (!(err instanceof ApiError && err.code === "unauthenticated")) set({ error: err });
+  }
+  await refresh();
 }
 
 async function run(fn) {

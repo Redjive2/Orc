@@ -668,7 +668,18 @@ func (s *Server) archiveMessage(w http.ResponseWriter, r *http.Request) {
 	s.simple(w, r, protocol.OpArchive)
 }
 
-// simple handles the two actions whose only operand is the message itself.
+// pruneMessage queues the one action that cannot be undone.
+//
+// There is no confirmation here, and there should not be: a confirmation is a
+// conversation with whoever is looking at the mail, and by the time a request
+// arrives that conversation has either happened in the browser or was never going
+// to. What this end owes is that the action says exactly which message, which is
+// what the puid in the path is.
+func (s *Server) pruneMessage(w http.ResponseWriter, r *http.Request) {
+	s.simple(w, r, protocol.OpPrune)
+}
+
+// simple handles the actions whose only operand is the message itself.
 func (s *Server) simple(w http.ResponseWriter, r *http.Request, op protocol.Op) {
 	found, err := s.find(r)
 	if err != nil {

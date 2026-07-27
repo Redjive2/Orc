@@ -596,3 +596,138 @@ test("a subject is prefixed once however far the thread runs", () => {
   assert.equal(views.reSubject("RE: the parser"), "RE: the parser");
   assert.equal(views.reSubject(""), "RE: ");
 });
+
+// --- choosing several, and deleting ---------------------------------------
+
+// A selection has to live in state, not in the DOM. The view is redrawn on every
+// sync, and a checkbox that lived only in the page would come back empty while
+// the button beside it still said "delete 12" — the count and the ticks
+// disagreeing about what is about to happen, over the one action that cannot be
+// undone.
+
+// mail is a state with the same message in the inbox and, optionally, ticked.
+const boxed = (selection = []) => ({
+  ...state, selection,
+  machines: [{ machine: "studio", last_sync: "2026-07-25T03:30:00Z" }],
+});
+
+const acts = () => {
+  const calls = [];
+  return {
+    calls,
+    quickReply() {},
+    pick: (m, on) => calls.push({ pick: views.pickKey(m), on }),
+    pickAll: (list, on) => calls.push({ pickAll: list.map(views.pickKey), on }),
+    unpickAll: () => calls.push({ unpickAll: true }),
+    readPicked: (list) => calls.push({ read: list.length }),
+    archivePicked: (list) => calls.push({ archived: list.length }),
+    remove: (list, archived) => calls.push({ remove: [].concat(list).length, archived }),
+    markRead() {}, archive() {}, reply: async () => {}, cc: async () => true,
+    draft() {}, forget() {},
+  };
+};
+
+// buttons pulls the pressable things out of a rendered view.
+function buttons(nodes) {
+  const out = [];
+  const visit = (n) => {
+    if (!n || typeof n !== "object") return;
+    if (n.tagName === "BUTTON") out.push(n);
+    for (const c of n.childNodes || []) visit(c);
+  };
+  for (const n of [].concat(nodes).filter(Boolean)) visit(n);
+  return out;
+}
+
+// ticks pulls the checkboxes out of a rendered mailbox.
+function ticks(nodes) {
+  const out = [];
+  const visit = (n) => {
+    if (!n || typeof n !== "object") return;
+    if (n.tagName === "INPUT" && n.getAttribute && n.getAttribute("type") === "checkbox") out.push(n);
+    for (const c of n.childNodes || []) visit(c);
+  };
+  for (const n of [].concat(nodes).filter(Boolean)) visit(n);
+  return out;
+}
+
+test("every row can be ticked, and the tick is state rather than the page", () => {
+  const a = acts();
+  const nodes = views.mailbox(boxed(), { box: "inbox" }, a);
+  const boxes = ticks(nodes);
+  // One per message, plus the one that ticks the lot.
+  assert.equal(boxes.length, state.inbox.length + 1);
+
+  const row = boxes.find((b) => b.getAttribute("name") !== "pick-all");
+  assert.ok(row.getAttribute("name"), "a checkbox with no name cannot be found again after a redraw");
+  for (const fn of row.listeners.change) fn({ target: { checked: true } });
+  assert.deepEqual(a.calls[0], { pick: "studio/0", on: true },
+    "ticking a row does not record anything, so the next sync would clear it");
+});
+
+// The key carries the machine. Two mirrored machines both have a message 3, and
+// keying on the number alone would tick two messages when somebody ticked one.
+test("a tick names the machine as well as the number", () => {
+  assert.equal(views.pickKey({ machine: "studio", puid: 3 }), "studio/3");
+  assert.notEqual(views.pickKey({ machine: "laptop", puid: 3 }),
+    views.pickKey({ machine: "studio", puid: 3 }));
+});
+
+test("a ticked row comes back ticked after the redraw", () => {
+  const picked = views.pickKey(state.inbox[0]);
+  const nodes = views.mailbox(boxed([picked]), { box: "inbox" }, acts());
+  const row = ticks(nodes).find((b) => b.getAttribute("name") === `pick-${picked}`);
+  assert.equal(row.getAttribute("checked"), "", "the redraw cleared the selection");
+});
+
+// The count is the thing somebody checks before pressing delete, so it is said in
+// words rather than left to the ticks.
+test("the bar says how many are chosen", () => {
+  const out = text(views.mailbox(boxed([views.pickKey(state.inbox[0])]), { box: "inbox" }, acts()));
+  assert.match(out, /1 of 1 chosen/);
+  assert.match(out, /delete 1/);
+});
+
+test("with nothing chosen there is nothing to press", () => {
+  const out = text(views.mailbox(boxed(), { box: "inbox" }, acts()));
+  assert.doesNotMatch(out, /delete/, "a delete button with no selection is one to press by accident");
+  // But the box that ticks everything is still there: a control that only
+  // appears once you have found it is a control nobody finds.
+  assert.equal(ticks(views.mailbox(boxed(), { box: "inbox" }, acts()))
+    .filter((b) => b.getAttribute("name") === "pick-all").length, 1);
+});
+
+// Deleting from the archive is one operation; deleting live mail is an archive
+// and then a prune. The view says which by where it is.
+test("the archive offers no archive button, and says the mail is already filed", () => {
+  const a = acts();
+  const archived = { ...boxed([`studio/${state.archive[0].puid}`]) };
+  const nodes = views.mailbox(archived, { box: "archive" }, a);
+  const out = text(nodes);
+  assert.doesNotMatch(out, /archive<|>archive/, "the archive offers to archive what is archived");
+
+  const del = buttons(nodes).find((b) => b.textContent.startsWith("delete"));
+  del.listeners.click[0]({});
+  assert.equal(a.calls[0].archived, true,
+    "deleting from the archive was queued as though the mail were still live");
+});
+
+test("an open message offers to delete it", () => {
+  const a = acts();
+  const m = state.inbox[0];
+  const nodes = views.message(boxed(), { message: m, thread: [] }, a);
+  const del = buttons(nodes).find((b) => b.textContent === "delete");
+  assert.ok(del, "there is no way to delete the message you are reading");
+
+  del.listeners.click[0]({});
+  assert.deepEqual(a.calls[0], { remove: 1, archived: false });
+});
+
+// Whether it is already filed is asked of the mirror rather than assumed from
+// which list it was opened from: a message reached by its own URL was opened
+// from no list at all.
+test("a message that is already archived is known to be", () => {
+  const m = state.archive[0];
+  assert.equal(views.inArchive(state, m), true);
+  assert.equal(views.inArchive(state, state.inbox[0]), false);
+});

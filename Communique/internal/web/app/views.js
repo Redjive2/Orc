@@ -33,6 +33,30 @@ const BOXES = {
   sent: { empty: "nothing sent", outgoing: true },
 };
 
+// pickKey identifies a ticked row.
+//
+// The machine as well as the number: a puid is unique within one machine's
+// mailbox and two mirrored machines both have a message 3. Keying on the number
+// alone would tick two messages when somebody ticked one.
+export const pickKey = (m) => `${m.machine}/${m.puid}`;
+
+// inArchive reports whether a message is already filed.
+//
+// Asked of the mirror rather than assumed from which list it was opened from,
+// because a message reached by its own URL was opened from no list at all. It
+// decides whether deleting is one operation or two — Mailman prunes the archive
+// and refuses a query that touches anything live — and being wrong the safe way
+// means an archive that is already archived, which changes nothing.
+export function inArchive(state, m) {
+  return (state.archive || []).some((other) =>
+    other.machine === m.machine && other.puid === m.puid);
+}
+
+// picked reports whether a row is ticked, from state rather than from the DOM.
+export function picked(state, m) {
+  return (state.selection || []).includes(pickKey(m));
+}
+
 export function mailbox(state, { box }, actions) {
   const shape = BOXES[box] || BOXES.inbox;
   const messages = state[box];
@@ -40,8 +64,57 @@ export function mailbox(state, { box }, actions) {
     return [h("p", { class: "muted" }, shape.empty)];
   }
   const many = (state.machines || []).length > 1;
-  return [h("div", { class: "rows" },
-    ...messages.map((m) => messageLine(m, many, shape.outgoing, state, actions)))];
+  const chosen = messages.filter((m) => picked(state, m));
+  return [
+    // Above the rows, because it is about them and because on a phone the bottom
+    // of a long mailbox is a scroll away from the row somebody just ticked.
+    chooser(messages, chosen, box, actions),
+    h("div", { class: "rows" },
+      ...messages.map((m) => messageLine(m, many, shape.outgoing, state, actions))),
+  ];
+}
+
+// chooser is the bar over a mailbox: tick everything, and what to do with what is
+// ticked.
+//
+// It is always present rather than appearing with the first tick. A control that
+// materialises is a control nobody knows is there, and the box that ticks the
+// whole list is also the affordance that says the rows can be ticked at all.
+//
+// The verbs are the ones that are the same whether they act on one message or
+// forty: read, archive, delete. Reply is not among them — a reply is written, and
+// forty replies are forty different messages.
+function chooser(messages, chosen, box, actions) {
+  if (!actions) return null;
+
+  const all = chosen.length === messages.length && messages.length > 0;
+  const some = chosen.length > 0;
+  const archived = box === "archive";
+
+  return h("div", { class: "chooser" },
+    h("label", { class: "pick-all" },
+      h("input", {
+        type: "checkbox", name: "pick-all", checked: all ? "" : null,
+        "aria-label": all ? "untick every message" : "tick every message",
+        onchange: (e) => actions.pickAll(messages, e.target.checked),
+      }),
+      // The count carries the meaning, so a screen with no colour still says how
+      // much is about to happen — and it names the number rather than "all",
+      // which is the thing somebody checks before pressing delete.
+      h("span", { class: "muted" }, some
+        ? `${chosen.length} of ${messages.length} chosen`
+        : `${messages.length} ${messages.length === 1 ? "message" : "messages"}`)),
+    some
+      ? h("div", { class: "controls" },
+        h("button", { class: "quiet", onclick: () => actions.readPicked(chosen) }, "mark read"),
+        archived
+          ? null
+          : h("button", { class: "quiet", onclick: () => actions.archivePicked(chosen) }, "archive"),
+        h("button", { class: "danger", onclick: () => actions.remove(chosen, archived) },
+          `delete ${chosen.length}`),
+        h("button", { class: "quiet", onclick: () => actions.unpickAll() }, "clear"))
+      : null,
+  );
 }
 
 // A row and the one thing worth doing to it without opening it.
@@ -63,6 +136,18 @@ function messageLine(m, showMachine, outgoing, state, actions) {
     .filter((e) => e.action.op === "reply"));
 
   return h("div", { class: "line" },
+    // Outside the row for the same reason the reply button is: the row is a link,
+    // and a checkbox inside a link is a target that navigates when it is missed.
+    actions
+      ? h("input", {
+        type: "checkbox", class: "pick", name: `pick-${pickKey(m)}`,
+        checked: picked(state, m) ? "" : null,
+        // Named, because a column of identical "checkbox" is not a list anybody
+        // can navigate by ear.
+        "aria-label": `choose ${m.subject || "this message"}`,
+        onchange: (e) => actions.pick(m, e.target.checked),
+      })
+      : null,
     messageRow(m, showMachine, outgoing),
     reply
       // Said where the reply was written, rather than only in the status bar: a
@@ -123,6 +208,13 @@ export function message(state, detail, actions) {
       h("button", { class: "quiet", onclick: () => actions.markRead(m) }, "mark read"),
       " ",
       h("button", { class: "quiet", onclick: () => actions.archive(m) }, "archive"),
+      " ",
+      // Whether this message is already filed decides whether deleting it is one
+      // operation or two, and the archive is the list that knows.
+      h("button", {
+        class: "danger",
+        onclick: () => actions.remove(m, inArchive(state, m)),
+      }, "delete"),
     ),
   ];
 }

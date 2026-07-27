@@ -115,6 +115,15 @@ const (
 	OpRead    Op = "read"    // mailman read
 	OpArchive Op = "archive" // mailman archive <query>
 	OpCC      Op = "cc"      // mailman cc
+	// OpPrune deletes archived mail, permanently: `mailman prune <query> --yes`.
+	//
+	// Mailman prunes the archive and nothing else — a query matching one live
+	// message is refused outright — so deleting something still in the inbox is
+	// two operations, an archive and then this. The browser queues both rather
+	// than this one doing both, because one operation is one Mailman command and
+	// a verb that archived on the way past would be a rule about mail that
+	// Mailman does not have.
+	OpPrune Op = "prune" // mailman prune <query> --yes
 
 	// The library verbs. Unlike the five above, these do not go through another
 	// tool: they write the agent machine's filesystem, inside the mirrored
@@ -224,6 +233,12 @@ func (o Op) Idempotent() bool {
 		// cc is idempotent in Mailman: adding a participant who is already in a
 		// conversation is not an error and changes nothing.
 		return true
+	case OpPrune:
+		// Deleting twice lands in the same place, but the *command* does not: the
+		// second run matches nothing and Mailman refuses it as not found. That
+		// makes a blind retry a confusing failure over mail that is already gone,
+		// which is the same reason the library's delete is classified this way.
+		return false
 	case OpSend, OpReply:
 		return false
 	case OpTaskDescribe, OpTaskDescribeClear:
@@ -290,7 +305,7 @@ func (o Op) Idempotent() bool {
 }
 
 // Ops lists every defined operation.
-var Ops = slices.Concat([]Op{OpSend, OpReply, OpRead, OpArchive, OpCC,
+var Ops = slices.Concat([]Op{OpSend, OpReply, OpRead, OpArchive, OpCC, OpPrune,
 	OpWrite, OpCreate, OpDelete, OpMakeDir, OpRemoveDir, OpRemoveTree,
 	OpUpgrade, OpLibraryRoot}, TaskOps, FleetOps)
 
@@ -817,6 +832,7 @@ var argRules = map[Op]argRule{
 	OpReply:   {puid: true, subject: true, body: true},
 	OpRead:    {puid: true},
 	OpArchive: {puid: true},
+	OpPrune:   {puid: true},
 	OpCC:      {convoUID: true, user: true},
 
 	// A create carries no base: it expects the path to be empty, and a digest of

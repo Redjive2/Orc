@@ -80,6 +80,19 @@ main { flex: 1; padding: 1.25rem 1.5rem 2rem; }
 .rows .line { display: flex; align-items: stretch; gap: 1ch; }
 .rows .line > .row { flex: 1; min-width: 0; }
 
+/* Choosing several. The checkbox is outside the row for the same reason the
+   reply button is, and it is given a thumb's worth of room: a tick target the
+   size of the glyph is one that navigates to the message instead, which on a
+   delete is the worst possible miss. */
+.rows .line > .pick { flex: 0 0 auto; align-self: center; width: 1.1rem; height: 1.1rem; }
+.chooser {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1ch; flex-wrap: wrap; margin-bottom: .4rem;
+}
+.chooser .pick-all { display: flex; align-items: center; gap: 1ch; }
+.chooser .pick-all input { width: 1.1rem; height: 1.1rem; }
+.chooser .controls { display: flex; gap: 1ch; flex-wrap: wrap; }
+
 .row .flag { color: var(--success); }
 .row .puid { color: var(--muted); text-align: right; }
 .row .when { color: var(--muted); }

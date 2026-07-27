@@ -81,6 +81,11 @@ export const api = {
     request("POST", withMachine(`/api/v1/messages/${encodeURIComponent(puid)}/read`, machine), {}),
   archiveMessage: (puid, machine) =>
     request("POST", withMachine(`/api/v1/messages/${encodeURIComponent(puid)}/archive`, machine), {}),
+  // Mailman prunes the archive and nothing else, so deleting live mail is an
+  // archive and then this. Both are queued from the browser rather than folded
+  // into one call, because one operation is one Mailman command.
+  pruneMessage: (puid, machine) =>
+    request("POST", withMachine(`/api/v1/messages/${encodeURIComponent(puid)}/prune`, machine), {}),
   cc: (cuid, machine, user) =>
     request("POST", `/api/v1/convos/${encodeURIComponent(cuid)}/cc`, { machine, user }),
   send: (machine, to, subject, body) =>

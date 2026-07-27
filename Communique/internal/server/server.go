@@ -266,6 +266,7 @@ func (s *Server) routes() {
 	s.route("POST /api/v1/messages/{puid}/reply", needSession, s.reply)
 	s.route("POST /api/v1/messages/{puid}/read", needSession, s.markRead)
 	s.route("POST /api/v1/messages/{puid}/archive", needSession, s.archiveMessage)
+	s.route("POST /api/v1/messages/{puid}/prune", needSession, s.pruneMessage)
 	s.route("POST /api/v1/convos/{cuid}/cc", needSession, s.cc)
 	s.route("POST /api/v1/queue/{id}/retry", needSession, s.retryAction)
 	s.route("DELETE /api/v1/queue/{id}", needSession, s.dropAction)

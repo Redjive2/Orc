@@ -237,6 +237,11 @@ func TestASessionCanDriveTheWholeAPI(t *testing.T) {
 			{"reply", "POST", "/api/v1/messages/41/reply", `{"subject":"RE: work","body":"looks good"}`},
 			{"send", "POST", "/api/v1/messages", `{"to":["bob"],"subject":"hello","body":"hi"}`},
 			{"cc", "POST", "/api/v1/convos/c-1/cc", `{"user":"carol"}`},
+			// The one that cannot be undone. It queues like the rest: the
+			// confirmation is a conversation with whoever is looking at the mail,
+			// and by the time a request arrives that has either happened in the
+			// browser or was never going to.
+			{"prune", "POST", "/api/v1/messages/41/prune", ""},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				w := h.do(t, tc.method, tc.path, tc.body, h.withCookie(cookie),
@@ -260,8 +265,8 @@ func TestASessionCanDriveTheWholeAPI(t *testing.T) {
 			Queue []store.Entry `json:"queue"`
 		}
 		decodeInto(t, get("/api/v1/queue"), &v)
-		if len(v.Queue) != 5 {
-			t.Errorf("queue holds %d entries, want 5", len(v.Queue))
+		if len(v.Queue) != 6 {
+			t.Errorf("queue holds %d entries, want 6", len(v.Queue))
 		}
 	})
 }

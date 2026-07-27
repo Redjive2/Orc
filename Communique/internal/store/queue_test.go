@@ -282,6 +282,14 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			if op.Idempotent() {
 				t.Errorf("%q must not be idempotent", op)
 			}
+		case protocol.OpPrune:
+			// Deleting twice lands in the same place; running the command twice
+			// does not. The second matches nothing and Mailman refuses it as not
+			// found, so a blind retry is a confusing failure over mail that has
+			// already gone — the same reason the library's delete is here.
+			if op.Idempotent() {
+				t.Errorf("%q must not be idempotent", op)
+			}
 		case protocol.OpMakeDir:
 			// Making a directory that exists is making a directory.
 			if !op.Idempotent() {

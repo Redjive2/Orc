@@ -98,6 +98,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `POST messages/<puid>/reply`           | `reply`                                  |
 | `POST messages/<puid>/read`            | `read`                                   |
 | `POST messages/<puid>/archive`         | `archive <query>`                        |
+| `POST messages/<puid>/prune`           | `prune <query> --yes`                    |
 | `POST convos/<cuid>/cc`                | `cc` — from a message in the thread      |
 | `GET messages/<puid>/check`            | `check`                                  |
 | `GET tasks`, `GET tasks/<name>`        | `muff pool`, `muff info`                 |
@@ -215,6 +216,36 @@ Retrying is bounded by the same rule the mail verbs follow: `scope`, `worktree`,
 `status`, `assign`, and `invite` set a value and may be repeated; `create`, `push`,
 `claim`, `complete`, and the rest are transitions whose second application refuses,
 so an action whose outcome is unknown is never retried blindly.
+
+## Deleting mail
+
+Mail is deleted from the site by ticking rows and pressing delete, or from an open
+message. It is `mailman prune`, and it is permanent.
+
+Mailman prunes the archive and refuses a query that touches anything still live,
+so deleting from the inbox is **two** queued operations — an archive, then a
+prune, in that order. The browser queues both rather than one operation doing
+both: one operation is one Mailman command, and a verb that archived on the way
+past would be a rule about mail that Mailman does not have. Deleting from the
+archive is a prune alone.
+
+The confirmation is in the browser, because a confirmation is a conversation with
+whoever is looking at the mail and that is the only place they are. The queued
+action carries `--yes`; by the time it reaches the agent machine it is a decision
+already taken, and a prompt there would only be a way for it to hang.
+
+A prune is **not** idempotent and is never retried after a doubt. Deleting twice
+lands in the same place but the command does not: the second run matches nothing
+and Mailman refuses it as not found, which is a confusing failure over mail that
+has already gone.
+
+Every mailbox can be ticked, one row at a time or the whole list, and the bar over
+it applies **mark read**, **archive** and **delete** to what is ticked. One queued
+action per message rather than one over a list: the queue's unit is an operation
+the agent can report on, and twelve rows queued as one entry that half-applied
+would leave nobody able to say which half. The selection lives in the page's state,
+not in its checkboxes, so the redraw on every sync does not quietly clear it while
+the button still offers to delete twelve things.
 
 ## When something does not work
 

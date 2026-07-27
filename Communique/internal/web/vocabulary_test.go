@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -189,8 +190,14 @@ func TestTheFallbackInnocuousMatchesOrc(t *testing.T) {
 	guarded := orcGuarded(t)
 	want := make([]string, 0, len(names))
 	for _, name := range names {
-		if sub, ok := guarded[name]; ok {
-			want = append(want, name+" (not "+name+" "+sub+")")
+		if subs, ok := guarded[name]; ok && len(subs) > 0 {
+			// Spelled as model.InnocuousWords spells it: one "not" per part, so a
+			// command with two exceptions names both.
+			parts := make([]string, 0, len(subs))
+			for _, sub := range subs {
+				parts = append(parts, "not "+name+" "+sub)
+			}
+			want = append(want, name+" ("+strings.Join(parts, ", ")+")")
 			continue
 		}
 		want = append(want, name)
@@ -211,14 +218,14 @@ func TestTheFallbackInnocuousMatchesOrc(t *testing.T) {
 // An empty result is not an error. The map is allowed to be empty — no command
 // has to have an exception — and a test that insisted otherwise would fail the
 // day the last one was removed.
-func orcGuarded(t *testing.T) map[string]string {
+func orcGuarded(t *testing.T) map[string][]string {
 	t.Helper()
 
 	file, err := parser.ParseFile(token.NewFileSet(), orcVocabulary, nil, 0)
 	if err != nil {
 		t.Fatalf("reading orc's vocabulary: %v", err)
 	}
-	out := map[string]string{}
+	out := map[string][]string{}
 	for _, decl := range file.Decls {
 		d, ok := decl.(*ast.GenDecl)
 		if !ok || d.Tok != token.VAR {
@@ -240,9 +247,23 @@ func orcGuarded(t *testing.T) map[string]string {
 						continue
 					}
 					key, kok := literal(kv.Key)
-					val, vok := literal(kv.Value)
-					if kok && vok {
-						out[key] = val
+					if !kok {
+						continue
+					}
+					// A command may have more than one part that cannot check its
+					// caller — `orc bootstrap` and `orc env` are both — so the value
+					// is a list. It was a single string once, and reading it as one
+					// after it grew made this find nothing at all: the check still
+					// ran, still passed, and had stopped comparing the thing it was
+					// written for.
+					subs, ok := kv.Value.(*ast.CompositeLit)
+					if !ok {
+						continue
+					}
+					for _, e := range subs.Elts {
+						if sub, ok := literal(e); ok {
+							out[key] = append(out[key], sub)
+						}
 					}
 				}
 			}

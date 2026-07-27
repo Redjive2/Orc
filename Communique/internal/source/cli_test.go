@@ -656,6 +656,11 @@ func TestApplyRunsTheRightCommand(t *testing.T) {
 			[]string{"mailman", "archive", `id="41"`}},
 		{"cc", protocol.OpCC, protocol.Args{ConvoUID: "c-1", User: "carol"},
 			[]string{"mailman", "cc", `convo="c-1"`, "carol"}},
+		// --yes because there is nobody at this end to ask: the confirmation
+		// happened in the browser before the action was queued. Without it Mailman
+		// refuses and the queue fills with actions that will never apply.
+		{"prune", protocol.OpPrune, protocol.Args{PUID: 41},
+			[]string{"mailman", "prune", `id="41"`, "--yes"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeRun()
