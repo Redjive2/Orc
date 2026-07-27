@@ -553,13 +553,13 @@ const actions = {
     const said = (key) => (from[key] ? ` (now ${now[key]}, from the ${from[key]})` : "");
     const fields = cycle === "wake"
       ? [
-        { name: "after", label: "wake after", value: now.wake_after || "", check: "span",
+        { name: "after", label: "wake after", value: now.wake_after || "", check: "pace.quiet",
           hint: `how long silence lasts before a poke${said("wake_after")}`, required: false },
-        { name: "every", label: "look every", value: now.wake_every || "", check: "span",
+        { name: "every", label: "look every", value: now.wake_every || "", check: "pace.watch",
           hint: `how often the cycle looks${said("wake_every")}`, required: false },
       ]
       : [
-        { name: "watch", label: "tend every", value: now.tend_watch || "", check: "span",
+        { name: "watch", label: "tend every", value: now.tend_watch || "", check: "pace.watch",
           hint: `how often the worklist is reconciled${said("tend_watch")}`, required: false },
       ];
 
@@ -612,7 +612,11 @@ const actions = {
       value: now.watch || "",
       // Empty is a real answer here — it leaves every watcher alone — so the
       // check applies only once there is something in the box.
-      check: "span", required: false,
+      //
+      // pace.sync, not span: this goes to time.ParseDuration, which takes `1h30m`
+      // and has never heard of `1d`. `span` is clock.ParseSpan's grammar and
+      // belongs on `until`, which is the only field that actually uses it.
+      check: "pace.sync", required: false,
       note: `how often each machine mirrors. empty leaves every watcher at whatever ` +
         `it was started with; the shortest is ${now.floor || "10s"}.`,
       submit: "set it",

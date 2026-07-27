@@ -454,7 +454,7 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
    maximum. Without the mark, a scale set to exclude a spike would restate the
    spike as the largest thing on the chart — which is the one thing the person who
    set it was trying to stop it doing. */
-.chart-bars .bar.over { border-top: 3px dotted var(--bg); }
+.chart-bars .bar.over { border-top: 3px dotted var(--canvas); }
 .chart-head .quiet { padding: 0 .5ch; }
 .chart-scale { margin-left: auto; white-space: nowrap; }
 .chart-axis { display: flex; justify-content: space-between; gap: 2ch; font-size: .85em; }

@@ -161,6 +161,83 @@ function suggestSpan(s) {
   return "";
 }
 
+// duration checks an interval — mirrors Go's time.ParseDuration, which is a
+// different grammar from `span` above and the reason both exist.
+//
+// The distinction is not pedantry, it is the bug this was written for. `until` on
+// a grant goes to clock.ParseSpan: one number, one unit, and `d` and `w` among
+// them. Every *pace* — how long silence lasts, how often a cycle looks, how often
+// a mirror syncs — goes to `orc pace` or to the sync endpoint, and both of those
+// call time.ParseDuration. Putting `span` on those fields got it wrong in both
+// directions at once: it accepted `1d` and `2w`, which time.ParseDuration refuses
+// outright, and it refused `1h30m`, which time.ParseDuration is perfectly happy
+// with. The second was the worse half — the sheet will not submit while a field
+// is marked, so a valid interval could not be sent at all.
+//
+// So: compound is fine, the units are Go's, and `d` and `w` are named as the
+// mistake they are rather than reported as bad syntax. Somebody typing `1d` has
+// not made a typo; they have used a unit this particular parser does not have,
+// and `24h` is the answer.
+const GO_UNITS = ["ns", "us", "µs", "ms", "s", "m", "h"];
+const DAYS = { d: ["24h", 24], w: ["168h", 168] };
+
+export function duration(raw, what = "the duration", { min = 0, max = 0 } = {}) {
+  const s = String(raw ?? "").trim();
+  if (s === "") return `${what} cannot be empty`;
+
+  // The unit Go does not have, caught first and answered with the spelling that
+  // works. Reporting it as a parse failure would be true and useless.
+  const bigger = s.match(/^([0-9]+)\s*([dw])$/i);
+  if (bigger) {
+    const [as, hours] = DAYS[bigger[2].toLowerCase()];
+    const n = Number(bigger[1]);
+    const same = n === 1 ? as : `${n * hours}h`;
+    return `${what} has no ${bigger[2].toLowerCase()} unit here; write ${same} rather than ${s}`;
+  }
+
+  const parts = [...s.matchAll(/([0-9]+(?:\.[0-9]+)?)([a-zµ]+)/gi)];
+  const consumed = parts.reduce((n, p) => n + p[0].length, 0);
+  if (parts.length === 0 || consumed !== s.length) {
+    return `${what} is not a duration — write it like 30s, 20m, or 1h30m`;
+  }
+
+  let total = 0;
+  const seconds = { ns: 1e-9, us: 1e-6, "µs": 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600 };
+  for (const [, n, unit] of parts) {
+    if (!GO_UNITS.includes(unit)) {
+      return `${what} does not know the unit “${unit}”; use ${GO_UNITS.join(", ")}`;
+    }
+    total += Number(n) * seconds[unit];
+  }
+  if (total <= 0) return `${what} must have something in it`;
+  if (min && total < min) {
+    return `${what} is under ${plainly(min)}, which is a busy-wait rather than a cycle`;
+  }
+  if (max && total > max) {
+    return `${what} is longer than ${plainly(max)}, which is not a cycle`;
+  }
+  return "";
+}
+
+// plainly renders a bound in the spelling the tool would print it in, so the two
+// halves of a message about `168h` do not disagree about what 168 hours is.
+function plainly(secs) {
+  for (const [unit, size] of [["h", 3600], ["m", 60], ["s", 1]]) {
+    if (secs % size === 0) return `${secs / size}${unit}`;
+  }
+  return `${secs}s`;
+}
+
+// The floors and ceilings the tools apply, so a value that would be refused on
+// the far side of a sync is refused in the sheet instead. Named after the
+// constants they mirror: Orc/internal/cli MinQuiet and MinWatch, and cq's
+// protocol.MinSyncPace and MaxPace.
+export const PACE = {
+  quiet: { min: 60, max: 7 * 24 * 3600 },   // --after: a wake's silence
+  watch: { min: 5, max: 7 * 24 * 3600 },    // --every and --watch: a cycle
+  sync: { min: 10, max: 7 * 24 * 3600 },    // the mirror's own interval
+};
+
 // whole checks a number a field is bounded to.
 //
 // Separate from the dialog's own numeric handling because the message wants the
@@ -231,7 +308,17 @@ export function nonempty(raw, what = "it") {
 
 // CHECKS maps the name a field spec uses to the function, so a form can say
 // `check: "mailbox"` in data rather than importing anything.
-export const CHECKS = { mailbox, label, span, paths, segment, nonempty };
+export const CHECKS = {
+  mailbox, label, span, paths, segment, nonempty,
+  duration,
+  // The three paces, each carrying the bounds its own tool applies. Separate
+  // entries rather than one with options because a field spec names a check by
+  // string, and a floor that lived at the call site would be a number nobody
+  // could trace back to the constant it mirrors.
+  "pace.quiet": (raw, what) => duration(raw, what, PACE.quiet),
+  "pace.watch": (raw, what) => duration(raw, what, PACE.watch),
+  "pace.sync": (raw, what) => duration(raw, what, PACE.sync),
+};
 
 // TIDIED are the checks whose value is absorbed rather than refused, so a caller
 // naming one gets the tidying with it. Keyed the same way, so a field says

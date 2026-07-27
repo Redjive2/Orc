@@ -217,3 +217,52 @@ test("a duration that is words is refused without a made-up suggestion", () => {
   assert.doesNotMatch(got, /90m/, `it invented a suggestion: ${got}`);
   assert.match(got, /30m or 2h/, got);
 });
+
+// --- paces: Go's time.ParseDuration, not clock.ParseSpan --------------------
+
+// Two duration grammars live in this tree and they are not the same one. The
+// bug that made these tests: every pace field was given `span`, which mirrors
+// clock.ParseSpan, while `orc pace` and cq's own sync endpoint both call
+// time.ParseDuration. It was wrong in both directions at once, and because the
+// sheet will not submit while a field is marked, the second direction meant a
+// perfectly good interval could not be sent at all.
+test("a pace takes a compound duration, which the tool accepts", () => {
+  for (const d of ["1h30m", "90m", "30s", "2h", "1h0m0s"]) {
+    ok(check.duration(d), d);
+  }
+});
+
+test("a pace refuses the units time.ParseDuration does not have", () => {
+  // And says what to write instead. `1d` is not a typo — it is a unit this
+  // parser has never had, and "not a duration" would send somebody hunting for
+  // a mistake that is not there.
+  assert.match(check.duration("1d"), /24h/);
+  assert.match(check.duration("2w"), /336h/);
+  assert.match(check.duration("7d"), /168h/);
+});
+
+test("a pace is bounded where its own tool bounds it", () => {
+  // Orc/internal/cli MinQuiet (--after) and MinWatch (--every, --watch), and
+  // cq's protocol.MinSyncPace and MaxPace.
+  bad(check.CHECKS["pace.quiet"]("30s"), "30s against the wake floor");
+  ok(check.CHECKS["pace.watch"]("30s"), "30s against the cycle floor");
+  bad(check.CHECKS["pace.sync"]("5s"), "5s against the sync floor");
+  ok(check.CHECKS["pace.sync"]("10s"), "10s, the sync floor exactly");
+  bad(check.CHECKS["pace.sync"]("200h"), "longer than a week");
+  ok(check.CHECKS["pace.sync"]("168h"), "a week exactly");
+});
+
+test("a pace with nothing in it is refused, as the tool refuses it", () => {
+  // `orc pace` wants "a duration with something in it": zero is not a cycle.
+  bad(check.duration("0s"), "0s");
+  bad(check.duration("0h0m"), "0h0m");
+  bad(check.duration("soon"), "soon");
+  bad(check.duration("2 hours"), "2 hours");
+});
+
+// The other grammar, unchanged, on the one field that really uses it.
+test("span is still clock.ParseSpan, for the field that goes there", () => {
+  ok(check.span("2h"), "2h");
+  ok(check.span("7d"), "7d");
+  bad(check.span("1h30m"), "1h30m");
+});
