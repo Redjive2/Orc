@@ -356,8 +356,13 @@ function chart(label, slots, buckets, of, period, ceiling, actions) {
       // a chart with one huge peak is usually one of the small ones, and a bar
       // rounded to nothing is indistinguishable from an idle slot. An empty slot
       // carries no inline style at all and takes its sliver from the sheet.
+      // Painted, not sized. The height is a gradient stop rather than the element's
+      // own height, because a percentage height on one of these resolves to zero on
+      // WebKit — see the note in app.css. `--fill` carries the number so there is
+      // still one place it is written down.
       style: v > 0
-        ? `height:${Math.min(100, Math.max(4, share * 100)).toFixed(1)}%;background:${heat(share)}`
+        ? `--fill:${Math.min(100, Math.max(4, share * 100)).toFixed(1)}%;` +
+          `background:linear-gradient(to top,${heat(share)} 0 var(--fill),transparent var(--fill))`
         : "",
     });
   });

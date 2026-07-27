@@ -445,11 +445,27 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   border-bottom: 1px solid var(--frame);
   overflow: hidden;
 }
-.chart-bars .bar { flex: 1 1 0; min-width: 1px; border-radius: 1px 1px 0 0; }
+/* Every slot is a full-height column, and the bar is *painted* into it rather than
+   being an element of that height.
+
+   This is not a flourish, it is the only way it works everywhere. A percentage
+   height on a flex item whose cross size is content-based — which is what
+   `align-items: flex-end` makes these — is the case browsers have never agreed
+   on. Chromium resolves it against the container; WebKit leaves it at zero. So on
+   Safari every bar that had a value rendered at no height at all, while the empty
+   ones kept their `2px` because 2px is an absolute length. The chart drew a dashed
+   line of idle slots with a *gap* exactly where the work was: the busiest two hours
+   of the window were the only part of it you could not see.
+
+   A gradient stop takes its percentage from the element's own painted box, which
+   `align-self: stretch` makes definite. Nothing is left to resolve. */
+.chart-bars .bar { flex: 1 1 0; min-width: 1px; align-self: stretch; }
 /* An empty slot is drawn rather than skipped. The gaps are half of what a chart
    says — four scattered minutes drawn side by side are a picture of continuous
    work assembled out of a quiet afternoon. */
-.chart-bars .bar.empty { height: 2px; background: var(--frame); }
+.chart-bars .bar.empty {
+  background: linear-gradient(to top, var(--frame) 0 2px, transparent 2px);
+}
 /* A bar past the ceiling is cut off at the top rather than drawn as an ordinary
    maximum. Without the mark, a scale set to exclude a spike would restate the
    spike as the largest thing on the chart — which is the one thing the person who

@@ -202,7 +202,7 @@ test("a bar has a real height and a colour that runs with it", () => {
     .map((b) => b.attributes.get("style"));
   assert.equal(bars.length, 2);
   // The taller of the two is the peak, and the peak is at the red end.
-  const heights = bars.map((s) => Number(/height:([\d.]+)%/.exec(s)[1]));
+  const heights = bars.map((s) => Number(/--fill:([\d.]+)%/.exec(s)[1]));
   assert.equal(Math.max(...heights), 100);
   assert.ok(Math.min(...heights) < 100 && Math.min(...heights) >= 4,
     `a non-peak bar was ${Math.min(...heights)}%`);
@@ -219,7 +219,7 @@ test("a set ceiling is what bars are drawn against, not the peak", () => {
   // The peak of "new tokens" across `busy` is 500; half that clips the taller bar.
   const bars = slots(view.activity({ ...state, chartScale: { "new tokens": 250 } }, null))
     .filter((b) => b.className.startsWith("bar") && b.className !== "bar empty");
-  const heights = bars.map((b) => Number(/height:([\d.]+)%/.exec(b.attributes.get("style"))[1]));
+  const heights = bars.map((b) => Number(/--fill:([\d.]+)%/.exec(b.attributes.get("style"))[1]));
   // 200 of 250 is 80%, and 500 is clipped to the ceiling rather than drawn past it.
   assert.ok(heights.includes(100), `heights were ${heights}`);
   assert.ok(heights.some((n) => n > 75 && n < 85), `heights were ${heights}`);
@@ -620,7 +620,7 @@ function spiky() {
 function heightsOf(state) {
   return slots(view.activity(state, null))
     .filter((b) => b.className === "bar")
-    .map((b) => Number(/height:([\d.]+)%/.exec(b.attributes.get("style"))[1]));
+    .map((b) => Number(/--fill:([\d.]+)%/.exec(b.attributes.get("style"))[1]));
 }
 
 test("a spike does not flatten every other bar onto the floor", () => {
@@ -684,4 +684,22 @@ test("a bucket missing one token field still counts the fields it has", () => {
   const heights = heightsOf({ ...withSeries({ ember: partial }), activityWindow: "6h" });
   assert.ok(heights.length >= 2, `only ${heights.length} bars were drawn`);
   assert.equal(Math.max(...heights), 100, "nothing was drawn at all");
+});
+
+// The bar is painted, not sized, and that is load-bearing rather than stylistic.
+//
+// A percentage height on one of these is a percentage on a flex item whose cross
+// size is content-based, which WebKit resolves to zero. Every bar that had a value
+// vanished; the empty ones kept their 2px because 2px is an absolute length. The
+// chart was a dashed line of idle slots with a gap exactly where the work was.
+test("a bar carries no percentage height for a browser to disagree about", () => {
+  const styles = slots(view.activity(withSeries({ ember: busy }), null))
+    .filter((b) => b.className === "bar")
+    .map((b) => b.attributes.get("style"));
+  assert.ok(styles.length > 0, "no bars were drawn at all");
+  for (const style of styles) {
+    assert.doesNotMatch(style, /(^|;)\s*height\s*:/,
+      `a bar was sized with a height again: ${style}`);
+    assert.match(style, /linear-gradient/, style);
+  }
 });
