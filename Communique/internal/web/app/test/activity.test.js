@@ -187,6 +187,22 @@ test("the tab says where files and lines come from", () => {
   assert.match(got, /claude's transcript/);
 });
 
+// The wire leaves an all-zero group out, so an hour of file work with no usage line
+// arrives with no `tokens` at all. Reading through it threw, and one such bucket took
+// down every chart, the totals and the ratio — over an hour contributing nought to
+// all of them.
+test("a bucket with nothing to say about tokens does not take the tab down", () => {
+  const bare = [
+    { at: hour(10), files: { reads: 1, read_lines: 40 } },
+    { at: hour(11), turns: 2, tokens: { output: 500 }, files: {} },
+    { at: hour(12), turns: 1 },
+  ];
+  const got = text(view.activity(withSeries({ ember: bare }), null));
+  assert.match(got, /new tokens/);
+  assert.match(got, /1 read/);
+  assert.match(got, /40 lines read/);
+});
+
 test("the window selector offers the windows the server takes", () => {
   const buttons = view.activity(withSeries({ ember: busy }), { setActivityWindow() {} })
     .flatMap((n) => all(n, (x) => x.tagName === "BUTTON")).map((b) => b.textContent);

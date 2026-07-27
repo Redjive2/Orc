@@ -194,12 +194,23 @@ function over(state, series, actions) {
   const all = names.flatMap((name) => series.identities[name] || []);
   return [
     head,
-    chart("new tokens", byHour(all, (b) => b.tokens.input + b.tokens.output + b.tokens.cache_create)),
-    chart("cache reads", byHour(all, (b) => b.tokens.cache_read)),
+    chart("new tokens", byHour(all, (b) => tok(b).input + tok(b).output + tok(b).cache_create)),
+    chart("cache reads", byHour(all, (b) => tok(b).cache_read)),
     chart("turns", byHour(all, (b) => b.turns || 0)),
     h("h3", {}, "what it read and wrote"),
     ...work(names, series),
   ];
+}
+
+// tok is a bucket's tokens, and is why nothing here reads `b.tokens` directly.
+//
+// The wire leaves an all-zero group out, and an hour of file work with no usage line
+// is an ordinary bucket rather than a broken one. Reading the field straight turned
+// that into a thrown error, which took the whole tab down over a bucket whose
+// contribution to every figure on it was nought. `sumFiles` already did this and
+// this is the same rule stated once.
+function tok(b) {
+  return b.tokens || {};
 }
 
 // byHour collapses every identity's buckets into one series, hour by hour.
@@ -391,7 +402,7 @@ export function productivity(state, f, series) {
   let turns = 0;
   for (const buckets of Object.values(series.identities)) {
     for (const b of buckets) {
-      tokens += (b.tokens.input || 0) + (b.tokens.output || 0) + (b.tokens.cache_create || 0);
+      tokens += (tok(b).input || 0) + (tok(b).output || 0) + (tok(b).cache_create || 0);
       turns += b.turns || 0;
     }
   }
