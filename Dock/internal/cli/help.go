@@ -32,7 +32,7 @@ type entry struct {
 // commands is dock's whole surface, in the order a newcomer meets it.
 var commands = []entry{
 	{"index", "<file>", "the sections in a document, and their sizes"},
-	{"overview", "<dir>", "the same, for every document under a tree"},
+	{"overview", "<dir>", "the same for a tree, and the folders with nothing in them"},
 	{"read", "<target>", "one section's own prose"},
 	{"", "<target> --tree", "and everything under it"},
 	{"", "<target> --follow[=n]", "and the sections it links to, n deep"},

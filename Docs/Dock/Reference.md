@@ -20,6 +20,16 @@ A walk — `overview`, `find`, `check` — reads documentation files only. `inde
 and `read` take any path you name: naming a file is a decision, sweeping a tree
 is not.
 
+`overview` ends with the folders it had nothing to show for, and why: **empty**,
+**nothing dock reads**, **cannot be read** (its permissions do not admit you), or
+**not walked** (a dot-folder, `.git`, `node_modules`, `vendor`, `target`). A
+folder on the way to a document is not listed — the document's own path already
+names it. Without this a folder you have just made is indistinguishable from one
+that was never created, which is the moment it matters most. A tree with folders
+and no documents therefore exits 0 with them listed, rather than "not found";
+a tree with neither is still not found. `--json` is unchanged: it is an array of
+documents, and the folders are for the person who asked.
+
 ## §1.1 Flags
 
 | Flag               | Does                                                           |

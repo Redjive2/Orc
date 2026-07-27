@@ -57,7 +57,10 @@ var commands = []entry{
 			"understood without opening it file by file.\n\n" +
 			"A file that will not parse is skipped with a note on stderr rather than\n" +
 			"failing the run: one unreadable file in a directory should not cost the\n" +
-			"other thirty.",
+			"other thirty.\n\n" +
+			"It ends with the folders directly inside, and what each holds. A folder\n" +
+			"holding nothing annotated appears in no tree, and one just made is then\n" +
+			"indistinguishable from one that was never created.",
 		examples: []string{"anno overview internal/tree", "anno overview . --json"},
 	},
 	{

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"orc/anno/internal/edit"
 	"orc/anno/internal/guard"
@@ -296,8 +297,28 @@ func (a App) overview(args []string) error {
 	// An empty directory is an empty array under --json, not a failure: a caller
 	// mirroring a repository should get "nothing annotated here" as data rather
 	// than as an error it has to special-case.
+	//
+	// The folders stay out of it. `overview --json` is an array of trees and cq
+	// reads it as one, so a new top-level shape would break a reader built before
+	// it — and this is a question somebody at a terminal is asking about a folder
+	// they can see in Finder. The answer belongs where the question was asked.
 	if asJSON {
 		return a.emitJSON(trees)
+	}
+
+	if list := render.Folders(subdirs(dir), a.Out); list != "" {
+		if shown > 0 {
+			if err := a.say(""); err != nil {
+				return err
+			}
+		}
+		if _, err := io.WriteString(a.Stdout, list); err != nil {
+			return err
+		}
+		// Having listed what is there, "not found" would be the screen arguing
+		// with itself. A directory of folders and no annotated files is a
+		// directory somebody is part-way through, not a missing one.
+		return nil
 	}
 	if shown == 0 {
 		return fault.NotFound{Target: dir}
@@ -541,6 +562,74 @@ func listDir(dir string) ([]string, error) {
 	}
 	slices.Sort(out)
 	return out, nil
+}
+
+// subdirs lists the folders directly inside dir, and what is in each.
+//
+// An overview draws a tree per annotated file, so a folder appears in it only
+// through the files it holds — and a folder holding none appears nowhere at all.
+// That makes a folder somebody has just made indistinguishable from one that was
+// never created, which is the moment it matters most: a new folder missing from a
+// listing reads as a folder that did not save.
+//
+// One level, like the rest of this command. `anno overview` reads a directory
+// rather than a tree, and quietly recursing here would make the folder list
+// describe a wider thing than the trees above it.
+func subdirs(dir string) []render.Folder {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	var out []render.Folder
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		out = append(out, render.Folder{Name: e.Name(), Why: whatIsIn(path)})
+	}
+	slices.SortFunc(out, func(a, b render.Folder) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// whatIsIn says what a folder holds, in the words a listing uses.
+//
+// A folder that cannot be read is the one worth naming most and the one most
+// easily lost: skipping it silently says "nothing here", which is the opposite of
+// what is true — nobody can tell whether there is anything there.
+func whatIsIn(path string) string {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return "cannot be read"
+	}
+	if len(entries) == 0 {
+		return "empty"
+	}
+
+	files, folders := 0, 0
+	for _, e := range entries {
+		if e.IsDir() {
+			folders++
+			continue
+		}
+		files++
+	}
+	switch {
+	case files == 0:
+		return plural(folders, "folder", "folders")
+	case folders == 0:
+		return plural(files, "file", "files")
+	default:
+		return plural(files, "file", "files") + ", " + plural(folders, "folder", "folders")
+	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 // locate chooses which reading of a target string to use.

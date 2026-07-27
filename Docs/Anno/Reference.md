@@ -14,6 +14,15 @@ anno <command> <args...>
 | `anno find <folder path><chain>`          | Returns the content and index of the specified annotation |
 | `anno write <file path><chain> <content>` | Writes `<content>` to the specified annotation            |
 
+`overview` reads one directory, not a tree, and ends with the folders directly
+inside it and what each holds — a count of files and folders, or **empty**, or
+**cannot be read**. Without this a folder you have just made appears nowhere,
+since an overview is a tree per annotated file and a new folder has none, and
+nothing distinguishes it from a folder that was never created. A directory of
+folders and nothing annotated therefore exits 0 with them listed rather than
+"not found"; one with neither is still not found. `--json` is unchanged: it is
+an array of trees, and the folders are for the person who asked.
+
 ## §1.1 Chains
 
 Annotations are addressed by a chain of resolvers:

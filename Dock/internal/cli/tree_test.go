@@ -237,3 +237,79 @@ func TestOverviewCostsATablePerDocument(t *testing.T) {
 		}
 	}
 }
+
+// --- folders an overview would otherwise not mention ----------------------
+
+// The complaint this answers: a folder made a moment ago does not appear in an
+// overview, because an overview is a table per document and a new folder has
+// none. Nothing distinguishes it from a folder that failed to be created, which
+// is exactly what somebody who just made one is checking.
+func TestOverviewNamesFoldersWithNoDocuments(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "guide.md"), []byte("# §1 Guide\n\nprose\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Word Of Alex", "pics"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pics", "a.png"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errs, code := run(t, "overview", dir)
+	if code != fault.CodeOK {
+		t.Fatalf("code = %d, stderr = %s", code, errs)
+	}
+	if !strings.Contains(out, "Word Of Alex") {
+		t.Errorf("a folder with nothing in it is missing from the overview:\n%s", out)
+	}
+	if !strings.Contains(out, "empty") {
+		t.Errorf("the overview does not say why it has nothing to show:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing dock reads") {
+		t.Errorf("a folder of files dock does not read is not told apart from an "+
+			"empty one, and they are different things to do about:\n%s", out)
+	}
+	// The documents are still the point, and still first.
+	if !strings.Contains(out, "guide.md") {
+		t.Errorf("the documents went missing:\n%s", out)
+	}
+	if strings.Index(out, "guide.md") > strings.Index(out, "Word Of Alex") {
+		t.Errorf("the folders are drawn above the documents:\n%s", out)
+	}
+}
+
+// A tree of folders and no documents is a tree somebody is part-way through.
+// Saying "not found" over a list of what is there would be the screen arguing
+// with itself.
+func TestATreeOfFoldersIsNotAMissingTree(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "Docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errs, code := run(t, "overview", dir)
+	if code != fault.CodeOK {
+		t.Fatalf("code = %d, stderr = %s\n%s", code, errs, out)
+	}
+	if !strings.Contains(out, "Docs") {
+		t.Errorf("the folder that is there is not in the listing:\n%s", out)
+	}
+}
+
+// Nothing at all is still not found: there is no folder to point at, so the old
+// answer is the right one.
+func TestAnEmptyTreeIsStillNotFoundUnderJSON(t *testing.T) {
+	dir := t.TempDir()
+	out, _, code := run(t, "overview", dir, "--json")
+	if code != fault.CodeOK {
+		t.Fatalf("--json is data, not a failure: code = %d", code)
+	}
+	// The folders stay out of the JSON: it is an array of documents and cq reads
+	// it as one, so a new shape would break a reader built before it.
+	if strings.Contains(out, "folder") {
+		t.Errorf("the folder list leaked into --json, whose shape is a contract:\n%s", out)
+	}
+}

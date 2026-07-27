@@ -356,7 +356,7 @@ func (a App) overview(args []string) error {
 	}
 	dir := rest[0]
 
-	paths, err := root.Walk(dir)
+	paths, folders, err := root.WalkTree(dir)
 	if err != nil {
 		return err
 	}
@@ -395,8 +395,30 @@ func (a App) overview(args []string) error {
 	// An empty tree is an empty array under --json, not a failure: a caller
 	// mirroring a repository should get "no documents here" as data rather than
 	// as an error it has to special-case.
+	//
+	// The folders are not in it. `overview --json` is an array of documents and
+	// cq reads it as one, so putting them there would mean either a new top-level
+	// shape or entries that look like documents with no sections — and a reader
+	// built before either would be wrong rather than merely older. This is a
+	// question a person at a terminal asks; the answer belongs where they asked.
 	if asJSON {
 		return a.emitJSON(docs)
+	}
+
+	if list := render.Folders(dir, folderRows(folders), a.Out); list != "" {
+		if shown > 0 {
+			if err := a.say("\n"); err != nil {
+				return err
+			}
+		}
+		if err := a.say(list); err != nil {
+			return err
+		}
+		// Having said what is there, "not found" is no longer true. A tree of
+		// folders and no documents is a tree somebody is part-way through, and
+		// telling them it is missing when it has just been listed would be the
+		// screen arguing with itself.
+		return nil
 	}
 	if shown == 0 {
 		return fault.NotFound{Target: dir, Near: []string{"no document under it carries a " + doc.Sigil + " heading"}}
@@ -1112,3 +1134,13 @@ var ErrUsage = fault.ErrUsage
 
 // IsUsage reports whether an error is a usage failure.
 func IsUsage(err error) bool { return errors.Is(err, ErrUsage) }
+
+// folderRows turns the walker's folders into the renderer's, which is the only
+// place root's vocabulary and render's meet.
+func folderRows(folders []root.Folder) []render.Folder {
+	out := make([]render.Folder, 0, len(folders))
+	for _, f := range folders {
+		out = append(out, render.Folder{Path: f.Path, Why: f.Why.String()})
+	}
+	return out
+}

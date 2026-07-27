@@ -259,3 +259,125 @@ func sameDir(t *testing.T, a, b string) bool {
 	}
 	return ra == rb
 }
+
+// --- the folders a walk has nothing to say about --------------------------
+
+// A walk returns documents, so a folder holding none of them appears in nothing
+// downstream — which makes a folder somebody has just made indistinguishable from
+// one that was never created. WalkTree names them, with a reason each, because
+// "empty" and "cannot be read" are different problems with different fixes.
+
+// folderWhy indexes a WalkTree's folders by their path relative to the tree.
+func folderWhy(t *testing.T, dir string) map[string]string {
+	t.Helper()
+
+	_, folders, err := root.WalkTree(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for _, f := range folders {
+		rel, err := filepath.Rel(dir, f.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[rel] = f.Why.String()
+	}
+	return out
+}
+
+func TestWalkTreeNamesTheFoldersWithNothingInThem(t *testing.T) {
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "real.md"), "# §1 A\n")
+
+	mkdir(t, dir, "brand-new")               // made a moment ago, still empty
+	pics := mkdir(t, dir, "pics")            // files, none of them documents
+	touch(t, filepath.Join(pics, "a.png"), "not a document\n")
+	hidden := mkdir(t, dir, ".private")      // skipped by name, not by absence
+	touch(t, filepath.Join(hidden, "x.md"), "# §1 Hidden\n")
+
+	got := folderWhy(t, dir)
+	for path, want := range map[string]string{
+		"brand-new": "empty",
+		"pics":      "nothing dock reads",
+		".private":  "not walked",
+	} {
+		if got[path] != want {
+			t.Errorf("%s is reported as %q, want %q — a folder nobody can see in a "+
+				"listing reads as a folder that was never made", path, got[path], want)
+		}
+	}
+}
+
+// A folder on the way to a document is already visible in that document's path.
+// Listing it as barren as well would be noise in the one place noise costs the
+// most: the list of things that are *not* where you expected them.
+func TestWalkTreeIsQuietAboutFoldersOnTheWayToADocument(t *testing.T) {
+	dir := t.TempDir()
+	deep := mkdir(t, mkdir(t, dir, "a"), "b")
+	touch(t, filepath.Join(deep, "doc.md"), "# §1 Deep\n")
+
+	got := folderWhy(t, dir)
+	if len(got) != 0 {
+		t.Errorf("folders reported for a tree where every one leads to a document: %v", got)
+	}
+}
+
+// The tree named on the command line is itself a folder, and an empty one is the
+// whole answer to the question that was asked.
+func TestWalkTreeNamesTheRootWhenItIsTheEmptyOne(t *testing.T) {
+	dir := t.TempDir()
+	if got := folderWhy(t, dir); got["."] != "empty" {
+		t.Errorf("an empty tree reports %v; it should say the tree itself is empty", got)
+	}
+}
+
+// A folder that cannot be read is the one worth naming most, and the one a walk
+// most easily loses: it is skipped so that one bad corner does not cost the whole
+// overview, and skipping it silently says "nothing here" — which is not what is
+// true. Nobody can tell whether there is anything there.
+func TestWalkTreeNamesAFolderItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a 0000 directory, so there is nothing to refuse")
+	}
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "real.md"), "# §1 A\n")
+	locked := mkdir(t, dir, "locked")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	got := folderWhy(t, dir)
+	if got["locked"] != "cannot be read" {
+		t.Errorf("an unreadable folder is reported as %q", got["locked"])
+	}
+	// WalkDir announces a directory and then reports that it could not be read, so
+	// the first visit files it as ordinary. One folder, one reason.
+	count := 0
+	_, folders, _ := root.WalkTree(dir)
+	for _, f := range folders {
+		if filepath.Base(f.Path) == "locked" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("the same folder is listed %d times, under more than one reason", count)
+	}
+}
+
+// Walk is WalkTree's first half and must stay exactly that: every caller of Walk
+// is a caller that wants documents and nothing else.
+func TestWalkStillReturnsOnlyDocuments(t *testing.T) {
+	dir := t.TempDir()
+	touch(t, filepath.Join(dir, "real.md"), "# §1 A\n")
+	mkdir(t, dir, "empty")
+
+	docs, err := root.Walk(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 || filepath.Base(docs[0]) != "real.md" {
+		t.Errorf("Walk returned %v", docs)
+	}
+}

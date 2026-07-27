@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"orc/common/fault"
@@ -153,39 +154,149 @@ func IsDocument(path string) bool {
 	return Extensions[strings.ToLower(filepath.Ext(path))]
 }
 
+// Why a folder produced nothing.
+//
+// A walk that returns only documents makes a folder holding none of them
+// indistinguishable from a folder that is not there — and the folder that is not
+// there is the one somebody has just made. These are what a folder can be instead
+// of a document, and each is a different thing to do about it.
+type Why int
+
+const (
+	// Empty: nothing in it at all. Usually a folder made a moment ago.
+	Empty Why = iota
+	// NoDocuments: files, but none dock reads. See Extensions.
+	NoDocuments
+	// Unreadable: it is there and its contents cannot be listed — a folder whose
+	// permissions do not admit this user. Silently skipping it reads as "nothing
+	// here", which is the opposite of what is true.
+	Unreadable
+	// NotWalked: skipped by name — a dot-folder, or one of skipDirs. Named rather
+	// than descended into, so `.private` is visible as a decision rather than as
+	// an absence.
+	NotWalked
+)
+
+func (w Why) String() string {
+	switch w {
+	case NoDocuments:
+		return "nothing dock reads"
+	case Unreadable:
+		return "cannot be read"
+	case NotWalked:
+		return "not walked"
+	default:
+		return "empty"
+	}
+}
+
+// Folder is a directory a walk found nothing in, and why.
+type Folder struct {
+	Path string
+	Why  Why
+}
+
 // Walk returns every document under dir, in a deterministic order.
 //
 // Determinism is not incidental: overview's output is a golden test, and a walk
 // that varied by filesystem would make it unreproducible. filepath.WalkDir
 // already sorts each directory's entries, and this adds only the skipping.
 func Walk(dir string) ([]string, error) {
-	var out []string
+	docs, _, err := WalkTree(dir)
+	return docs, err
+}
+
+// WalkTree is Walk, and also the folders it passed through that hold no document.
+//
+// The two come from one walk because they are one question asked twice: a caller
+// showing a tree needs both what is in it and what is in it that has nothing to
+// show. Doing it in two passes would mean two answers that can disagree about a
+// tree being written to while it is read.
+//
+// A folder with documents under it is not reported — it is already visible in the
+// paths — and neither is one whose *children* hold documents, since the tree of
+// names still leads there.
+func WalkTree(dir string) ([]string, []Folder, error) {
+	var docs []string
+	var folders []Folder
+	// How many documents were found under each directory, so a folder is called
+	// barren only when nothing beneath it is a document either.
+	under := map[string]int{}
+
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// An unreadable directory is skipped, not fatal: one bad corner of
-			// a tree must not cost the whole overview.
+			// a tree must not cost the whole overview. It is named, though —
+			// see Unreadable.
 			if d != nil && d.IsDir() {
+				// WalkDir visits a directory once to announce it and again to
+				// report that it could not be read, so the first visit has already
+				// filed it as an ordinary folder. Unreadable is the truer of the
+				// two, and a folder listed twice under two reasons is a folder
+				// nobody trusts the listing about.
+				delete(under, path)
+				folders = append(folders, Folder{Path: path, Why: Unreadable})
 				return fs.SkipDir
 			}
 			return nil
 		}
 		if d.IsDir() {
 			if path != dir && (skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
+				folders = append(folders, Folder{Path: path, Why: NotWalked})
 				return fs.SkipDir
+			}
+			if _, seen := under[path]; !seen {
+				under[path] = 0
 			}
 			return nil
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
 			return nil // a symlinked document would be walked twice
 		}
-		if !d.Type().IsRegular() || !IsDocument(path) {
+		if !d.Type().IsRegular() {
 			return nil
 		}
-		out = append(out, path)
+		if !IsDocument(path) {
+			// Marked so the folder can say "files, but none I read" rather than
+			// "empty", which would be a lie somebody would go looking for.
+			if _, seen := under[filepath.Dir(path)]; seen {
+				under[filepath.Dir(path)] |= hasFiles
+			}
+			return nil
+		}
+		docs = append(docs, path)
+		for at := filepath.Dir(path); ; at = filepath.Dir(at) {
+			if _, seen := under[at]; !seen {
+				break
+			}
+			under[at] |= hasDocument
+			if at == dir {
+				break
+			}
+		}
 		return nil
 	})
 	if err != nil {
-		return nil, fault.IO{Op: "walk", Path: dir, Err: err}
+		return nil, nil, fault.IO{Op: "walk", Path: dir, Err: err}
 	}
-	return out, nil
+
+	for path, state := range under {
+		if state&hasDocument != 0 {
+			continue
+		}
+		why := Empty
+		if state&hasFiles != 0 {
+			why = NoDocuments
+		}
+		folders = append(folders, Folder{Path: path, Why: why})
+	}
+	slices.SortFunc(folders, func(a, b Folder) int { return strings.Compare(a.Path, b.Path) })
+	return docs, folders, nil
 }
+
+// What a directory turned out to hold. Bits rather than a count: the only
+// questions are "any document beneath it" and "anything at all in it".
+const (
+	hasDocument = 1 << iota
+	hasFiles
+)

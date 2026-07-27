@@ -607,3 +607,85 @@ func TestReadsAreNotScopeChecked(t *testing.T) {
 		t.Errorf("the scope was checked %d times for commands that write nothing", asked)
 	}
 }
+
+// --- the folders beside the files -----------------------------------------
+
+// The complaint this answers: a folder made a moment ago appears nowhere in an
+// overview, because an overview is a tree per annotated file and a new folder has
+// none. Nothing tells it apart from a folder that was never created, which is
+// exactly what somebody who has just made one is checking.
+func TestOverviewNamesTheFoldersBesideTheFiles(t *testing.T) {
+	dir := workspace(t, map[string]string{
+		"a.go":            "// @:> section alpha\nx\n",
+		"sub/c.go":        "// @:> section gamma\nz\n",
+		"Word Of Alex/.keep": "",
+	})
+	// A folder with nothing in it at all, which is the case that started this.
+	if err := os.MkdirAll(filepath.Join(dir, "brand new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := run(t, "", "overview", dir).mustSucceed(t)
+	for _, want := range []string{"brand new", "empty", "Word Of Alex", "sub"} {
+		if !strings.Contains(got.stdout, want) {
+			t.Errorf("the overview does not mention %q:\n%s", want, got.stdout)
+		}
+	}
+	// Still one level. Listing the folders must not turn this into a tree walk,
+	// or the folder list would describe something wider than the trees above it.
+	if strings.Contains(got.stdout, "gamma") {
+		t.Errorf("overview recursed:\n%s", got.stdout)
+	}
+	// The annotated files are still the point, and still first.
+	if strings.Index(got.stdout, "[a.go]") > strings.Index(got.stdout, "brand new") {
+		t.Errorf("the folders are drawn above the files:\n%s", got.stdout)
+	}
+}
+
+// A directory of folders and nothing annotated is one somebody is part-way
+// through. Answering "not found" over a list of what is there would be the screen
+// arguing with itself.
+func TestADirectoryOfFoldersIsNotAMissingOne(t *testing.T) {
+	dir := workspace(t, map[string]string{"notes/.keep": ""})
+	got := run(t, "", "overview", dir).mustSucceed(t)
+	if !strings.Contains(got.stdout, "notes") {
+		t.Errorf("the folder that is there is not in the listing:\n%s", got.stdout)
+	}
+}
+
+// A folder that cannot be read is the one worth naming most: saying nothing about
+// it reads as "nothing here", when the truth is that nobody can tell.
+func TestOverviewSaysWhenAFolderCannotBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a 0000 directory, so there is nothing to refuse")
+	}
+	dir := workspace(t, map[string]string{"a.go": "// @:> section alpha\nx\n"})
+	locked := filepath.Join(dir, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	got := run(t, "", "overview", dir).mustSucceed(t)
+	if !strings.Contains(got.stdout, "cannot be read") {
+		t.Errorf("an unreadable folder is listed as though it were ordinary:\n%s", got.stdout)
+	}
+}
+
+// --json is an array of trees and cq reads it as one. The folders are for the
+// person at the terminal who asked; a new top-level shape would break a reader
+// built before it, which is a worse failure than an older one.
+func TestTheFolderListStaysOutOfJSON(t *testing.T) {
+	dir := workspace(t, map[string]string{"a.go": "// @:> section alpha\nx\n"})
+	if err := os.MkdirAll(filepath.Join(dir, "brand new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := run(t, "", "overview", dir, "--json").mustSucceed(t)
+	if strings.Contains(got.stdout, "brand new") {
+		t.Errorf("the folder list leaked into --json, whose shape is a contract:\n%s", got.stdout)
+	}
+}
