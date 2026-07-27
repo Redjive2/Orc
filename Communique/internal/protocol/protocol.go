@@ -262,7 +262,7 @@ func (o Op) Idempotent() bool {
 		return false
 	case OpOrcAssignRole, OpOrcAssignAuthority, OpOrcAssignPerm, OpOrcMove,
 		OpOrcBudget, OpOrcTend, OpOrcToolkit, OpOrcFire, OpOrcRevoke, OpOrcEditPermission,
-		OpOrcInstructSet, OpOrcInstructClear, OpOrcPace:
+		OpOrcInstructSet, OpOrcInstructClear, OpOrcPace, OpOrcTariff:
 		// Each sets a state to what was asked for rather than stepping it. An
 		// identity already under that boss stays there; a role already at that
 		// authority is unchanged; `tend` reconciles to the same place however many
@@ -472,8 +472,13 @@ type Task struct {
 	Done          int      `json:"done"`
 	Total         int      `json:"total"`
 	Draft         bool     `json:"draft"`
-	Scope         []string `json:"scope,omitempty"`
-	Worktree      string   `json:"worktree,omitempty"`
+	// Completed and CompletedAt are what makes a rate askable: "how much did this
+	// fleet finish this week" cannot be answered by a list of what is finished.
+	// Absent on a task that is not.
+	Completed   bool     `json:"completed,omitempty"`
+	CompletedAt string   `json:"completed_at,omitempty"`
+	Scope       []string `json:"scope,omitempty"`
+	Worktree    string   `json:"worktree,omitempty"`
 	// Subtasks are the steps, by name, so the browser can complete or delete one
 	// rather than only see how many are done. Macmuffin's board omits them and its
 	// `info` carries them, which is why the agent asks twice — see source.tasks.
@@ -743,6 +748,10 @@ type Args struct {
 	PaceOn    bool   `json:"pace_on,omitempty"`
 	PaceClear bool   `json:"pace_clear,omitempty"`
 
+	// Setting is what a tariff prices: a model, an effort, crowd-base, or
+	// crowd-scale. The weight it is being given travels in Load.
+	Setting string `json:"setting,omitempty"`
+
 	// An absolute directory on the machine that applies the action.
 	//
 	// Workspace is deliberately not `Path`: that field means "relative to the
@@ -846,6 +855,8 @@ type argRule struct {
 	cycle       bool
 	optIdentity bool
 	optPace     bool
+	// setting is `orc tariff`'s: which weight. The value travels in `load`.
+	setting bool
 }
 
 var argRules = map[Op]argRule{

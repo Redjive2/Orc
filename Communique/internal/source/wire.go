@@ -68,8 +68,12 @@ type wireTask struct {
 	Total         int      `json:"total"`
 	Draft         bool     `json:"draft"`
 	Completed     bool     `json:"completed"`
-	Scope         []string `json:"scope"`
-	Worktree      string   `json:"worktree"`
+	// CompletedAt is when it was finished. It is the one timestamp on a task that
+	// answers a question about *rate* — how much a fleet got done this week —
+	// which a list of what is done cannot.
+	CompletedAt string   `json:"completed_at"`
+	Scope       []string `json:"scope"`
+	Worktree    string   `json:"worktree"`
 	// Subtasks arrive only from `muff info`; the board omits them.
 	Subtasks []wireSubtask `json:"subtasks"`
 	// Described and its two companions come from the board: whether the task has a
@@ -132,6 +136,8 @@ func (t wireTask) protocol() protocol.Task {
 		Done:          t.Done,
 		Total:         t.Total,
 		Draft:         t.Draft,
+		Completed:     t.Completed,
+		CompletedAt:   t.CompletedAt,
 		Scope:         t.Scope,
 		Worktree:      t.Worktree,
 		Described:     t.Described,

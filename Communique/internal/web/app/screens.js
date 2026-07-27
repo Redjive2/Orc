@@ -9,6 +9,7 @@ import * as views from "./views.js";
 import * as library from "./library.js";
 import * as location from "./location.js";
 import * as fleet from "./fleet.js";
+import * as activityView from "./activity.js";
 import * as instruct from "./instruct.js";
 import { h } from "./dom.js";
 
@@ -34,7 +35,7 @@ export const SCREENS = {
   "manage/fleet": (s, a) => fleet.running(s, a),
   "manage/tasks": (s, a) => views.tasks(s, a),
   "manage/tree": (s) => views.tree(s),
-  "manage/tokens": () => tokens(),
+  "manage/activity": (s, a) => activityView.activity(s, a),
 
   "admin/identities": (s, a) => fleet.tree(s, a),
   "admin/roles": (s, a) => fleet.roleList(s, a),
@@ -44,33 +45,6 @@ export const SCREENS = {
   "tooling/queue": (s, a) => views.queue(s, a),
   "tooling/rebuild": (s, a) => views.rebuild(s, a),
 };
-
-// tokens is a tab with nothing behind it yet, and says so.
-//
-// It is here rather than absent because the shape of the site is a decision and
-// this is part of it — but nothing in Orc measures what an agent spends. Claude
-// writes the numbers into its own transcript, Orc records where that file is and
-// reads only its tail for the session pane, and no total is kept anywhere.
-//
-// An empty tab that explains itself is worth more than one that draws a zero:
-// a zero is a measurement, and there is no measurement.
-function tokens() {
-  return [
-    h("article", { class: "card" },
-      h("h2", {}, "what the fleet is spending"),
-      h("div", { class: "meta" }, "nothing measures this yet"),
-      h("div", { class: "body" },
-        h("p", {}, "Claude records what each turn cost in its own transcript, and orc " +
-          "knows where every session's transcript is. Nothing adds them up."),
-        h("p", { class: "muted" }, "Reaching this needs a reader over the whole of each " +
-          "transcript rather than its tail, an orc command to report the totals, and a " +
-          "field on the snapshot so a sync carries them. Plan percentages are not in " +
-          "there at all — those are facts about the account, held by Anthropic."),
-        h("p", { class: "muted" }, "Budgets already exist and are set per role: " +
-          "manage › fleet says what each identity may employ.")),
-    ),
-  ];
-}
 
 // render returns the nodes for one route, or null when nothing matches — which
 // the router treats as "go home" rather than guessing.

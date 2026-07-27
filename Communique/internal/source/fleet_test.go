@@ -85,6 +85,14 @@ func TestOrcApplyRunsTheRightCommand(t *testing.T) {
 		protocol.OpOrcInstructClear: {
 			protocol.Args{Prompt: "role", PromptName: "engineer"},
 			[]string{"orc", "instruct", "role", "engineer", "--clear"}},
+		// One op, three layers, two cycles: the layer is whichever name is set,
+		// and neither means the fleet's own.
+		protocol.OpOrcPace: {
+			protocol.Args{Cycle: "wake", Identity: "atlas", After: "5m"},
+			[]string{"orc", "pace", "wake", "atlas", "--after", "5m"}},
+		protocol.OpOrcTariff: {
+			protocol.Args{Setting: "opus", Load: 4},
+			[]string{"orc", "tariff", "opus", "4", "--yes"}},
 		protocol.OpOrcWorkspace: {
 			protocol.Args{Identity: "atlas", Workspace: "/trees/parser", From: "/old/workspace"},
 			[]string{"orc", "workspace", "atlas", "/trees/parser"}},
@@ -263,5 +271,47 @@ func TestInstructSetPassesTheText(t *testing.T) {
 				t.Errorf("the prompt travelled on the command line: %v", call)
 			}
 		}
+	}
+}
+
+// TestPaceReachesTheRightCommand: every shape of the one control that has three
+// layers and two cycles.
+//
+// The enumeration above pins that `orc.pace` maps to *a* command; this pins that
+// each form of it maps to the right one. They are the forms a browser posts, and a
+// field renamed at either end would otherwise go unnoticed until somebody paced an
+// agent and the fleet paced itself.
+func TestPaceReachesTheRightCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args protocol.Args
+		want string
+	}{
+		{"an agent's threshold", protocol.Args{Cycle: "wake", Identity: "ember", After: "5m"},
+			"orc pace wake ember --after 5m"},
+		{"the fleet's", protocol.Args{Cycle: "wake", After: "20m", Every: "10m"},
+			"orc pace wake --after 20m --every 10m"},
+		{"a role's tending", protocol.Args{Cycle: "tend", Role: "hand", Watch: "30s"},
+			"orc pace tend hand --watch 30s"},
+		{"stopping one agent", protocol.Args{Cycle: "wake", Identity: "ember", PaceOff: true},
+			"orc pace wake ember --off"},
+		{"starting it again", protocol.Args{Cycle: "wake", Identity: "ember", PaceOn: true},
+			"orc pace wake ember --on"},
+		{"clearing a layer", protocol.Args{Cycle: "tend", Identity: "ember", PaceClear: true},
+			"orc pace tend ember --clear"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRun()
+			action := protocol.Action{
+				ID: protocol.ActionID(strings.Repeat("a", 32)), Seq: 1, Machine: "studio",
+				Op: protocol.OpOrcPace, Args: tc.args, Queued: at(),
+			}
+			if err := newCLI(f).Apply(t.Context(), action); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if got := strings.Join(f.calls[len(f.calls)-1], " "); got != tc.want {
+				t.Errorf("ran %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

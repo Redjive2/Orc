@@ -259,6 +259,9 @@ func (s *Server) routes() {
 	s.route("GET /api/v1/tasks", needSession, s.tasks)
 	s.route("GET /api/v1/tasks/{name}", needSession, s.task)
 	s.route("GET /api/v1/queue", needSession, s.queue)
+	s.route("GET /api/v1/activity", needSession, s.activity)
+	s.route("GET /api/v1/sync/pace", needSession, s.syncPace)
+	s.route("POST /api/v1/sync/pace", needSession, s.syncPace)
 	s.route("GET /api/v1/admin/state", needSession, s.adminState)
 	s.route("GET /api/v1/events", needSession, s.stream)
 
@@ -296,6 +299,8 @@ func (s *Server) routes() {
 	s.route("DELETE /api/v1/fleet/roles/{name}", needSession, s.removeRole)
 	s.route("PATCH /api/v1/fleet/permissions/{name}", needSession, s.editPermission)
 	s.route("DELETE /api/v1/fleet/permissions/{name}", needSession, s.removePermission)
+	s.route("POST /api/v1/fleet/pace", needSession, s.pace)
+	s.route("POST /api/v1/fleet/tariff", needSession, s.tariff)
 	s.route("POST /api/v1/fleet/tend", needSession, s.tendFleet)
 	s.route("POST /api/v1/fleet/toolkit", needSession, s.installToolkit)
 

@@ -47,6 +47,11 @@ func TestEveryFleetVerbQueues(t *testing.T) {
 		protocol.OpOrcRemoveRole: {"DELETE", "/api/v1/fleet/roles/engineer", `{` + m + `}`},
 		protocol.OpOrcRemovePerm: {"DELETE", "/api/v1/fleet/permissions/edit", `{` + m + `}`},
 		protocol.OpOrcTend:       {"POST", "/api/v1/fleet/tend", `{` + m + `}`},
+		// One route for every layer and both cycles: the body says which.
+		protocol.OpOrcTariff: {"POST", "/api/v1/fleet/tariff",
+			`{` + m + `,"setting":"opus","load":4}`},
+		protocol.OpOrcPace: {"POST", "/api/v1/fleet/pace",
+			`{` + m + `,"cycle":"wake","identity":"atlas","after":"5m"}`},
 		// `from` is part of the request rather than optional: the route refuses a
 		// move that cannot say what the browser was looking at.
 		protocol.OpOrcToolkit: {"POST", "/api/v1/fleet/toolkit", `{` + m + `,"name":"boss"}`},

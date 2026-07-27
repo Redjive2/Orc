@@ -86,6 +86,8 @@ const FALLBACK_WORDS = {
     { word: "poke", does: "say something to a running agent" },
     { word: "refresh", does: "rewrite a session's settings from the fleet" },
     { word: "wake", does: "nudge sessions that have gone quiet" },
+    { word: "pace", does: "set how often the fleet is woken and tended" },
+    { word: "tariff", does: "change what thinking costs, for every budget at once" },
     { word: "model", does: "change what an identity runs on" },
     { word: "workspace", does: "change where an identity works" },
     { word: "instruct", does: "write the standing instructions agents run under" },

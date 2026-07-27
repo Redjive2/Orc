@@ -311,6 +311,7 @@ func TestActionArgumentRules(t *testing.T) {
 		protocol.OpTaskDescribeClear:  {Task: "fix-the-parser"},
 		protocol.OpOrcTend:            {},
 		protocol.OpOrcPace:            {Cycle: "wake", After: "20m"},
+		protocol.OpOrcTariff:          {Setting: "opus", Load: 4},
 		protocol.OpOrcToolkit:         {Identity: "boss"},
 		protocol.OpUpgrade:            {},
 		protocol.OpLibraryRoot:        {Workspace: "/srv/checkouts/Orc"},

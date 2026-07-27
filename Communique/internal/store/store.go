@@ -166,6 +166,12 @@ type Store struct {
 	// The O_EXCL create below is the backstop for two *processes*, which the
 	// design does not expect but does not silently corrupt either.
 	queue sync.Mutex
+
+	// series guards the activity files, which are the only other thing here that
+	// is appended to rather than replaced. Two syncs landing at once would
+	// otherwise interleave half-written lines, and a torn line is a bucket lost
+	// from a chart.
+	series sync.Mutex
 }
 
 // Open prepares a store at root, creating it if needed.
@@ -245,8 +251,50 @@ func (s *Store) PutSnapshot(snap protocol.Snapshot, agent string, at time.Time) 
 	if err := atomic.WriteJSON(filepath.Join(dir, "snapshot.json"), snap, fileMode); err != nil {
 		return err
 	}
+	// The series, which is the one thing a snapshot adds to rather than replaces.
+	// A failure here is reported by the caller and does not fail the sync: the
+	// mirror's job is the mail, the tasks and the fleet, and a chart that missed an
+	// hour is not worth losing all three over.
+	if snap.Fleet != nil {
+		if err := s.MergeActivity(snap.Machine, *snap.Fleet, at); err != nil {
+			return err
+		}
+	}
+
 	meta := Meta{Machine: snap.Machine, LastSync: at, Agent: agent, Protocol: protocol.Version}
 	return atomic.WriteJSON(filepath.Join(dir, "meta.json"), meta, fileMode)
+}
+
+// SyncPace is how often the server would like the agent machines to sync, and it
+// is the one setting here the *server* owns rather than mirrors.
+//
+// Wake and tend belong to the fleet, so they live in Orc's store and travel out
+// with the snapshot. Sync is about the link between the two machines, and the
+// browser can only reach one end of it — so this end holds the value and hands it
+// back on every response.
+func (s *Store) SyncPace() string {
+	var got struct {
+		Watch string `json:"watch"`
+	}
+	if err := atomic.ReadJSON(s.path("pace.json"), &got); err != nil {
+		// Missing or unreadable is "nothing asked for", which leaves every watcher
+		// at the interval it was started with. A mirror that stopped because a
+		// settings file was briefly unreadable would be the worst response to one.
+		return ""
+	}
+	return got.Watch
+}
+
+// SetSyncPace records it. An empty value clears it, which reads as "whatever each
+// watcher was told on its own command line".
+func (s *Store) SetSyncPace(watch string) error {
+	if strings.TrimSpace(watch) == "" {
+		if err := atomic.Remove(s.path("pace.json")); err != nil {
+			return err
+		}
+		return nil
+	}
+	return atomic.WriteJSON(s.path("pace.json"), map[string]string{"watch": watch}, fileMode)
 }
 
 // Snapshot returns a machine's last snapshot and metadata.

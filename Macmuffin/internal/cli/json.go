@@ -24,22 +24,27 @@ import (
 
 // jsonTask is one task.
 type jsonTask struct {
-	Name          string        `json:"name"`
-	Author        string        `json:"author"`
-	Created       time.Time     `json:"created"`
-	Owner         string        `json:"owner,omitempty"`
-	Collaborators []string      `json:"collaborators,omitempty"`
-	Priority      int           `json:"priority"`
-	Difficulty    int           `json:"difficulty"`
-	Status        int           `json:"status"`
-	StatusWord    string        `json:"status_word"`
-	Done          int           `json:"done"`
-	Total         int           `json:"total"`
-	Draft         bool          `json:"draft"`
-	Completed     bool          `json:"completed"`
-	Scope         []string      `json:"scope,omitempty"`
-	Worktree      string        `json:"worktree,omitempty"`
-	Subtasks      []jsonSubtask `json:"subtasks,omitempty"`
+	Name          string    `json:"name"`
+	Author        string    `json:"author"`
+	Created       time.Time `json:"created"`
+	Owner         string    `json:"owner,omitempty"`
+	Collaborators []string  `json:"collaborators,omitempty"`
+	Priority      int       `json:"priority"`
+	Difficulty    int       `json:"difficulty"`
+	Status        int       `json:"status"`
+	StatusWord    string    `json:"status_word"`
+	Done          int       `json:"done"`
+	Total         int       `json:"total"`
+	Draft         bool      `json:"draft"`
+	Completed     bool      `json:"completed"`
+	// CompletedAt is when it was finished, and is the only timestamp in this shape
+	// that answers a question about *rate*: how much work a fleet got done this
+	// week is a question nobody could ask of a list that only said which tasks are
+	// done. Absent on a task that is not.
+	CompletedAt time.Time     `json:"completed_at,omitzero"`
+	Scope       []string      `json:"scope,omitempty"`
+	Worktree    string        `json:"worktree,omitempty"`
+	Subtasks    []jsonSubtask `json:"subtasks,omitempty"`
 
 	// Described says a description.md sits beside the task, with who last changed
 	// it and when. It is on the board as well as in `info`, because "which of
@@ -81,6 +86,7 @@ func taskJSON(t task.Task, subtasks bool) jsonTask {
 		Total:         total,
 		Draft:         !t.Pooled(),
 		Completed:     t.Completed(),
+		CompletedAt:   t.CompletedAt(),
 		Scope:         t.Scope(),
 		Worktree:      worktree(t),
 		Described:     t.Described(),

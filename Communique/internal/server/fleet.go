@@ -79,6 +79,18 @@ type fleetBody struct {
 	// Text is a standing instruction's whole new text. The layer it belongs to is
 	// in the path, not here.
 	Text string `json:"text,omitempty"`
+	// `orc pace`'s operands. The layer is the identity or the role, and neither
+	// means the fleet's own; the durations are the strings a person typed.
+	// `orc tariff`'s: which weight. What it becomes travels in `load` below, which
+	// the body already carries for a budget — the same kind of number.
+	Setting string `json:"setting,omitempty"`
+	Cycle   string `json:"cycle,omitempty"`
+	After   string `json:"after,omitempty"`
+	Every   string `json:"every,omitempty"`
+	Watch   string `json:"watch,omitempty"`
+	Off     bool   `json:"off,omitempty"`
+	On      bool   `json:"on,omitempty"`
+	Clear   bool   `json:"clear,omitempty"`
 	// Load is a spawn budget, and zero is a real one — a budget of nothing refuses
 	// every employ. It is a pointer so "not given" and "given as zero" stay apart:
 	// without that, setting a budget to nothing would be indistinguishable from
@@ -288,6 +300,38 @@ func (s *Server) installToolkit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// tariff changes one weight, for every budget on that machine at once.
+func (s *Server) tariff(w http.ResponseWriter, r *http.Request) {
+	s.fleetAction(w, r, protocol.OpOrcTariff, func(b fleetBody, a *protocol.Args) {
+		a.Setting = b.Setting
+		if b.Load != nil {
+			a.Load = *b.Load
+		}
+		// A missing weight leaves Load at zero, which the protocol refuses with
+		// "a weight of 0 is a session no budget can refuse" — the right message,
+		// and better than one this route would have to invent.
+	})
+}
+
 func (s *Server) tendFleet(w http.ResponseWriter, r *http.Request) {
 	s.fleetAction(w, r, protocol.OpOrcTend, nil)
+}
+
+// pace sets how often a cycle runs, for the fleet, a role, or one agent.
+//
+// One route for all three, because it is one command with operands rather than
+// three commands: the body says which cycle and whose layer, and a route per layer
+// would be three that differ only in what they name.
+func (s *Server) pace(w http.ResponseWriter, r *http.Request) {
+	s.fleetAction(w, r, protocol.OpOrcPace, func(b fleetBody, a *protocol.Args) {
+		a.Cycle = b.Cycle
+		a.Identity = b.Identity
+		a.Role = b.Role
+		a.After = b.After
+		a.Every = b.Every
+		a.Watch = b.Watch
+		a.PaceOff = b.Off
+		a.PaceOn = b.On
+		a.PaceClear = b.Clear
+	})
 }

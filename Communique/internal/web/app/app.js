@@ -18,6 +18,16 @@ import * as dialog from "./dialog.js";
 import * as fleetView from "./fleet.js";
 import * as clauses from "./clauses.js";
 
+// What a name may be, said once, because every box that asks for one was saying
+// something slightly different and all of them were saying less than the truth.
+//
+// "letters, digits, and dashes" left out `.` and `_`, which are allowed, and left
+// out the two things people actually try: a capital and a space. Both work now —
+// they are folded on the way out rather than refused — and a hint that did not
+// mention it would keep the restriction in the only place it still existed, which
+// is what somebody believes about the box.
+const NAME_HINT = "letters, digits, and . _ - · capitals and spaces are folded";
+
 const nav = document.getElementById("nav");
 const view = document.getElementById("view");
 const statusBar = document.getElementById("status");
@@ -35,6 +45,10 @@ let state = {
   // `picked` is the one row whose controls are on screen. A tree with a button
   // under every line is a tree nobody can read.
   library: null, files: {}, open: {}, picked: null,
+  // The activity series and the window it was fetched for. The window is state
+  // rather than a form value because changing it is a *fetch*: the server bounds
+  // what it will hand over, so the browser cannot widen a chart it already has.
+  activity: null, activityWindow: "48h",
   // Which messages are ticked, as keys rather than as messages: a selection
   // has to survive the redraw a sync causes, and the message objects are
   // replaced wholesale by every sync while their keys are not.
@@ -242,7 +256,8 @@ const actions = {
   },
   async newFile(machine, dir) {
     const name = await dialog.one({
-      title: "a new file", label: "name", hint: `in ${dir || "the root"}/`,
+      title: "a new file", label: "name", check: "segment",
+      hint: `in ${dir || "the root"}/`,
       note: "it is created empty; open it to write something",
     });
     if (!name) return;
@@ -250,7 +265,8 @@ const actions = {
   },
   async newFolder(machine, dir) {
     const name = await dialog.one({
-      title: "a new folder", label: "name", hint: `in ${dir || "the root"}/`,
+      title: "a new folder", label: "name", check: "segment",
+      hint: `in ${dir || "the root"}/`,
     });
     if (!name) return;
     await run(() => api.makeDir(machine, under(dir, name)));
@@ -383,7 +399,7 @@ const actions = {
   async newIdentity(f) {
     const name = await dialog.one({
       title: "hire an agent", label: "name", check: "mailbox",
-      hint: "letters, digits, and dashes",
+      hint: NAME_HINT,
       note: "it is created under you, with no role and no permissions until you give it one",
     });
     if (!name) return;
@@ -394,7 +410,7 @@ const actions = {
       title: "a new role",
       note: "authority runs 1 to 99; the operator is 100 and that is a position, not a level",
       fields: [
-        { name: "name", label: "name", check: "label", hint: "letters, digits, and dashes" },
+        { name: "name", label: "name", check: "label", hint: NAME_HINT },
         { name: "authority", label: "authority", kind: "number", value: 50, min: 1, max: 99 },
         { name: "description", label: "what it is", hint: "one line; it shows in every listing" },
       ],
@@ -486,6 +502,111 @@ const actions = {
       submit: "fire it", danger: false,
     })) return;
     await run(() => api.fire(f.machine, id.name));
+  },
+  // Changing the window is a fetch, not a filter: the server decides how much of
+  // the series it will hand over, so a chart cannot be widened from what is
+  // already in the browser.
+  async setActivityWindow(window) {
+    set({ activityWindow: window });
+    await refresh();
+  },
+  // Pacing: how often a cycle looks, for the fleet or for one agent.
+  //
+  // The form opens on what is in force and says where it came from, because a
+  // number with no provenance sends somebody looking in the wrong layer for a
+  // value they did not set on this agent.
+  async pace(f, cycle, who) {
+    const now = who ? who.pace || {} : (f.pace || {});
+    const from = now.from || {};
+    const said = (key) => (from[key] ? ` (now ${now[key]}, from the ${from[key]})` : "");
+    const fields = cycle === "wake"
+      ? [
+        { name: "after", label: "wake after", value: now.wake_after || "", check: "span",
+          hint: `how long silence lasts before a poke${said("wake_after")}`, required: false },
+        { name: "every", label: "look every", value: now.wake_every || "", check: "span",
+          hint: `how often the cycle looks${said("wake_every")}`, required: false },
+      ]
+      : [
+        { name: "watch", label: "tend every", value: now.tend_watch || "", check: "span",
+          hint: `how often the worklist is reconciled${said("tend_watch")}`, required: false },
+      ];
+
+    const got = await dialog.ask({
+      title: who ? `${cycle} ${who.name}` : `${cycle} the fleet`,
+      note: who
+        ? "this agent's own setting; empty falls back to its role, then the fleet"
+        : "the fleet's setting; an agent or a role can override it",
+      submit: "queue it",
+      fields,
+    });
+    if (!got) return;
+    if (!got.after && !got.every && !got.watch) {
+      // A form that queued nothing would report success for having done nothing.
+      // Clearing is its own button, and this is not it.
+      return;
+    }
+    await run(() => api.pace(f.machine, {
+      cycle, identity: who ? who.name : undefined,
+      after: got.after || undefined, every: got.every || undefined, watch: got.watch || undefined,
+    }));
+  },
+  // What thinking costs. One setting at a time, and the confirmation says what a
+  // change is felt by, because it is felt by everything: every budget is derived,
+  // so raising a weight can put an actor over without anybody touching that actor.
+  async tariff(f, setting) {
+    const row = (f.tariff || []).find((t) => t.setting === setting) || {};
+    const note = row.suggested
+      ? `measurement suggests ${row.suggested} — it cost ${row.measured.toFixed(1)}× the cheapest over ${row.turns} turns`
+      : "nothing has been measured for this one yet";
+
+    const got = await dialog.ask({
+      title: `price ${setting}`,
+      note: `${note}. every budget is derived, so this re-prices every running session at once.`,
+      submit: "queue it",
+      fields: [{ name: "load", label: "weight", kind: "number",
+        value: row.suggested || row.weight || 1, min: 1, max: 100 }],
+    });
+    if (!got) return;
+    await run(() => api.tariff(f.machine, setting, got.load));
+  },
+
+  // Sync's interval. Not queued, unlike wake and tend: it is a setting the server
+  // holds, and queueing it would send it to the machine that cannot act on it.
+  async paceSync() {
+    const now = await api.syncPace().catch(() => ({ watch: "", floor: "10s" }));
+    const got = await dialog.one({
+      title: "sync every",
+      label: "interval",
+      value: now.watch || "",
+      // Empty is a real answer here — it leaves every watcher alone — so the
+      // check applies only once there is something in the box.
+      check: "span", required: false,
+      note: `how often each machine mirrors. empty leaves every watcher at whatever ` +
+        `it was started with; the shortest is ${now.floor || "10s"}.`,
+      submit: "set it",
+    });
+    if (got === null) return;
+    await run(async () => {
+      const said = await api.setSyncPace(got.trim());
+      // Said rather than implied: nothing changes on any machine until its watcher
+      // next asks, and a form that reported "done" would be claiming otherwise.
+      return said;
+    });
+  },
+  async pauseCycle(f, cycle, who, off) {
+    const name = who ? who.name : "the fleet";
+    if (!await dialog.confirm({
+      title: off ? `stop ${cycle} for ${name}?` : `start ${cycle} for ${name} again?`,
+      body: off
+        ? `nothing will ${cycle} it until this is turned back on. it keeps running; it is simply not being ${cycle === "wake" ? "woken" : "tended"}.`
+        : `${cycle} resumes at whatever interval is in force.`,
+      submit: off ? "stop it" : "start it",
+      danger: off,
+    })) return;
+    await run(() => api.pace(f.machine, {
+      cycle, identity: who ? who.name : undefined,
+      off: off || undefined, on: !off || undefined,
+    }));
   },
   async poke(f, id) {
     const message = await dialog.one({
@@ -782,7 +903,7 @@ const actions = {
       note: `it will be created on ${machine}, as a draft, on the next sync`,
       submit: "queue it",
       fields: [
-        { name: "name", label: "name", value: "", check: "label", hint: "letters, digits, and dashes" },
+        { name: "name", label: "name", value: "", check: "label", hint: NAME_HINT },
         { name: "priority", label: "priority", kind: "number", value: 3, min: 1, max: 5,
           hint: "1 low → 5 high" },
         { name: "difficulty", label: "difficulty", kind: "number", value: 3, min: 1, max: 5,
@@ -895,8 +1016,8 @@ const actions = {
   async setStatus(t, status) { await run(() => api.statusTask(t.machine, t.name, status)); },
   async addSubtask(t) {
     const sub = await dialog.one({
-      title: `a step of ${t.name}`, label: "name",
-      hint: "letters, digits, and dashes", submit: "add it",
+      title: `a step of ${t.name}`, label: "name", check: "label",
+      hint: NAME_HINT, submit: "add it",
     });
     if (!sub) return;
     await run(() => api.addSubtask(t.machine, t.name, sub));
@@ -1086,6 +1207,16 @@ async function refresh() {
       admin = await api.adminState();
     }
 
+    // The series, on the same terms as the admin view: fetched only while the tab
+    // that draws it is on screen. It is a year deep at the server, and a window of
+    // it every few seconds for a screen nobody is looking at would be paying for a
+    // chart continuously to see it occasionally.
+    let activity = state.activity;
+    if (route.startsWith("/manage/activity")) {
+      activity = await api.activity(state.activityWindow)
+        .catch((err) => ({ unreachable: String(err.message || err) }));
+    }
+
     let detail = state.detail;
     const match = /^\/message\/([^?]+)(?:\?machine=(.*))?$/.exec(route);
     if (match) {
@@ -1096,6 +1227,7 @@ async function refresh() {
     }
 
     set({
+      activity,
       session, adminEnabled: session.admin, machines: session.machines || [],
       inbox: inbox.messages || [], archive: archive.messages || [],
       sent: sent.messages || [],

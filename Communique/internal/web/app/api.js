@@ -133,6 +133,10 @@ export const api = {
   // The fleet. Reading is one call because a fleet is one derived thing; the
   // verbs are one call each, and every one queues.
   fleet: () => request("GET", "/api/v1/fleet"),
+  // The series: what each agent has cost and touched, by the hour. Its own route
+  // because it is the one thing the server keeps that a snapshot does not carry —
+  // a snapshot is replaced whole and a rate needs history.
+  activity: (since) => request("GET", `/api/v1/activity?since=${encodeURIComponent(since)}`),
 
   newIdentity: (machine, name) => request("POST", "/api/v1/fleet/identities", { machine, name }),
   newRole: (machine, name, authority, description) =>
@@ -197,6 +201,17 @@ export const api = {
     request("DELETE", `/api/v1/fleet/permissions/${encodeURIComponent(name)}`,
       { machine, role: role || undefined }),
   tend: (machine) => request("POST", "/api/v1/fleet/tend", { machine }),
+  // One route for both cycles and all three layers: the body says which cycle and
+  // whose layer, and neither `identity` nor `role` means the fleet's own.
+  pace: (machine, body) => request("POST", "/api/v1/fleet/pace", { machine, ...body }),
+  // Sync's own interval, which is the server's rather than a fleet's: it is about
+  // the link between the two machines, so it is not queued to either.
+  // One setting per call, because that is how orc changes it: a whole-list write
+  // from a stale form would revert whatever somebody else set in between.
+  tariff: (machine, setting, load) =>
+    request("POST", "/api/v1/fleet/tariff", { machine, setting, load }),
+  syncPace: () => request("GET", "/api/v1/sync/pace"),
+  setSyncPace: (watch) => request("POST", "/api/v1/sync/pace", { watch }),
 
   // Rebuild and restart everything. One request: the server upgrades itself, and
   // every agent machine gets a queued action it applies on its next sync.

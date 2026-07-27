@@ -101,7 +101,7 @@ function sessionState(id) {
 // Each tab is built the same way: `perMachine` handles the cases every one of
 // them shares — the fleet could not be read, no machine carries one, this
 // machine is unreachable — so that no tab has to invent its own words for them.
-function perMachine(state, title, body) {
+export function perMachine(state, title, body) {
   const fleets = state.fleet || [];
   if (state.fleetError) {
     return [h("p", { class: "warn" }, `the fleet could not be read: ${state.fleetError}`)];

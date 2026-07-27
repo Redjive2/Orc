@@ -324,6 +324,7 @@ func TestEveryOperationIsClassified(t *testing.T) {
 			}
 		case protocol.OpOrcAssignRole, protocol.OpOrcAssignAuthority, protocol.OpOrcAssignPerm,
 			protocol.OpOrcMove, protocol.OpOrcBudget, protocol.OpOrcTend, protocol.OpOrcToolkit,
+			protocol.OpOrcPace, protocol.OpOrcTariff,
 			protocol.OpOrcFire, protocol.OpOrcRevoke, protocol.OpOrcEditPermission,
 			protocol.OpOrcInstructSet, protocol.OpOrcInstructClear:
 			// Each sets a state to what was asked for, so a repeat lands in the

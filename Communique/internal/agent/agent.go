@@ -168,6 +168,9 @@ type Report struct {
 	Failed    int  // actions that were refused
 	Skipped   int  // actions already applied on an earlier sync
 	Truncated bool // the journal's last line was an interrupted append
+	// Pace is how often the server would like to be synced, when it says. Empty
+	// means it did not, which a watcher reads as "keep the interval you have".
+	Pace string
 }
 
 // String renders the report in one line.
@@ -221,6 +224,7 @@ func (a *Agent) Sync(ctx context.Context) (Report, error) {
 		return report, err
 	}
 	report.Received = len(resp.Actions)
+	report.Pace = resp.Pace
 
 	// 5 before 4, deliberately: the server has already taken the results, so
 	// marking them reported now means a crash before the next step re-sends

@@ -587,6 +587,20 @@ func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
 			return err
 		}
 
+		// How often to come back, as the server last asked.
+		//
+		// It arrives on the response because that is the only moment the two
+		// machines are in contact: the browser sets it at the server, and a
+		// watcher here is something the server can never call. A round that
+		// failed says nothing about the pace, so the interval stands — a mirror
+		// that sped up or slowed down because it could not reach the server would
+		// be reacting to the wrong fact.
+		if next := syncPace(report.Pace, every); next != every {
+			_ = a.say("cq: syncing every %s from now on", round(next))
+			every = next
+			ticker.Reset(every)
+		}
+
 		// Asked here too, because a round can take longer than the lifetime left:
 		// finishing one and then waiting for a timer that has already fired would
 		// be a watch that outlives its own expiry by a whole period.
@@ -1013,4 +1027,18 @@ func libraryFor(typed bool, fallback, home string) (string, error) {
 		return chosen.Library, nil
 	}
 	return fallback, nil
+}
+
+// syncPace reads what the server asked for, falling back to what the watcher has.
+//
+// Anything unparseable, absent, or tighter than the floor leaves the interval where
+// it is. A server that asked for a busy-wait would be asking one machine to spend
+// its time telling another what it has not done, and the floor is checked here as
+// well as at the protocol so an older server cannot ask for one either.
+func syncPace(asked string, now time.Duration) time.Duration {
+	got, err := time.ParseDuration(strings.TrimSpace(asked))
+	if err != nil || got < protocol.MinSyncPace {
+		return now
+	}
+	return got
 }

@@ -4,6 +4,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"time"
 
 	"orc/cq/internal/fault"
 )
@@ -153,8 +154,25 @@ type FleetID struct {
 	Clauses      []FleetClause `json:"clauses,omitempty"`
 	Grants       []FleetGrant  `json:"grants,omitempty"`
 	Workspace    string        `json:"workspace,omitempty"`
-	Budget       int           `json:"spawn_budget"`
-	HasBudget    bool          `json:"has_spawn_budget"`
+	// What it is doing, in one word, with the turn and the last few events.
+	//
+	// Derived by Orc rather than worked out here, for the reason the derived
+	// clauses are: a browser computing `generating` from a session id and a
+	// timestamp would be a second opinion about what an agent is doing, wrong in
+	// exactly the cases somebody opened the tab for. Empty from an older orc,
+	// which the screen reads as "cannot say" rather than as idle.
+	Activity string     `json:"activity,omitempty"`
+	Turn     int        `json:"turn,omitempty"`
+	Since    string     `json:"since,omitempty"`
+	Why      string     `json:"why,omitempty"`
+	Doing    []FleetRow `json:"doing,omitempty"`
+	FeedRead bool       `json:"feed_read,omitempty"`
+	// Buckets is what this identity has cost and touched, by the hour, for as far
+	// back as a snapshot carries. The server keeps the long series; this is the
+	// window that keeps it current — see store.MergeActivity.
+	Buckets   []ActivityBucket `json:"buckets,omitempty"`
+	Budget    int              `json:"spawn_budget"`
+	HasBudget bool             `json:"has_spawn_budget"`
 
 	// The worklist half, and then what is actually running. Separate because the
 	// states where they disagree are the ones worth mirroring: employed with no
@@ -168,6 +186,69 @@ type FleetID struct {
 	Session   string `json:"session,omitempty"`
 	Restarts  int    `json:"restarts,omitempty"`
 	LastExit  string `json:"last_exit,omitempty"`
+}
+
+// ActivityBucket is one hour of one identity's work, on one model at one effort.
+//
+// The numbers are totals and they only ever grow, which is the property the whole
+// mirroring rests on: receiving the same bucket twice writes the same value, and a
+// machine that missed six syncs delivers six buckets whose order does not matter.
+// Nothing here has to arrive exactly once.
+type ActivityBucket struct {
+	At     string         `json:"at"`
+	Model  string         `json:"model,omitempty"`
+	Effort string         `json:"effort,omitempty"`
+	Turns  int            `json:"turns,omitempty"`
+	Tokens ActivityTokens `json:"tokens,omitzero"`
+	Files  ActivityFiles  `json:"files,omitzero"`
+}
+
+// ActivityTokens is what a bucket cost. Four numbers rather than one, because on a
+// real session they differ by five orders of magnitude and a single figure would be
+// a cache-read figure wearing a general name.
+type ActivityTokens struct {
+	Input       int64 `json:"input,omitempty"`
+	Output      int64 `json:"output,omitempty"`
+	CacheCreate int64 `json:"cache_create,omitempty"`
+	CacheRead   int64 `json:"cache_read,omitempty"`
+	WebCalls    int64 `json:"web_calls,omitempty"`
+}
+
+// ActivityFiles is what a bucket touched.
+type ActivityFiles struct {
+	Reads      int   `json:"reads,omitempty"`
+	Edits      int   `json:"edits,omitempty"`
+	Writes     int   `json:"writes,omitempty"`
+	ReadLines  int64 `json:"read_lines,omitempty"`
+	Added      int64 `json:"added,omitempty"`
+	Removed    int64 `json:"removed,omitempty"`
+	WriteLines int64 `json:"write_lines,omitempty"`
+	// Touched is distinct paths *within this bucket*. Summing it across buckets
+	// over-counts a file worked on in two hours, and a screen showing a window has
+	// to say so rather than print it as a fact.
+	Touched int `json:"touched,omitempty"`
+}
+
+// New is what the turns caused to be produced: everything but the cache reads.
+func (b ActivityBucket) New() int64 {
+	return b.Tokens.Input + b.Tokens.Output + b.Tokens.CacheCreate
+}
+
+// Key is what makes two buckets the same bucket, and is what a merge writes on.
+func (b ActivityBucket) Key() string { return b.At + "\x00" + b.Model + "\x00" + b.Effort }
+
+// FleetRow is one line of a session's event feed.
+//
+// The path and never the content: a mirror carrying the text of every edit would be
+// a second copy of the repository on a machine with no business holding one.
+type FleetRow struct {
+	At      string `json:"at"`
+	Turn    int    `json:"turn,omitempty"`
+	Kind    string `json:"kind"`
+	Tool    string `json:"tool,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+	Blocked bool   `json:"blocked,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // FleetClause is one effective permission clause, already narrowed by the boss
@@ -372,6 +453,21 @@ const (
 	// because orc's own table is the definition — cq repeating it would be a copy
 	// that goes stale.
 	OpOrcToolkit Op = "orc.toolkit" // orc bootstrap --as <operator>
+
+	// OpOrcPace sets how often a fleet is woken and tended.
+	//
+	// One op for both cycles and all three layers, because it is one command with
+	// operands: a verb per cycle per layer would be six that differ only in what
+	// they name. `cycle` says which, `identity` or `role` says whose — neither
+	// means the fleet's own — and the rest is the setting.
+	OpOrcPace Op = "orc.pace" // orc pace <cycle> [<who>] [--after|--every|--watch|--off|--on|--clear]
+
+	// OpOrcTariff changes what thinking costs, for every budget at once.
+	//
+	// One setting per action rather than the whole price list, because that is how
+	// it is changed and because a whole-list write from a stale form would revert
+	// whatever somebody else had set in between.
+	OpOrcTariff Op = "orc.tariff" // orc tariff <setting> <n> --yes
 )
 
 // OpUpgrade rebuilds and restarts every Orc tool on the machine it reaches.
@@ -408,7 +504,7 @@ var FleetOps = []Op{
 	OpOrcRemoveIdentity, OpOrcRemoveRole, OpOrcRemovePerm,
 	OpOrcGrant, OpOrcRevoke, OpOrcMove,
 	OpOrcEmploy, OpOrcFire, OpOrcBudget,
-	OpOrcPoke, OpOrcRefresh, OpOrcTend, OpOrcToolkit, OpOrcWorkspace,
+	OpOrcPoke, OpOrcRefresh, OpOrcTend, OpOrcToolkit, OpOrcPace, OpOrcTariff, OpOrcWorkspace,
 	OpOrcInstructSet, OpOrcInstructClear,
 }
 
@@ -441,6 +537,13 @@ var fleetRules = map[Op]argRule{
 	OpOrcPoke:       {identity: true, optMessage: true},
 	OpOrcRefresh:    {identity: true},
 	OpOrcTend:       {},
+	// Every operand is optional but the cycle: a form that clears a layer sends
+	// nothing else, and one that only turns waking off sends no interval.
+	OpOrcPace: {cycle: true, optIdentity: true, optRole: true, optPace: true},
+	// The weight travels in `load`, which is already "a number a budget is about".
+	// A second integer field meaning the same kind of thing would be one more to
+	// keep in step.
+	OpOrcTariff: {setting: true, load: true},
 	// The operator's name, so the action does not depend on which OS user the
 	// sync happens to run as.
 	OpOrcToolkit: {identity: true},
@@ -469,11 +572,19 @@ func (a Action) validateFleetArgs(rule argRule) error {
 		{rule.boss, "boss", a.Args.Boss},
 		{rule.permission, "permission", a.Args.Permission},
 	} {
+		// An identity is required by most verbs and optional for `pace`, whose
+		// layer may be an identity, a role, or the fleet's own.
+		optional := c.field == "identity" && rule.optIdentity
 		switch {
 		case c.want && c.value == "":
 			return fault.Field("Action", "args."+c.field, "%s requires %s", a.Op, c.field)
-		case !c.want && c.value != "":
+		case !c.want && !optional && c.value != "":
 			return unexpected(a.Op, c.field)
+		}
+		if optional && c.value != "" {
+			if err := checkName("Action", "args."+c.field, c.value); err != nil {
+				return err
+			}
 		}
 		if c.want {
 			if err := checkName("Action", "args."+c.field, c.value); err != nil {
@@ -580,6 +691,13 @@ func (a Action) validateFleetArgs(rule argRule) error {
 // while the same prompt refused after a sync is a failure sitting in a queue on a
 // machine nobody is watching.
 func (a Action) checkInstructArgs(rule argRule) error {
+	if err := checkPace(a, rule); err != nil {
+		return err
+	}
+	if err := checkSetting(a, rule); err != nil {
+		return err
+	}
+
 	if !rule.prompt {
 		if a.Args.Prompt != "" || a.Args.PromptName != "" || a.Args.Wake {
 			return unexpected(a.Op, "prompt")
@@ -700,4 +818,132 @@ func (a Action) checkWorkspaceArgs(rule argRule) error {
 		return unexpected(a.Op, "adopt")
 	}
 	return nil
+}
+
+// checkPace is `orc pace`'s operand contract.
+//
+// Everything but the cycle is optional, because the forms genuinely differ: one
+// clears a layer and sends nothing else, one turns waking off and sends no
+// interval, one sets both intervals at once. What is *not* allowed is a change
+// that says nothing — a queued action that would run `orc pace wake` and report
+// success for having done nothing is the worst kind of no-op, because the operator
+// watched it succeed.
+func checkPace(a Action, rule argRule) error {
+	if !rule.cycle {
+		if a.Args.Cycle != "" || a.Args.After != "" || a.Args.Every != "" ||
+			a.Args.Watch != "" || a.Args.PaceOff || a.Args.PaceOn || a.Args.PaceClear {
+			return unexpected(a.Op, "pace")
+		}
+		return nil
+	}
+
+	switch a.Args.Cycle {
+	case "wake", "tend":
+	default:
+		return fault.Field("Action", "args.cycle",
+			"%q is not a cycle; it is wake or tend", a.Args.Cycle)
+	}
+	if a.Args.Identity != "" && a.Args.Role != "" {
+		return fault.Field("Action", "args.identity",
+			"a layer belongs to an identity or to a role, not to both")
+	}
+	if a.Args.PaceOff && a.Args.PaceOn {
+		return fault.Field("Action", "args.pace_off", "off and on are opposites; send one")
+	}
+
+	for _, got := range []struct {
+		field string
+		value string
+		cycle string
+	}{
+		{"after", a.Args.After, "wake"},
+		{"every", a.Args.Every, "wake"},
+		{"watch", a.Args.Watch, "tend"},
+	} {
+		if got.value == "" {
+			continue
+		}
+		if got.cycle != a.Args.Cycle {
+			return fault.Field("Action", "args."+got.field,
+				"%s belongs to %s, not to %s", got.field, got.cycle, a.Args.Cycle)
+		}
+		if err := checkDuration("Action", "args."+got.field, got.value); err != nil {
+			return err
+		}
+	}
+
+	if a.Args.After == "" && a.Args.Every == "" && a.Args.Watch == "" &&
+		!a.Args.PaceOff && !a.Args.PaceOn && !a.Args.PaceClear {
+		return fault.Field("Action", "args.cycle", "a pace that changes nothing is not a change")
+	}
+	return nil
+}
+
+// checkDuration refuses a value orc would refuse, so a queued action fails here —
+// where somebody is looking at the form — rather than minutes later on a machine
+// they cannot see.
+func checkDuration(where, field, raw string) error {
+	got, err := time.ParseDuration(raw)
+	if err != nil {
+		return fault.Field(where, field, "%q is not a duration like 20m", raw)
+	}
+	if got <= 0 {
+		return fault.Field(where, field, "%q has nothing in it", raw)
+	}
+	if got > MaxPace {
+		return fault.Field(where, field, "%q is longer than %s, which is not a cycle", raw, MaxPace)
+	}
+	return nil
+}
+
+// MaxPace is the longest interval worth calling one. A cycle that runs once a
+// fortnight is a cycle nobody is relying on, and a typo — 20m written 20000h — is
+// far more likely than the intention.
+const MaxPace = 7 * 24 * time.Hour
+
+// MinSyncPace is the tightest a mirror will sync.
+//
+// A mirror that syncs every second is a machine that spends its time telling
+// another machine what it has not done. Ten seconds is short enough that a phone
+// feels current and long enough that neither end is doing nothing else.
+const MinSyncPace = 10 * time.Second
+
+// checkSetting is `orc tariff`'s operand contract.
+//
+// The names are Orc's own and are checked here as well as there, so a weight the
+// fleet would refuse never becomes a queued action that fails hours later on a
+// machine nobody is watching. The *range* is Orc's to enforce: this end knows the
+// vocabulary, and the far end knows what it currently charges.
+func checkSetting(a Action, rule argRule) error {
+	if !rule.setting {
+		if a.Args.Setting != "" {
+			return unexpected(a.Op, "setting")
+		}
+		return nil
+	}
+	if a.Args.Setting == "" {
+		return fault.Field("Action", "args.setting", "%s requires a setting", a.Op)
+	}
+	if !slices.Contains(TariffSettings, a.Args.Setting) {
+		return fault.Field("Action", "args.setting",
+			"%q is not something a tariff prices; it is %s",
+			a.Args.Setting, strings.Join(TariffSettings, ", "))
+	}
+	if a.Args.Load < 1 {
+		return fault.Field("Action", "args.load",
+			"a weight of %d is a session no budget can refuse", a.Args.Load)
+	}
+	return nil
+}
+
+// TariffSettings is what a tariff prices, in Orc's own words.
+//
+// A copy, and the drift is answered by checking rather than by hoping: cq cannot
+// import Orc, and a browser offering a setting the fleet has never heard of would
+// queue an action that fails on the far machine. The list is short and it changes
+// when a model is added, which is exactly when somebody is already editing both.
+var TariffSettings = []string{
+	"haiku", "sonnet", "opus",
+	"low", "medium", "high", "xhigh", "max",
+	"crowd-base", "crowd-scale",
 }

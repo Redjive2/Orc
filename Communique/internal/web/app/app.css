@@ -400,6 +400,53 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
    visible when both are open, and quiet when closed, which is most of the time. */
 .cheatsheet .inner { border: none; border-left: 1px solid var(--frame); margin: .4rem 0 0 1ch; }
 
+/* --- activity ----------------------------------------------------------- */
+
+/* The last few things an agent did, on the character grid like everything else.
+   Three columns rather than a sentence: a reader is scanning down the middle one
+   for a path they recognise, and prose would put it in a different place on
+   every line. */
+.feed { display: grid; gap: .05rem; margin: .3rem 0 .2rem 2ch; }
+.feed-row {
+  display: grid;
+  /* The third column hugs the second rather than being pushed to the far edge:
+     "refused" belongs beside the path it refused, not a screen away from it. */
+  grid-template-columns: 10ch minmax(20ch, max-content) auto;
+  justify-content: start;
+  gap: 0 2ch;
+  align-items: baseline;
+}
+/* A refused call is the row somebody scanning this is looking for, so it is the
+   one that is coloured rather than merely labelled. */
+.feed-row.blocked span:nth-child(2) { color: var(--danger); }
+.why { margin: .1rem 0 .2rem 2ch; }
+
+/* The charts. Bars are one character each and the row is a line of text, so a
+   window of 48 hours is 48 columns and lines up with everything else on the grid.
+   Overflowing rather than wrapping: a chart that wrapped would put the same hour
+   in two places. */
+.chart { display: flex; gap: 0 2ch; align-items: baseline; margin: .1rem 0; }
+.chart-label { min-width: 12ch; }
+.chart-bars { white-space: pre; overflow-x: auto; color: var(--primary); letter-spacing: 0; }
+.chart-bars .muted { color: var(--frame); }
+.chart-peak { white-space: nowrap; }
+
+.work { display: grid; gap: .1rem; margin: .3rem 0; }
+.work-row {
+  display: grid;
+  grid-template-columns: 14ch 10ch 12ch 16ch 8ch 8ch;
+  gap: 0 1ch;
+  align-items: baseline;
+}
+.window { margin: .6rem 0 .3rem; }
+
+/* What it came to. Four figures on one row and a sentence under them: the caveat
+   is part of the reading, not a footnote, because a number that looks like a
+   ranking will be read as one unless something says otherwise. */
+.came-to { margin: .8rem 0 .2rem; }
+.came-row { display: flex; flex-wrap: wrap; gap: 0 3ch; align-items: baseline; }
+.came-to p { margin: .2rem 0; }
+
 .grants { display: grid; gap: .15rem; }
 .grant { display: flex; flex-wrap: wrap; gap: 0 2ch; align-items: baseline; }
 .grant button { padding: 0 1ch; font-size: .85em; }

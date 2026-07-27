@@ -38,7 +38,7 @@ export const AREAS = [
       { sub: "fleet" },
       { sub: "tasks" },
       { sub: "tree" },
-      { sub: "tokens" },
+      { sub: "activity" },
     ],
   },
   {

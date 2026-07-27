@@ -317,6 +317,39 @@ func (o *Orc) Apply(ctx context.Context, action protocol.Action) error {
 		if a.Adopt {
 			args = append(args, "--adopt")
 		}
+	case protocol.OpOrcPace:
+		// The layer is named by whichever of the two is set, and neither means the
+		// fleet's own — the same shape the command takes.
+		args = []string{"pace", a.Cycle}
+		if a.Identity != "" {
+			args = append(args, a.Identity)
+		} else if a.Role != "" {
+			args = append(args, a.Role)
+		}
+		// `--clear` first, so a form that cleared a layer and set a value in one
+		// move means "start again from this", which is what it reads as.
+		if a.PaceClear {
+			args = append(args, "--clear")
+		}
+		for _, flag := range []struct{ name, value string }{
+			{"--after", a.After}, {"--every", a.Every}, {"--watch", a.Watch},
+		} {
+			if flag.value != "" {
+				args = append(args, flag.name, flag.value)
+			}
+		}
+		if a.PaceOff {
+			args = append(args, "--off")
+		}
+		if a.PaceOn {
+			args = append(args, "--on")
+		}
+
+	case protocol.OpOrcTariff:
+		// `--yes` for the same reason every queued verb carries it: the operator
+		// confirmed in the browser, and the far end has no terminal to ask.
+		args = []string{"tariff", a.Setting, strconv.Itoa(a.Load), "--yes"}
+
 	case protocol.OpOrcTend:
 		args = []string{"tend"}
 	case protocol.OpOrcToolkit:
