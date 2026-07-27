@@ -196,6 +196,11 @@ func (s *Store) PruneActivity(name user.Name, before time.Time) error {
 	if err != nil {
 		return err
 	}
+	// Rewriting anyway, so this is where the old detail goes. A minute-by-minute
+	// reading is worth its lines for as long as somebody might ask about a minute;
+	// past that the same numbers fit in a sixtieth of the file, and the fold is the
+	// one the reader above already performs.
+	kept = activity.Age(kept, s.Now().Add(-activity.Fine))
 	if len(kept) == 0 {
 		if err := s.ops.remove(s.activityPath(name)); err != nil && !os.IsNotExist(err) {
 			return fault.IO{Op: "remove", Path: s.activityPath(name), Err: err}

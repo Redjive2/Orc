@@ -53,12 +53,18 @@ export function activity(state, actions) {
       h("div", { class: "meta" }, summary(list)),
       h("div", { class: "body" },
         ...(f.problems || []).map((p) => h("p", { class: "warn" }, p)),
+        // The dashboard first, and the controls under it. This tab is opened to
+        // find something out far more often than to change something, and the
+        // charts are the answer to the question that brings anybody here; the
+        // cycles are what you set once and then leave alone. They were on top
+        // because they were built first, which is not a reason.
+        ...over(state, series, actions),
+        productivity(state, f, series),
+        h("h3", {}, "who is doing what"),
         fleetPace(f, actions, state.syncPace),
         ...(list.length === 0
           ? [h("p", { class: "muted" }, "nobody yet")]
           : list.map((id) => row(f, id, actions))),
-        ...over(state, series, actions),
-        productivity(state, f, series),
         tariff(f, actions)),
     ];
   });
@@ -73,7 +79,11 @@ function seriesFor(state, machine) {
   const got = state.activity;
   if (!got || got.unreachable) return { error: got ? got.unreachable : "", identities: {} };
   const found = (got.machines || []).find((m) => m.machine === machine);
-  return { error: "", identities: found ? found.identities || {} : {} };
+  // The period travels with the series because the server chose it, from the window
+  // and from what the mirror actually holds at that age. A browser that guessed it
+  // from the gaps between buckets would draw a quiet fortnight and a busy hour at
+  // the same width.
+  return { error: "", period: got.period || "", identities: found ? found.identities || {} : {} };
 }
 
 // summary counts the states worth counting. Idle is left out of the sentence and
@@ -158,15 +168,17 @@ function line(r) {
 
 // WINDOWS are what the selector offers. The value is what the server parses, and
 // the label is what a person calls it.
+// The two short ones are the reason the reading is taken by the minute: "is it
+// working right now" and "did that change help" are questions about the last few
+// minutes, and every window here used to be too wide to answer either.
 const WINDOWS = [
+  { value: "15m", label: "15 min" },
+  { value: "1h", label: "an hour" },
   { value: "6h", label: "6 hours" },
   { value: "48h", label: "2 days" },
   { value: "168h", label: "a week" },
   { value: "720h", label: "a month" },
 ];
-
-// BLOCKS are the bars, on the character grid like everything else cq draws.
-const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 // over is the whole lower half: the window selector, the charts, and what the
 // fleet read and wrote.
@@ -192,14 +204,66 @@ function over(state, series, actions) {
   }
 
   const all = names.flatMap((name) => series.identities[name] || []);
+  const slots = axis(state.activityWindow, series.period, all);
   return [
     head,
-    chart("new tokens", byHour(all, (b) => tok(b).input + tok(b).output + tok(b).cache_create)),
-    chart("cache reads", byHour(all, (b) => tok(b).cache_read)),
-    chart("turns", byHour(all, (b) => b.turns || 0)),
+    chart("new tokens", slots, all, (b) => tok(b).input + tok(b).output + tok(b).cache_create, series.period),
+    chart("cache reads", slots, all, (b) => tok(b).cache_read, series.period),
+    chart("turns", slots, all, (b) => b.turns || 0, series.period),
     h("h3", {}, "what it read and wrote"),
     ...work(names, series),
   ];
+}
+
+// MaxSlots is the most columns a chart will lay out.
+//
+// The server picks a period for the window and aims well under this; the cap is here
+// because the two can disagree — an old server, a hand-typed window — and a browser
+// that trusted the arithmetic would lay out a hundred thousand elements rather than
+// draw a chart it could not draw.
+const MaxSlots = 400;
+
+// axis is the timeline a chart is drawn on: every period in the window, whether
+// anything happened in it or not.
+//
+// The gaps are the point. A series is only written where there was work, so drawing
+// the buckets that exist puts four scattered minutes side by side as four full-height
+// bars — a picture of continuous effort assembled from a quiet afternoon. Laying out
+// the window and dropping the buckets into it is what makes the empty stretches
+// visible as empty.
+//
+// It ends at the newest bucket rather than at now, when the newest is older: the
+// series is as fresh as the last sync, and running the axis to the current instant
+// would draw the delay as an outage.
+function axis(window, period, buckets) {
+  const step = span(period);
+  if (!step) return [];
+  let last = 0;
+  for (const b of buckets) {
+    const at = Date.parse(b.at);
+    if (Number.isFinite(at) && at > last) last = at;
+  }
+  const end = last > 0 ? Math.min(Date.now(), last + step) : Date.now();
+  const from = Math.floor((end - span(window)) / step) * step;
+  const to = Math.floor(end / step) * step;
+  const out = [];
+  for (let t = from; t <= to && out.length < MaxSlots; t += step) out.push(t);
+  return out;
+}
+
+// span reads a Go duration — "15m", "1h0m0s", "24h0m0s" — as milliseconds.
+//
+// Both ends of this wire spell durations that way: the window is what the button
+// sent and the period is what the server chose, and neither is worth a second format
+// to avoid one small parser.
+function span(spec) {
+  if (!spec) return 0;
+  const units = { ms: 1, s: 1000, m: 60000, h: 3600000 };
+  let total = 0;
+  for (const [, n, unit] of String(spec).matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)) {
+    total += Number(n) * units[unit];
+  }
+  return total;
 }
 
 // tok is a bucket's tokens, and is why nothing here reads `b.tokens` directly.
@@ -213,36 +277,100 @@ function tok(b) {
   return b.tokens || {};
 }
 
-// byHour collapses every identity's buckets into one series, hour by hour.
+// into drops every identity's buckets onto the axis, summing what lands in each slot.
 //
-// Keyed by the hour as the agent machine spelled it: two spellings of one instant
-// would be two columns, and the string is what the merge keys on anyway.
-function byHour(buckets, of) {
-  const total = new Map();
+// Keyed by parsed instant rather than by the string the machine wrote: the slots are
+// computed and the buckets are spelled, and two spellings of one moment would put a
+// bar in a slot that is not there.
+function into(slots, buckets, of) {
+  const step = slots.length > 1 ? slots[1] - slots[0] : 0;
+  const total = new Map(slots.map((t) => [t, 0]));
   for (const b of buckets) {
-    total.set(b.at, (total.get(b.at) || 0) + (of(b) || 0));
+    const at = Date.parse(b.at);
+    if (!Number.isFinite(at)) continue;
+    const slot = step > 0 ? Math.floor(at / step) * step : at;
+    if (!total.has(slot)) continue;
+    total.set(slot, total.get(slot) + (of(b) || 0));
   }
-  return [...total.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  return slots.map((t) => total.get(t));
 }
 
-// chart draws one series as blocks, with the largest value beside it.
+// chart draws one series as bars with real height and a colour that runs with the
+// value.
 //
 // Scaled to its own maximum rather than to the others': the three series differ by
 // orders of magnitude, and one scale across all of them would draw two of them flat.
 // What that costs is comparability between charts, which is why each says its own
 // peak in words.
-function chart(label, points) {
-  if (points.length === 0) return null;
-  const peak = Math.max(...points.map(([, v]) => v));
-  const bars = points.map(([at, v]) => h("span", {
-    class: v > 0 ? "" : "muted",
-    title: `${at} · ${number(v)}`,
-  }, peak > 0 ? BLOCKS[Math.min(BLOCKS.length - 1, Math.round((v / peak) * (BLOCKS.length - 1)))] : "▁"));
+//
+// The colour carries the same number as the height, which is deliberate redundancy
+// rather than decoration. A bar an eighth of the way up a short chart is hard to
+// judge against its neighbours; the same bar in green against a red one is not. It
+// runs green through amber to red because that is what the reading means here —
+// spend — and nobody has to be told which end is which.
+function chart(label, slots, buckets, of, period) {
+  if (slots.length === 0) return null;
+  const values = into(slots, buckets, of);
+  const peak = Math.max(...values);
+  const step = slots.length > 1 ? slots[1] - slots[0] : span(period);
+
+  const bars = values.map((v, i) => {
+    const share = peak > 0 ? v / peak : 0;
+    return h("span", {
+      class: v > 0 ? "bar" : "bar empty",
+      // Every bar says its own slot and its own number. There is no room for an
+      // axis label per column and no honest way to leave the reading out — a
+      // shape without figures is a mood.
+      title: `${when(slots[i], step)} · ${number(v)}`,
+      // A floor under any bar that is not zero, because the interesting minute on
+      // a chart with one huge peak is usually one of the small ones, and a bar
+      // rounded to nothing is indistinguishable from an idle slot. An empty slot
+      // carries no inline style at all and takes its sliver from the sheet.
+      style: v > 0 ? `height:${Math.max(4, share * 100).toFixed(1)}%;background:${heat(share)}` : "",
+    });
+  });
 
   return h("div", { class: "chart" },
-    h("span", { class: "chart-label muted" }, label),
-    h("span", { class: "chart-bars" }, ...bars),
-    h("span", { class: "chart-peak muted" }, `peak ${number(peak)}`));
+    h("div", { class: "chart-head" },
+      h("span", { class: "chart-label" }, label),
+      h("span", { class: "chart-peak muted" }, `peak ${number(peak)} per ${every(step)}`)),
+    h("div", { class: "chart-bars" }, ...bars),
+    h("div", { class: "chart-axis muted" },
+      h("span", {}, when(slots[0], step)),
+      h("span", {}, when(slots[slots.length - 1], step))));
+}
+
+// heat runs green to red across the chart's own range.
+const heat = (share) =>
+  `hsl(${Math.round(140 - 140 * Math.min(1, Math.max(0, share)))} 58% 45%)`;
+
+// when spells a slot, at the precision the slot is worth.
+//
+// A minute-wide bar wants a clock and a day-wide bar wants a date, and printing
+// both on either is how an axis stops being readable at a glance.
+function when(at, step) {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return String(at);
+  const clock = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (step >= 6 * 3600000) {
+    return `${d.toLocaleDateString([], { day: "numeric", month: "short" })} ${clock}`;
+  }
+  return clock;
+}
+
+// every names the bar width in words, so "peak 40,000" says what it is a peak of.
+// The same number over a minute and over a day are different facts.
+function every(step) {
+  if (step >= 86400000 && step % 86400000 === 0) {
+    const days = step / 86400000;
+    return days === 1 ? "day" : `${days} days`;
+  }
+  if (step >= 3600000 && step % 3600000 === 0) {
+    const hours = step / 3600000;
+    return hours === 1 ? "hour" : `${hours}h`;
+  }
+  const minutes = Math.round(step / 60000);
+  return minutes === 1 ? "minute" : `${minutes}m`;
 }
 
 // work is the per-agent table of files and lines.

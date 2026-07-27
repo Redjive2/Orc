@@ -136,7 +136,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `POST fleet/pace`                      | `orc pace <cycle> [<who>] [flags]`       |
 | `POST fleet/tariff`                    | `orc tariff <setting> <n> --yes`         |
 | `GET/POST sync/pace`                   | how often each machine syncs — the server's own |
-| `GET activity?since=<dur>`             | the series: what each agent cost and touched |
+| `GET activity?since=<dur>`             | the series: what each agent cost and touched, folded to a `period` it names |
 | `PATCH fleet/permissions/<n>`          | `orc edit permission <name> --floor …`   |
 | `DELETE fleet/permissions/<n>`         | `orc remove permission [--from] --yes`   |
 | `PUT tasks/<n>/description`            | `muff describe <task> --set <file>`      |

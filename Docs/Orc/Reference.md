@@ -547,8 +547,16 @@ Reading is incremental. A cursor records where the last pass stopped, so a sessi
 that is megabytes costs one read rather than one per command, and a transcript that
 has shrunk is a rotation: the reader starts again and says so, because an hour
 counted twice is visible and an hour lost is not. Totals live in
-`identities/<name>/activity.jsonl`, one line per read, folded by the hour they fall
-in; each line is a delta, so a bucket's total only ever grows.
+`identities/<name>/activity.jsonl`, one line per read, folded by the **minute** they
+fall in; each line is a delta, so a bucket's total only ever grows.
+
+The minute is the floor on every question asked of the measurement, and nothing above
+it can recover detail the reading never took — "is it working right now" and "did that
+change help" are questions about the last few minutes, and an hourly reading answers
+both with one bar. The cost is bounded at both ends: nothing is written for a minute in
+which an agent did nothing, and everything older than twelve hours is folded to the
+hour by whoever stores it. Folding is the same addition that merges two readings, so a
+chart drawn every five minutes and one drawn every hour are two views of one number.
 
 `tend` advances the rollup on every pass, which is what makes the measurement
 continuous without a daemon.

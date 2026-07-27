@@ -118,7 +118,120 @@ func (s *Store) MergeActivity(machine protocol.MachineID, fleet protocol.Fleet, 
 	if _, err := f.WriteString(lines.String()); err != nil {
 		return fault.IO{Op: "append to", Subject: path, Err: err}
 	}
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return fault.IO{Op: "close", Subject: path, Err: err}
+	}
+	return s.compactActivity(path, at)
+}
+
+// FineWindow is how long the mirror keeps the minute-by-minute detail before folding
+// it to the hour.
+//
+// It has to be at least as wide as the widest window a screen draws at minute
+// resolution, or the far end of that chart would be hour-shaped lumps in
+// minute-shaped slots — a spiky picture of a smooth afternoon, which is worse than
+// no picture. Half a day, matching what the agent machine keeps and sends.
+const FineWindow = 12 * time.Hour
+
+// CompactAfter is how many lines a month's file may reach before it is folded.
+//
+// The file is append-only and a bucket is rewritten on every sync that carries it,
+// so lines accumulate at the sync rate rather than at the rate work happens: an
+// agent syncing every minute writes its last twelve hours again every minute. The
+// fold is what keeps that from turning a chart into a scan of a hundred megabytes,
+// and the threshold is only about how often it is worth paying for.
+const CompactAfter = 20000
+
+// compactActivity folds a month's file in place when it has grown enough to be worth
+// it: newest write per bucket, and everything past FineWindow folded to the hour.
+//
+// Both halves matter and they are different savings. The dedup removes the repeats a
+// live link produces; the fold removes detail nothing draws at that age. Neither
+// changes an answer — the fold is the same one every reader performs, and a bucket
+// total only ever grows, so folding the newest writes is folding the truth.
+//
+// Every failure is silent and costs nothing but the saving. Compaction is
+// housekeeping on data that has already been safely written, and a sync that failed
+// because a tidy-up did would be trading the mirror for the chart.
+func (s *Store) compactActivity(path string, now time.Time) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	lines := 0
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 16<<10), 64<<10)
+	for scanner.Scan() {
+		lines++
+	}
+	_ = f.Close()
+	if lines < CompactAfter {
+		return nil
+	}
+
+	// Newest write per bucket, exactly as a read would resolve it.
+	best := map[string]storedActivity{}
+	if err := foldActivity(path, "", time.Time{}, func(got storedActivity) {
+		key := got.Identity + "\x00" + got.At + "\x00" + got.Model + "\x00" + got.Effort
+		if was, ok := best[key]; ok && was.Seen > got.Seen {
+			return
+		}
+		best[key] = got
+	}); err != nil {
+		return nil
+	}
+
+	// Then the fold, on the same key with the hour written into it. Buckets whose
+	// time will not parse are kept as they are rather than dropped: an unreadable
+	// timestamp is a line this build does not understand, not a line that is wrong.
+	before := now.UTC().Add(-FineWindow)
+	folded := map[string]storedActivity{}
+	for _, got := range best {
+		at, err := time.Parse(time.RFC3339Nano, got.At)
+		if err == nil && at.Before(before) {
+			got.At = at.UTC().Truncate(time.Hour).Format(time.RFC3339Nano)
+		}
+		key := got.Identity + "\x00" + got.At + "\x00" + got.Model + "\x00" + got.Effort
+		into, ok := folded[key]
+		if !ok {
+			into = storedActivity{
+				Identity: got.Identity, At: got.At,
+				Model: got.Model, Effort: got.Effort,
+			}
+		}
+		into.Turns += got.Turns
+		into.Tokens.Add(got.Tokens)
+		into.Files.Add(got.Files)
+		// The latest of the writes that went into it, so a later sync carrying the
+		// same hour still wins on the way back in.
+		if got.Seen > into.Seen {
+			into.Seen = got.Seen
+		}
+		folded[key] = into
+	}
+
+	keys := make([]string, 0, len(folded))
+	for key := range folded {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var out strings.Builder
+	for _, key := range keys {
+		raw, err := json.Marshal(folded[key])
+		if err != nil {
+			return nil
+		}
+		out.Write(raw)
+		out.WriteByte('\n')
+	}
+	// Atomic, because a reader is a live server and a half-written series would be a
+	// chart with a hole rather than a chart that is late.
+	_ = atomic.WriteFile(path, []byte(out.String()), fileMode)
+	return nil
 }
 
 // Activity folds a machine's series, newest write per bucket winning.

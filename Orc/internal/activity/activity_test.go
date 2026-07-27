@@ -97,15 +97,18 @@ func TestATurnsCostIsCounted(t *testing.T) {
 	}
 }
 
-func TestTurnsAreBucketedByTheHour(t *testing.T) {
+// The reading is taken at the minute, which is the floor on every question asked of
+// it: an hourly reading answers "what is it doing now" with a single bar, and no
+// amount of folding afterwards recovers detail that was never taken.
+func TestTurnsAreBucketedByTheMinute(t *testing.T) {
 	path := write(t,
-		line(t, "2026-07-26T12:10:00.000Z", "claude-opus-5", "high", used(1, 1, 0, 0), nil),
-		line(t, "2026-07-26T12:50:00.000Z", "claude-opus-5", "high", used(1, 1, 0, 0), nil),
-		line(t, "2026-07-26T13:05:00.000Z", "claude-opus-5", "high", used(1, 1, 0, 0), nil))
+		line(t, "2026-07-26T12:10:10.000Z", "claude-opus-5", "high", used(1, 1, 0, 0), nil),
+		line(t, "2026-07-26T12:10:50.000Z", "claude-opus-5", "high", used(1, 1, 0, 0), nil),
+		line(t, "2026-07-26T12:11:05.000Z", "claude-opus-5", "high", used(1, 1, 0, 0), nil))
 
 	got := read(t, path, activity.Cursor{})
 	if len(got.Buckets) != 2 {
-		t.Fatalf("got %d buckets, want 2 (two hours)", len(got.Buckets))
+		t.Fatalf("got %d buckets, want 2 (two minutes)", len(got.Buckets))
 	}
 	if got.Buckets[0].Turns != 2 || got.Buckets[1].Turns != 1 {
 		t.Errorf("turns landed %d/%d, want 2/1", got.Buckets[0].Turns, got.Buckets[1].Turns)
@@ -113,6 +116,67 @@ func TestTurnsAreBucketedByTheHour(t *testing.T) {
 	// Oldest first, so a rollup appends in a stable order.
 	if !got.Buckets[0].At.Before(got.Buckets[1].At) {
 		t.Error("buckets are not oldest-first")
+	}
+}
+
+// Coarsen is the whole of downsampling, and everything downstream leans on it being
+// exactly the fold that already merges buckets — a chart at five minutes and a chart
+// at an hour disagreeing about a total would be two different measurements wearing
+// one name.
+func TestCoarsenFoldsWithoutLosingAnything(t *testing.T) {
+	path := write(t,
+		line(t, "2026-07-26T12:10:00.000Z", "claude-opus-5", "high", used(1, 10, 0, 0), nil),
+		line(t, "2026-07-26T12:50:00.000Z", "claude-opus-5", "high", used(1, 20, 0, 0), nil),
+		line(t, "2026-07-26T13:05:00.000Z", "claude-opus-5", "high", used(1, 30, 0, 0), nil))
+	fine := read(t, path, activity.Cursor{}).Buckets
+
+	hourly := activity.Coarsen(fine, time.Hour)
+	if len(hourly) != 2 {
+		t.Fatalf("got %d hours, want 2", len(hourly))
+	}
+	if hourly[0].Turns != 2 || hourly[1].Turns != 1 {
+		t.Errorf("turns landed %d/%d, want 2/1", hourly[0].Turns, hourly[1].Turns)
+	}
+	if hourly[0].Tokens.Output != 30 || hourly[1].Tokens.Output != 30 {
+		t.Errorf("tokens landed %d/%d, want 30/30", hourly[0].Tokens.Output, hourly[1].Tokens.Output)
+	}
+}
+
+// Model and effort survive a fold. They are what a bucket is split by, and a
+// downsample that merged them would answer "what does opus at high effort cost" with
+// the average of everything that ran that hour.
+func TestCoarsenKeepsTheSplit(t *testing.T) {
+	path := write(t,
+		line(t, "2026-07-26T12:10:00.000Z", "claude-opus-5", "high", used(0, 10, 0, 0), nil),
+		line(t, "2026-07-26T12:20:00.000Z", "claude-sonnet-5", "high", used(0, 20, 0, 0), nil))
+
+	got := activity.Coarsen(read(t, path, activity.Cursor{}).Buckets, time.Hour)
+	if len(got) != 2 {
+		t.Fatalf("got %d buckets, want 2 (one per model)", len(got))
+	}
+}
+
+// Age is what a store and a wire both want: detail where somebody might ask for a
+// minute, and a sixtieth of the lines everywhere else.
+func TestAgeFoldsOnlyWhatIsOldEnough(t *testing.T) {
+	path := write(t,
+		line(t, "2026-07-26T12:10:00.000Z", "claude-opus-5", "high", used(0, 10, 0, 0), nil),
+		line(t, "2026-07-26T12:20:00.000Z", "claude-opus-5", "high", used(0, 20, 0, 0), nil),
+		line(t, "2026-07-26T14:10:00.000Z", "claude-opus-5", "high", used(0, 30, 0, 0), nil),
+		line(t, "2026-07-26T14:20:00.000Z", "claude-opus-5", "high", used(0, 40, 0, 0), nil))
+	fine := read(t, path, activity.Cursor{}).Buckets
+
+	got := activity.Age(fine, time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC))
+	// The old pair folded into one hour; the recent pair kept its minutes.
+	if len(got) != 3 {
+		t.Fatalf("got %d buckets, want 3 (one hour and two minutes)", len(got))
+	}
+	var total int64
+	for _, b := range got {
+		total += b.Tokens.Output
+	}
+	if total != 100 {
+		t.Errorf("folding lost tokens: %d, want 100", total)
 	}
 }
 

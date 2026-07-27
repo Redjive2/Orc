@@ -378,6 +378,11 @@ func (s caller) identityJSON(who user.Name) (jsonIdentity, error) {
 	// a window wide enough to cover an ordinary outage, and the mirror keeps the
 	// long history at its end.
 	if buckets, err := s.store.Activity(who, s.store.Now().Add(-SyncWindow)); err == nil {
+		// Folded before it is counted. The store may still hold minutes right back
+		// to the window's edge — a prune has to have run for that not to be true —
+		// and sending two days of minutes would spend the whole allowance on detail
+		// nothing draws at that width.
+		buckets = activity.Age(buckets, s.store.Now().Add(-activity.Fine))
 		if over := len(buckets) - MaxSyncBuckets; over > 0 {
 			// Newest kept: an old bucket the far end is missing is a hole in a
 			// chart, and a recent one it is missing is the chart being wrong now.
@@ -469,7 +474,12 @@ const (
 	// MaxSyncBuckets bounds it whatever the window says. An identity that changed
 	// model and effort every hour would otherwise multiply the count by the number
 	// of combinations it used.
-	MaxSyncBuckets = 240
+	//
+	// Sized for the shape that actually travels: half a day of minutes, then hours
+	// to the window's edge. That is 720 plus 36, before the combinations, and a
+	// ceiling that cut into the recent minutes would be a ceiling that made the
+	// short windows useless at the far end.
+	MaxSyncBuckets = 1200
 )
 
 // jsonTariff is one thing a tariff prices.

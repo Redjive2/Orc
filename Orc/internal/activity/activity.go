@@ -103,7 +103,79 @@ func (f *Files) Add(other Files) {
 	f.Touched += other.Touched
 }
 
-// Bucket is one hour of one session, on one model at one effort.
+// Period is the finest bucket a reading is kept in, and so the finest question a
+// chart can ever answer.
+//
+// A minute. It was an hour, and an hour is the wrong floor for the thing people
+// actually ask this of: "what is it doing right now" and "did that last change help"
+// are questions about the last few minutes, and an hourly rollup answers them with
+// one bar. Nothing above this can recover detail the reading never took.
+//
+// The cost is lines, and it is bounded at both ends: nothing is written for a minute
+// in which an agent did nothing, and everything past Fine is folded to the hour by
+// whoever stores it. A busy agent is a few hundred lines a day, and this is a file
+// that gets rewritten whole anyway.
+const Period = time.Minute
+
+// Fine is how far back the minute-by-minute detail is worth keeping.
+//
+// Past it every reader folds to the hour. The number is a judgement about what
+// anybody looks at: half a day covers a working session and every short window a
+// screen offers, and a fortnight-wide chart drawn from minutes would be sixty
+// thousand buckets rendered as sixty bars.
+const Fine = 12 * time.Hour
+
+// Coarse is what Fine folds to.
+const Coarse = time.Hour
+
+// Coarsen folds buckets into a wider period.
+//
+// The whole of downsampling, because of what a bucket is: totals split by model and
+// effort, keyed on when. Re-key the `At` and the ordinary fold does the rest — which
+// is the same fold that merges two machines' readings and the same one that reads
+// the journal. One implementation, so a chart at five minutes and a chart at an hour
+// cannot disagree about a number.
+//
+// A period of zero or less returns the buckets untouched rather than dividing by it.
+func Coarsen(buckets []Bucket, period time.Duration) []Bucket {
+	if period <= 0 {
+		return buckets
+	}
+	byKey := map[string]*Bucket{}
+	for _, b := range buckets {
+		got := Bucket{At: b.At.UTC().Truncate(period), Model: b.Model, Effort: b.Effort}
+		into, ok := byKey[got.Key()]
+		if !ok {
+			into = &got
+			byKey[got.Key()] = into
+		}
+		into.Turns += b.Turns
+		into.Tokens.Add(b.Tokens)
+		into.Files.Add(b.Files)
+	}
+	return sorted(byKey)
+}
+
+// Age folds everything older than `before` to Coarse and leaves the rest alone.
+//
+// The shape every store and every wire wants: detail where somebody might ask for
+// it, and a fraction of the lines everywhere else.
+func Age(buckets []Bucket, before time.Time) []Bucket {
+	var old, recent []Bucket
+	for _, b := range buckets {
+		if b.At.Before(before) {
+			old = append(old, b)
+			continue
+		}
+		recent = append(recent, b)
+	}
+	if len(old) == 0 {
+		return buckets
+	}
+	return append(Coarsen(old, Coarse), recent...)
+}
+
+// Bucket is one Period of one session, on one model at one effort.
 //
 // Split by model and effort because that is the split every question about cost
 // eventually wants — what does opus at high effort actually cost — and because a
@@ -263,7 +335,7 @@ func Read(path, session string, from Cursor) (Reading, error) {
 			continue
 		}
 
-		key := Bucket{At: at.UTC().Truncate(time.Hour), Model: alias(e.Message.Model), Effort: e.Effort}
+		key := Bucket{At: at.UTC().Truncate(Period), Model: alias(e.Message.Model), Effort: e.Effort}
 		into, ok := byKey[key.Key()]
 		if !ok {
 			into = &Bucket{At: key.At, Model: key.Model, Effort: key.Effort}

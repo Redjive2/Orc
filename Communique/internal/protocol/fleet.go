@@ -267,6 +267,16 @@ type ActivityTokens struct {
 	WebCalls    int64 `json:"web_calls,omitempty"`
 }
 
+// Add folds another bucket's tokens in. Merging buckets is addition and nothing
+// else, which is what lets the same numbers be drawn at a minute or at a day.
+func (t *ActivityTokens) Add(from ActivityTokens) {
+	t.Input += from.Input
+	t.Output += from.Output
+	t.CacheCreate += from.CacheCreate
+	t.CacheRead += from.CacheRead
+	t.WebCalls += from.WebCalls
+}
+
 // ActivityFiles is what a bucket touched.
 type ActivityFiles struct {
 	Reads      int   `json:"reads,omitempty"`
@@ -280,6 +290,23 @@ type ActivityFiles struct {
 	// over-counts a file worked on in two hours, and a screen showing a window has
 	// to say so rather than print it as a fact.
 	Touched int `json:"touched,omitempty"`
+}
+
+// Add folds another bucket's file work in.
+//
+// Touched is summed with the others and is the one figure that goes wrong doing so —
+// a file worked on in two buckets counts twice. It is summed anyway because the
+// alternative is carrying the paths, which is the one thing a mirror must not hold;
+// every screen that shows it says what it is.
+func (f *ActivityFiles) Add(from ActivityFiles) {
+	f.Reads += from.Reads
+	f.Edits += from.Edits
+	f.Writes += from.Writes
+	f.ReadLines += from.ReadLines
+	f.Added += from.Added
+	f.Removed += from.Removed
+	f.WriteLines += from.WriteLines
+	f.Touched += from.Touched
 }
 
 // New is what the turns caused to be produced: everything but the cache reads.

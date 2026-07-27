@@ -145,13 +145,25 @@ test("only a running agent is offered a poke", () => {
 function withSeries(identities, extra = {}) {
   return {
     activityWindow: "48h",
-    activity: { machines: [{ machine: "sandy", identities }] },
+    activity: { period: "1h0m0s", machines: [{ machine: "sandy", identities }] },
     ...fleet(working),
     ...extra,
   };
 }
 
-const hour = (n) => new Date(Date.UTC(2026, 6, 26, n)).toISOString();
+// slots is one chart's columns — the first one drawn. Every chart shares an axis,
+// so counting across all three would be counting the same window three times.
+function slots(nodes) {
+  const rows = nodes.flatMap((n) => all(n, (x) => x.className === "chart-bars"));
+  return rows.length === 0 ? [] : all(rows[0], (x) => x.className && x.className.startsWith("bar"));
+}
+
+// Relative to now, and it has to be: the axis is the window ending at the newest
+// bucket, so a fixture pinned to a date in 2026 would fall outside every window the
+// moment the calendar moved past it. Ordering is preserved — hour(10) is still
+// before hour(11) — so the assertions below read the same as they did.
+const anchor = Math.floor(Date.now() / 3600000) * 3600000 - 20 * 3600000;
+const hour = (n) => new Date(anchor + (n - 10) * 3600000).toISOString();
 
 const busy = [
   { at: hour(10), turns: 3, tokens: { input: 10, output: 90, cache_create: 100, cache_read: 5000 },
@@ -168,6 +180,46 @@ test("the series is drawn as charts with their own peaks", () => {
   // Each chart says its own peak, because they are scaled separately and a reader
   // comparing two charts needs to know they are not on one scale.
   assert.match(got, /peak/);
+});
+
+// The gaps are half of what a chart says. Drawing only the buckets that exist put
+// two scattered hours side by side as two full bars — a picture of continuous work
+// assembled out of a quiet day.
+test("a chart draws the whole window, not only the buckets that exist", () => {
+  const bars = slots(view.activity(withSeries({ ember: busy }), null));
+  // Two days at an hour each, and two of them have anything in them.
+  assert.ok(bars.length > 40, `only ${bars.length} slots for a 48h window`);
+  assert.equal(bars.filter((b) => b.className === "bar").length, 2);
+  assert.ok(bars.some((b) => b.className === "bar empty"), "no empty slots were drawn");
+});
+
+// Height and colour carry the same number on purpose: a bar an eighth of the way up
+// a short chart is hard to judge against its neighbours, and green against red is
+// not. Blocks on the text grid had eight heights inside one line and read as flat.
+test("a bar has a real height and a colour that runs with it", () => {
+  const bars = slots(view.activity(withSeries({ ember: busy }), null))
+    .filter((b) => b.className === "bar")
+    .map((b) => b.attributes.get("style"));
+  assert.equal(bars.length, 2);
+  // The taller of the two is the peak, and the peak is at the red end.
+  const heights = bars.map((s) => Number(/height:([\d.]+)%/.exec(s)[1]));
+  assert.equal(Math.max(...heights), 100);
+  assert.ok(Math.min(...heights) < 100 && Math.min(...heights) >= 4,
+    `a non-peak bar was ${Math.min(...heights)}%`);
+  const hues = bars.map((s) => Number(/hsl\((\d+)/.exec(s)[1]));
+  assert.equal(Math.min(...hues), 0, "the peak is not at the red end");
+  assert.ok(Math.max(...hues) > 0, "a smaller bar is not further towards green");
+});
+
+// A period this build cannot read is not a reason to lay out a hundred thousand
+// elements, or none: the server picks it, and the two can disagree.
+test("a series with no period draws no chart rather than an infinite one", () => {
+  const state = withSeries({ ember: busy });
+  state.activity.period = "";
+  const got = view.activity(state, null);
+  assert.equal(slots(got).length, 0);
+  // And the rest of the tab survives it.
+  assert.match(text(got), /what it read and wrote/);
 });
 
 test("what was read and written is totalled per agent", () => {
@@ -201,6 +253,18 @@ test("a bucket with nothing to say about tokens does not take the tab down", () 
   assert.match(got, /new tokens/);
   assert.match(got, /1 read/);
   assert.match(got, /40 lines read/);
+});
+
+// The tab is opened to find something out far more often than to change something,
+// and the charts are the answer to the question that brings anybody here. The cycles
+// were on top because they were built first.
+test("the charts come before the controls that pace the fleet", () => {
+  const drawn = view.activity(withSeries({ ember: busy }),
+    { pace() {}, poke() {}, paceSync() {}, setActivityWindow() {} });
+  const found = drawn.flatMap((n) => all(n,
+    (x) => x.className === "chart-bars" || x.className === "controls"));
+  assert.ok(found.length >= 2, "expected both the charts and the pace controls");
+  assert.equal(found[0].className, "chart-bars", "the pace controls came first");
 });
 
 test("the window selector offers the windows the server takes", () => {

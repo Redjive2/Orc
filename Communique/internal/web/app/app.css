@@ -421,15 +421,37 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .feed-row.blocked span:nth-child(2) { color: var(--danger); }
 .why { margin: .1rem 0 .2rem 2ch; }
 
-/* The charts. Bars are one character each and the row is a line of text, so a
-   window of 48 hours is 48 columns and lines up with everything else on the grid.
-   Overflowing rather than wrapping: a chart that wrapped would put the same hour
-   in two places. */
-.chart { display: flex; gap: 0 2ch; align-items: baseline; margin: .1rem 0; }
-.chart-label { min-width: 12ch; }
-.chart-bars { white-space: pre; overflow-x: auto; color: var(--primary); letter-spacing: 0; }
-.chart-bars .muted { color: var(--frame); }
+/* The charts.
+
+   Bars used to be block characters on the text grid, one per column, which cost
+   nothing and read as almost nothing: eight heights on a line one character tall,
+   so a quiet stretch and a busy one differed by about two pixels. These are real
+   elements with real heights, which is the one thing a chart has to have.
+
+   Flexed so the columns divide the width rather than being sized: the number of
+   bars comes from the window, and a fixed bar width would either overflow at a
+   month or leave half the row empty at fifteen minutes. Bars stay legible down to
+   a hair, and `min-width` keeps a hundred of them from vanishing entirely.
+
+   Height is the one arbitrary number here. Tall enough that a bar an eighth of the
+   way up is visibly an eighth, short enough that three charts and the tables under
+   them fit on a phone without scrolling past the thing being compared. */
+.chart { margin: .5rem 0 .9rem; }
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 2ch; }
+.chart-label { color: var(--text); }
 .chart-peak { white-space: nowrap; }
+.chart-bars {
+  display: flex; align-items: flex-end; gap: 1px;
+  height: 5.5rem; margin: .25rem 0 .15rem;
+  border-bottom: 1px solid var(--frame);
+  overflow: hidden;
+}
+.chart-bars .bar { flex: 1 1 0; min-width: 1px; border-radius: 1px 1px 0 0; }
+/* An empty slot is drawn rather than skipped. The gaps are half of what a chart
+   says — four scattered minutes drawn side by side are a picture of continuous
+   work assembled out of a quiet afternoon. */
+.chart-bars .bar.empty { height: 2px; background: var(--frame); }
+.chart-axis { display: flex; justify-content: space-between; font-size: .85em; }
 
 .work { display: grid; gap: .1rem; margin: .3rem 0; }
 .work-row {
