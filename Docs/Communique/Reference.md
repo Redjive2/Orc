@@ -134,6 +134,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `POST fleet/roles/<n>/budget`          | `orc budget <role> <load>`               |
 | `DELETE fleet/roles/<n>`               | `orc remove role --yes`                  |
 | `POST fleet/pace`                      | `orc pace <cycle> [<who>] [flags]`       |
+| `POST fleet/tariff`                    | `orc tariff <setting> <n> --yes`         |
 | `GET/POST sync/pace`                   | how often each machine syncs — the server's own |
 | `GET activity?since=<dur>`             | the series: what each agent cost and touched |
 | `PATCH fleet/permissions/<n>`          | `orc edit permission <name> --floor …`   |

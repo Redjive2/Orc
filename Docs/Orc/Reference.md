@@ -18,6 +18,9 @@ Orc exposes the following commands:
 | `grant permission <identity> <permission>`  | Temporarily grant the permission to the identity                           |
 | `revoke permission <identity> <permission>`†| End a grant early                                                          |
 | `status [<identity>]`                       | See the current status and info on the given identity, or on the whole fleet |
+| `activity [<identity>] [--since <dur>]`†     | What each agent is doing, and what it has cost and touched                 |
+| `pace [wake\|tend] [<who>] [--after\|--every\|--watch]`† | How often the fleet is woken and tended, per agent, role, or fleet |
+| `tariff [<setting> <n>] [--calibrate] [--clear]`† | What thinking costs: the model and effort weights, and the crowd multiplier |
 | `list identities\|roles\|permissions\|grants`†| The flat rosters: one line per thing, filtered to your own branch          |
 | `budget`†                                   | What each identity may keep employed, and what it is spending              |
 | `budget <role> <load>`†                     | Set the load a role may keep on the work list                              |
@@ -522,6 +525,98 @@ said nothing — which is exactly what the wake cycle looks for.
 `tend` is unchanged: it resumes a conversation that was already going, and speaks
 only to a session whose predecessor stopped part-way through a turn. There is
 nothing to begin.
+
+### What it has done
+
+`orc activity` reports the window rather than the moment: turns, tokens, and the
+files and lines an agent read and wrote. It reads before it reports, so the figures
+are current rather than as stale as the last thing that ran `tend`.
+
+**Two sources, two guarantees.** Files are counted from Orc's own event feed, which
+has a line per tool call whatever Claude's file format does next. Lines come from
+Claude's transcript, which Orc reads the way `internal/view` reads it: unknown
+fields ignored, everything degrades, nothing fails. So a file count is always right
+and a line count is missing where the transcript could not be read.
+
+**Tokens are four numbers, not one.** On a real session, 3,614 input against
+892,563,160 cache reads. `new` — input + output + cache writes — is what the turns
+caused to be produced; `cached` is what was read back. A single column called
+`tokens` would only ever be showing the second.
+
+Reading is incremental. A cursor records where the last pass stopped, so a session
+that is megabytes costs one read rather than one per command, and a transcript that
+has shrunk is a rotation: the reader starts again and says so, because an hour
+counted twice is visible and an hour lost is not. Totals live in
+`identities/<name>/activity.jsonl`, one line per read, folded by the hour they fall
+in; each line is a delta, so a bucket's total only ever grows.
+
+`tend` advances the rollup on every pass, which is what makes the measurement
+continuous without a daemon.
+
+### What thinking costs
+
+A session costs `model × effort`, and a set of *n* costs
+⌈sum × (crowd-base + n) / crowd-scale⌉ — so the tenth agent costs more than the
+first and a fleet is charged for being a fleet. Those weights are a judgement about
+money: opus costing three haikus is a claim no code can settle, and two fleets can
+disagree without either being wrong.
+
+They were constants. `orc tariff` stores them, journaled like a permission, so "what
+did it used to be, and who changed it" has an answer. A fleet that has never set one
+has no record at all and pays the built-in prices; the absence is the answer, and
+there is no migration.
+
+Every budget is derived, so a change is felt by everything at once: raising `opus`
+re-prices every running opus session, and an actor inside its budget can be over it
+without anybody touching that actor. `orc tariff` names who that would be and asks
+for `--yes` when the list is not empty. It refuses nothing — a fleet over its own
+budget is information, and a tariff that could only be loosened while agents ran
+would be one nobody could tighten.
+
+Everything that computes a load is handed the tariff rather than reading one. That
+is wider than a global would have been and is the reason for it: a load computed
+against whichever price list happened to be loaded is a load nobody can reproduce,
+and two processes disagreeing about what a session costs is how a budget stops
+meaning anything.
+
+`--calibrate` proposes weights from what the fleet actually spent over the last
+week, counting **new tokens** only — a tariff that counted cache reads would be
+pricing context rather than work. It proposes and never applies: the numbers are one
+fleet over one window, and deciding from them is the judgement this exists to leave
+to a person. A combination with no observations proposes nothing rather than a
+number from none.
+
+### How often, and where that is kept
+
+`orc wake --after`, `orc wake --every` and `orc tend --watch` are flags, read once
+when a process starts — so nothing but whoever started that process could change
+them, and a browser could not offer them at all. `orc pace` stores them instead.
+
+The layering is the wake message's: **the identity's, else its role's, else the
+fleet's, else the built-in.** `orc pace` with no arguments shows what every agent
+will actually do and marks where each value came from.
+
+Every cycle re-reads at the top of a pass, so a change lands on the next one with
+nothing to restart and no signal to send. Two rules about flags, and they differ on
+purpose:
+
+- **`--after` typed on the line wins for that run.** Somebody debugging with
+  `--after 1m` is deciding about the run in front of them, and a stored value
+  overriding it would be the tool arguing with the operator.
+- **A stored interval wins over the flag a loop was started with.** A cycle running
+  since Tuesday, in a shell nobody has open, is exactly what a stored setting has to
+  be able to reach; there is no other way to tell it. The loop says when its pace
+  changes rather than changing it in silence.
+
+`--off` is a state and not a zero: an agent nobody is waking must look different
+from one being woken and not answering. `--on` turns back on what a layer above
+turned off — which is why the switch is a word rather than a boolean, since "not
+set" and "set to on" are different things. Anything but a plain `yes` leaves a cycle
+running: a fleet that quietly stopped because a file said `off ` with a trailing
+space is a fleet nobody is watching.
+
+Sync is not here. `cq sync --watch` belongs to the mirror between two machines, and
+its setting lives in cq.
 
 ### Reaching a session that is not ready
 
