@@ -47,6 +47,8 @@ func OrcVerbs() []OrcVerb {
 		{"poke", "say something to a running agent"},
 		{"refresh", "rewrite a session's settings from the fleet"},
 		{"wake", "nudge sessions that have gone quiet"},
+		{"pace", "set how often the fleet is woken and tended"},
+		{"tariff", "change what thinking costs, for every budget at once"},
 		{"model", "change what an identity runs on"},
 		{"workspace", "change where an identity works"},
 		{"instruct", "write the standing instructions agents run under"},

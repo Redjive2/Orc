@@ -63,19 +63,9 @@ func (m Model) String() string {
 	}
 }
 
-// Weight is the model's contribution to a session's load.
-func (m Model) Weight() int {
-	switch m {
-	case ModelHaiku:
-		return 1
-	case ModelSonnet:
-		return 2
-	case ModelOpus:
-		return 3
-	default:
-		return 0
-	}
-}
+// Weight is the model's contribution at the built-in prices. A fleet with its own
+// tariff asks that instead — see Tariff.Weight.
+func (m Model) Weight() int { return DefaultTariff().Weight(m) }
 
 // Valid reports whether the model is one this build knows.
 func (m Model) Valid() bool { return m >= ModelHaiku && m <= ModelOpus }
@@ -142,25 +132,10 @@ func (e Effort) Short() string {
 	return e.String()
 }
 
-// Weight is the effort's contribution to a session's load. Max is 6 rather than 5
-// because the step from xhigh to max is the largest one in practice, and a budget
-// should feel it.
-func (e Effort) Weight() int {
-	switch e {
-	case EffortLow:
-		return 1
-	case EffortMedium:
-		return 2
-	case EffortHigh:
-		return 3
-	case EffortXHigh:
-		return 4
-	case EffortMax:
-		return 6
-	default:
-		return 0
-	}
-}
+// Weight is the effort's contribution at the built-in prices. Max is 6 rather than
+// 5 because the step from xhigh to max is the largest one in practice, and a budget
+// should feel it — a fleet that disagrees says so in its tariff.
+func (e Effort) Weight() int { return DefaultTariff().Effort(e) }
 
 // Valid reports whether the effort is one this build knows.
 func (e Effort) Valid() bool { return e >= EffortLow && e <= EffortMax }
@@ -189,26 +164,21 @@ func ParseEffort(raw string) (Effort, error) {
 	}
 }
 
-// SessionLoad is what one session costs.
-func SessionLoad(m Model, e Effort) int { return m.Weight() * e.Weight() }
+// SessionLoad is what one session costs at the built-in prices.
+//
+// Kept for the callers that genuinely have no fleet to ask — a session state read
+// off disk with nothing else loaded — and *not* the way a budget is computed. A
+// fleet with its own tariff answers through authz, which carries one; see
+// Tariff.Session.
+func SessionLoad(m Model, e Effort) int { return DefaultTariff().Session(m, e) }
 
 // TotalLoad is what a set of sessions costs together, with the count multiplier.
 //
 // The ceiling is by construction rather than by rounding a float: `(sum × (9 + n)
 // + 9) / 10` in integer division is exactly ⌈sum × (9 + n) / 10⌉ for the
 // non-negative values this can be given.
-func TotalLoad(loads []int) int {
-	sum := 0
-	for _, l := range loads {
-		if l > 0 {
-			sum += l
-		}
-	}
-	if sum == 0 {
-		return 0
-	}
-	return (sum*(9+len(loads)) + 9) / 10
-}
+// TotalLoad is Tariff.Total at the built-in prices, for the same callers.
+func TotalLoad(loads []int) int { return DefaultTariff().Total(loads) }
 
 // Multiplier renders the count multiplier a total was computed with, for the line
 // `orc employ` prints when a decision costs more than the agent being employed.
@@ -216,10 +186,4 @@ func TotalLoad(loads []int) int {
 // It is text rather than a number because it is only ever shown: a caller doing
 // arithmetic should call TotalLoad, and a second float in the codebase would be a
 // second thing that could round differently.
-func Multiplier(count int) string {
-	if count <= 0 {
-		return "1.0"
-	}
-	whole, tenths := (9+count)/10, (9+count)%10
-	return fmt.Sprintf("%d.%d", whole, tenths)
-}
+func Multiplier(count int) string { return DefaultTariff().Multiplier(count) }

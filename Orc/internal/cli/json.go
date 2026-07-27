@@ -2,10 +2,12 @@ package cli
 
 import (
 	"encoding/json"
+	"time"
 
 	"orc/common/clock"
 	"orc/common/fault"
 	"orc/common/user"
+	"orc/orc/internal/activity"
 	"orc/orc/internal/authz"
 	"orc/orc/internal/model"
 	"orc/orc/internal/store"
@@ -75,6 +77,68 @@ type jsonIdentity struct {
 	InstructError string `json:"instruct_error,omitempty"`
 	Started       string `json:"started,omitempty"`
 	LastExit      string `json:"last_exit,omitempty"`
+
+	// What it is doing, as one word, with the turn it is on and the last few
+	// things it did. Derived here rather than left to a reader: "employed and not
+	// running" is three situations wearing one label, and a screen inferring them
+	// from two booleans gets it half right. See cli/activity.go.
+	Activity string    `json:"activity"`
+	Turn     int       `json:"turn,omitempty"`
+	Since    string    `json:"since,omitempty"`
+	Why      string    `json:"why,omitempty"`
+	Doing    []jsonRow `json:"doing,omitempty"`
+	FeedRead bool      `json:"feed_read,omitempty"`
+
+	// What it has cost and touched, by the hour. Bounded — see SyncWindow.
+	Buckets []jsonBucket `json:"buckets,omitempty"`
+	// How often this one is woken and tended, resolved through its layers, with
+	// where each value came from. A browser showing "20m" over a value somebody
+	// did not set on this agent would send them looking in the wrong place.
+	Pace jsonPace `json:"pace,omitzero"`
+}
+
+// jsonPace is one identity's resolved cycles.
+type jsonPace struct {
+	WakeAfter string `json:"wake_after,omitempty"`
+	WakeEvery string `json:"wake_every,omitempty"`
+	TendWatch string `json:"tend_watch,omitempty"`
+	WakeOff   bool   `json:"wake_off,omitempty"`
+	TendOff   bool   `json:"tend_off,omitempty"`
+	// From says which layer set each value: `system`, `role`, or `identity`.
+	// Absent where nothing set it and the built-in stands.
+	From map[string]string `json:"from,omitempty"`
+}
+
+// jsonBucket is one hour of one identity's work, on one model at one effort.
+//
+// A delta-folded total: the rollup on disk holds one line per read and this is the
+// sum, so the number only ever grows. That is what makes it safe for a mirror to
+// receive the same bucket twice — it writes the same value — and what lets a
+// machine that missed a sync catch up whole rather than in order.
+type jsonBucket struct {
+	At     string          `json:"at"`
+	Model  string          `json:"model,omitempty"`
+	Effort string          `json:"effort,omitempty"`
+	Turns  int             `json:"turns,omitempty"`
+	Tokens activity.Tokens `json:"tokens,omitzero"`
+	Files  activity.Files  `json:"files,omitzero"`
+}
+
+// jsonRow is one line of a session's event feed, as a screen shows it.
+//
+// The path and never the content, as everywhere else that touches this feed: a
+// mirror carrying the text of every edit would be a second copy of the repository
+// on a machine that has no business holding one.
+type jsonRow struct {
+	At     string `json:"at"`
+	Turn   int    `json:"turn,omitempty"`
+	Kind   string `json:"kind"`
+	Tool   string `json:"tool,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// Blocked and Reason are set on refusals only, which are the rows anybody
+	// reading this at a glance is looking for.
+	Blocked bool   `json:"blocked,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 type jsonRole struct {
@@ -141,6 +205,17 @@ type jsonToolkitEntry struct {
 }
 
 type jsonFleet struct {
+	// Pace is the fleet's own layer, which is what a browser edits when it is
+	// setting a default rather than an exception.
+	Pace jsonPace `json:"pace,omitzero"`
+	// Tariff is what this fleet charges, and what measurement suggests instead.
+	//
+	// The suggestion travels rather than being worked out in the browser from the
+	// same buckets: a second implementation of the normalisation would be a second
+	// opinion about what a fleet should charge, and the two would drift the first
+	// time either rounded differently.
+	Tariff []jsonTariff `json:"tariff,omitempty"`
+
 	Root        string             `json:"root"`
 	Operator    string             `json:"operator"`
 	Identities  []jsonIdentity     `json:"identities"`
@@ -183,6 +258,8 @@ func (a App) emitIdentityJSON(s caller, who user.Name) error {
 
 func (a App) emitFleetJSON(s caller) error {
 	out := jsonFleet{
+		Pace:       paceJSON(s.store.FleetPacing()),
+		Tariff:     tariffJSON(s),
 		Root:       s.store.Root(),
 		Operator:   s.fleet.Operator().String(),
 		Vocabulary: vocabulary(),
@@ -272,7 +349,7 @@ func (s caller) identityJSON(who user.Name) (jsonIdentity, error) {
 		Budget:       budget,
 		HasBudget:    hasBudget,
 		Employed:     i.Employed(),
-		Load:         i.Load(),
+		Load:         s.fleet.LoadOf(who),
 	}
 	if i.Model().Valid() {
 		out.Model = i.Model().String()
@@ -292,6 +369,48 @@ func (s caller) identityJSON(who user.Name) (jsonIdentity, error) {
 		out.InstructError = state.InstructError
 		out.Started = state.Started
 		out.LastExit = state.LastExit
+	}
+
+	// The rollup, bounded to what a sync should carry.
+	//
+	// Not everything: a fleet of twenty with a year of history would put megabytes
+	// through every sync, for a series the far end has already got. What travels is
+	// a window wide enough to cover an ordinary outage, and the mirror keeps the
+	// long history at its end.
+	if buckets, err := s.store.Activity(who, s.store.Now().Add(-SyncWindow)); err == nil {
+		if over := len(buckets) - MaxSyncBuckets; over > 0 {
+			// Newest kept: an old bucket the far end is missing is a hole in a
+			// chart, and a recent one it is missing is the chart being wrong now.
+			buckets = buckets[over:]
+		}
+		for _, b := range buckets {
+			out.Buckets = append(out.Buckets, jsonBucket{
+				At: clock.Format(b.At), Model: b.Model, Effort: b.Effort,
+				Turns: b.Turns, Tokens: b.Tokens, Files: b.Files,
+			})
+		}
+	}
+
+	out.Pace = paceJSON(s.store.Pacing(who, i.Role()))
+
+	doing := s.doing(who)
+	out.Activity = string(doing.State)
+	out.Turn = doing.Turn
+	out.Why = doing.Why
+	out.FeedRead = doing.Feed
+	if !doing.Since.IsZero() {
+		out.Since = clock.Format(doing.Since)
+	}
+	for _, row := range doing.Rows {
+		out.Doing = append(out.Doing, jsonRow{
+			At:      clock.Format(row.At),
+			Turn:    row.Turn,
+			Kind:    row.Kind.String(),
+			Tool:    row.Tool,
+			Detail:  row.Detail,
+			Blocked: row.Blocked(),
+			Reason:  row.Reason,
+		})
 	}
 
 	for _, c := range s.fleet.Clauses(who) {
@@ -334,4 +453,79 @@ func (s caller) grantJSON(who user.Name, g model.Grant) jsonGrant {
 		shape.Until = clock.Format(g.Until())
 	}
 	return shape
+}
+
+// What a sync carries of the rollup.
+//
+// The trade is between a mirror that can fill a gap and a body that fits on a phone.
+// Two days covers a machine that slept overnight or a sync that could not reach the
+// server for an afternoon, which is the ordinary outage; a longer one loses the
+// older buckets from the *mirror's* series and never from Orc's own, so
+// `orc activity` on the agent machine still has them and a rebuilt mirror is a
+// question about history rather than a loss of it.
+const (
+	// SyncWindow is how far back a snapshot reaches.
+	SyncWindow = 48 * time.Hour
+	// MaxSyncBuckets bounds it whatever the window says. An identity that changed
+	// model and effort every hour would otherwise multiply the count by the number
+	// of combinations it used.
+	MaxSyncBuckets = 240
+)
+
+// jsonTariff is one thing a tariff prices.
+type jsonTariff struct {
+	Setting string `json:"setting"`
+	Weight  int    `json:"weight"`
+	// Suggested and Measured are absent where nothing was observed, which is not
+	// the same as a suggestion of zero: a combination nobody ran proposes nothing.
+	Suggested int     `json:"suggested,omitempty"`
+	Measured  float64 `json:"measured,omitempty"`
+	Turns     int     `json:"turns,omitempty"`
+}
+
+// paceJSON renders resolved pacing, with provenance for the values a layer set.
+func paceJSON(got store.Pacing) jsonPace {
+	out := jsonPace{
+		WakeAfter: got.WakeAfter.Value,
+		WakeEvery: got.WakeEvery.Value,
+		TendWatch: got.TendWatch.Value,
+		WakeOff:   got.WakeOff.Off(),
+		TendOff:   got.TendOff.Off(),
+		From:      map[string]string{},
+	}
+	for name, setting := range map[string]store.Setting{
+		"wake_after": got.WakeAfter,
+		"wake_every": got.WakeEvery,
+		"tend_watch": got.TendWatch,
+		"wake_off":   got.WakeOff,
+		"tend_off":   got.TendOff,
+	} {
+		if setting.Set() {
+			out.From[name] = string(setting.From)
+		}
+	}
+	if len(out.From) == 0 {
+		out.From = nil
+	}
+	return out
+}
+
+// tariffJSON renders the price list, with what measurement suggests beside it.
+func tariffJSON(s caller) []jsonTariff {
+	got := s.store.Tariff()
+	proposals := s.proposals()
+
+	out := make([]jsonTariff, 0, len(model.Settings()))
+	for _, setting := range model.Settings() {
+		weight, ok := got.Value(setting)
+		if !ok {
+			continue
+		}
+		row := jsonTariff{Setting: string(setting), Weight: weight}
+		if p, seen := proposals[setting]; seen {
+			row.Suggested, row.Measured, row.Turns = p.Suggested, p.Measured, p.Turns
+		}
+		out = append(out, row)
+	}
+	return out
 }

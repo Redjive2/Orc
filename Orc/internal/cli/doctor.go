@@ -613,8 +613,6 @@ func holes() []check {
 
 // --- what keeps the fleet moving ------------------------------------------
 
-
-
 // wakeCycle reports whether anything is poking silent agents.
 //
 // It is a guard rather than a remark, and it counts, because its absence is the
@@ -731,4 +729,3 @@ func adviseOn(lines []check, watching bool) []check {
 	}
 	return out
 }
-

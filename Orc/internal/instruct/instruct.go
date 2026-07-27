@@ -38,7 +38,8 @@ const (
 	Role Kind = "role"
 	// Identity is what one agent in particular is for.
 	Identity Kind = "identity"
-	// Wake is what to say to an agent that has gone quiet.
+	// Wake is what to say to an agent that has nothing to do: one that has gone
+	// quiet, and one that has just been started and has never been spoken to.
 	Wake Kind = "wake"
 )
 

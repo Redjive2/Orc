@@ -100,6 +100,7 @@ type Fleet struct {
 	sessions    map[string]string
 	now         time.Time
 
+	tariff   model.Tariff
 	operator user.Name
 	order    []string // every identity, breadth-first from the operator
 	children map[string][]string
@@ -119,6 +120,14 @@ type Snapshot struct {
 	Permissions []model.Permission
 	Sessions    map[string]string
 	Now         time.Time
+	// Tariff is what this fleet charges for thinking. The zero value is the
+	// built-in price list, which is what a fleet that has never set one pays.
+	//
+	// It travels in the snapshot rather than being read here for the reason
+	// nothing else in this package reads anything: the derivation is pure, and a
+	// budget computed against whichever tariff happened to be on disk at the
+	// moment of the call is one nobody can reproduce.
+	Tariff model.Tariff
 }
 
 // New derives the fleet.
@@ -142,6 +151,7 @@ func New(snap Snapshot) (Fleet, error) {
 		now:         clock.Normalise(snap.Now),
 		children:    make(map[string][]string, len(snap.Identities)),
 		derived:     make(map[string]derived, len(snap.Identities)),
+		tariff:      snap.Tariff.WithDefaults(),
 	}
 	if f.now.IsZero() {
 		return Fleet{}, fault.Internal{Where: "authz.New", Detail: "no instant given"}
@@ -692,7 +702,7 @@ func (f Fleet) Load(actor user.Name) (total int, loads []int) {
 	for _, name := range f.Employed(actor) {
 		loads = append(loads, f.identities[name.String()].Load())
 	}
-	return model.TotalLoad(loads), loads
+	return f.tariff.Total(loads), loads
 }
 
 // Afford reports what employing one more session would cost an actor, and whether
@@ -709,7 +719,7 @@ func (f Fleet) Load(actor user.Name) (total int, loads []int) {
 // refusal somebody can act on, and a bare "over budget" is not.
 func (f Fleet) Afford(actor user.Name, load int) (before, after, budget int, ok bool) {
 	before, loads := f.Load(actor)
-	after = model.TotalLoad(append(append([]int{}, loads...), load))
+	after = f.tariff.Total(append(append([]int{}, loads...), load))
 
 	budget, held := f.Budget(actor)
 	if !held {
@@ -720,7 +730,32 @@ func (f Fleet) Afford(actor user.Name, load int) (before, after, budget int, ok 
 
 // Multiplier renders the count multiplier for a set of the given size, so a caller
 // explaining a refusal does not compute it a second way.
-func Multiplier(count int) string { return model.Multiplier(count) }
+//
+// A method rather than a function, now that the multiplier is the fleet's: a
+// package-level one would render a number this fleet does not charge.
+func (f Fleet) Multiplier(count int) string { return f.tariff.Multiplier(count) }
+
+// Tariff is what this fleet charges, filled in with the built-in prices wherever it
+// said nothing.
+func (f Fleet) Tariff() model.Tariff { return f.tariff }
+
+// Price is what one session costs this fleet.
+//
+// Every screen that shows a load must come through here rather than through
+// `model.Identity.Load()`, which prices at the *built-in* rate: an identity does not
+// know what fleet it is in, and a column showing 4 for a session this fleet charges
+// 20 for would be the tariff appearing to do nothing.
+func (f Fleet) Price(m model.Model, e model.Effort) int { return f.tariff.Session(m, e) }
+
+// LoadOf is what one identity's session costs this fleet, or zero when it is not
+// employed.
+func (f Fleet) LoadOf(name user.Name) int {
+	got, ok := f.identities[name.String()]
+	if !ok || !got.Employed() {
+		return 0
+	}
+	return f.Price(got.Model(), got.Effort())
+}
 
 // Holds reports whether an identity holds every clause of a permission.
 //

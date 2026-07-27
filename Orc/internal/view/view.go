@@ -59,6 +59,24 @@ const (
 	Lifecycle
 )
 
+// String names the kind as anything outside this package refers to it — a JSON
+// mirror, a browser, a test. The pane draws glyphs rather than these words; the
+// words exist so that a reader somewhere else does not have to learn the glyphs.
+func (k Kind) String() string {
+	switch k {
+	case Prompt:
+		return "prompt"
+	case Action:
+		return "action"
+	case Waiting:
+		return "waiting"
+	case Lifecycle:
+		return "lifecycle"
+	default:
+		return "unknown"
+	}
+}
+
 // Row is one line of the feed as the pane shows it.
 type Row struct {
 	// At is when it happened. The zero time means the event carried none, which

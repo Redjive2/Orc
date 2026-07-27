@@ -11,7 +11,6 @@ import (
 	"orc/common/fault"
 	"orc/common/user"
 	"orc/common/watch"
-	"orc/orc/internal/authz"
 	"orc/orc/internal/model"
 	"orc/orc/internal/session"
 )
@@ -84,7 +83,7 @@ func (a App) employ(args []string) error {
 			return err
 		}
 	}
-	load := model.SessionLoad(m, e)
+	load := s.fleet.Price(m, e)
 
 	if target.Employed() {
 		// Already on the worklist. Re-employing at a different load is a change; at
@@ -167,7 +166,7 @@ func (s caller) affordable(who user.Name, target model.Identity, load int) error
 	detail := fmt.Sprintf("load %d → %d of %d", before, after, budget)
 	if load < after-before {
 		detail += fmt.Sprintf(": the count multiplier rose from %s to %s",
-			authz.Multiplier(len(loads)), authz.Multiplier(len(loads)+1))
+			s.fleet.Multiplier(len(loads)), s.fleet.Multiplier(len(loads)+1))
 	}
 	return fault.Denied{Actor: s.who.String(), Action: "employ", Target: who.String(), Reason: detail}
 }
@@ -348,7 +347,25 @@ func (a App) tendLoop(interval time.Duration) error {
 
 	failures := 0
 	var last error
+	quiet := false
 	for {
+		// Paused, and quiet about it after the first time. The loop keeps looping
+		// rather than exiting: somebody who turns tending back on should not also
+		// have to remember which terminal they turned it off in.
+		if a.tendPaused() {
+			if !quiet {
+				a.note("tending is off (`orc pace tend --on` starts it again); still watching")
+				quiet = true
+			}
+			select {
+			case <-stop:
+				return a.say("\n" + a.out.Muted("stopped"))
+			case <-ticker.C:
+			}
+			continue
+		}
+		quiet = false
+
 		if err := a.tendOnce(false); err != nil {
 			failures++
 			last = err
@@ -367,6 +384,15 @@ func (a App) tendLoop(interval time.Duration) error {
 		// Between passes, never during one: reconciling a fleet is the last thing
 		// that should be interrupted by the process image changing underneath it.
 		dog.renew()
+
+		// And the interval is re-read here, for the reason `orc wake --every`
+		// re-reads its own: a backstop started days ago from a shell nobody has
+		// open is exactly what a stored setting has to be able to reach.
+		if next := a.tendInterval(interval); next != interval {
+			a.note("tending every %s from now on", round(next))
+			interval = next
+			ticker.Reset(interval)
+		}
 
 		select {
 		case <-stop:
@@ -414,6 +440,12 @@ func (a App) reconcile(s caller, names []user.Name, verbose, opening bool) (acte
 		if err != nil {
 			return acted, err
 		}
+		// Bring the measurement up to date while we are here. `tend` runs under
+		// almost every command, which is what makes this continuous without a
+		// daemon, and a transcript that has not grown costs a stat. It reports
+		// nothing and fails nothing: a rollup is a measurement, and a fleet must
+		// never go untended because a number could not be written.
+		s.advanceActivity(name)
 		_, live, err := s.store.Session(name)
 		if err != nil {
 			// A session file that will not parse is damage `orc verify` reports; it
@@ -823,4 +855,30 @@ func quoteShort(s string) string {
 		s = s[:max] + "…"
 	}
 	return `"` + s + `"`
+}
+
+// tendInterval is how often the backstop reconciles, from the fleet's stored pace.
+//
+// A store that cannot be read leaves the interval alone: a fleet that stopped being
+// tended because a settings file was briefly unreadable would be a worse failure
+// than one tending at yesterday's pace.
+func (a App) tendInterval(given time.Duration) time.Duration {
+	s, err := a.begin()
+	if err != nil {
+		return given
+	}
+	return s.store.FleetPacing().TendWatch.Duration(given)
+}
+
+// tendPaused reports whether the fleet has turned its backstop off.
+//
+// A store that cannot be read is *not* paused: a fleet that stopped being tended
+// because a settings file was briefly unreadable would be the worst possible
+// response to a half-written file.
+func (a App) tendPaused() bool {
+	s, err := a.begin()
+	if err != nil {
+		return false
+	}
+	return s.store.FleetPacing().TendOff.Off()
 }

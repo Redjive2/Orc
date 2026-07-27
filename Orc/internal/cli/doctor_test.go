@@ -2,9 +2,9 @@ package cli_test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -559,7 +559,6 @@ func TestDoctorSaysWhenNothingIsStopped(t *testing.T) {
 	}
 }
 
-
 // guardCount reads the summary line's number, or 0 when every guard is holding.
 func guardCount(t *testing.T, out string) int {
 	t.Helper()
@@ -575,7 +574,6 @@ func guardCount(t *testing.T, out string) int {
 	}
 	return 0
 }
-
 
 // A fleet with nothing running does not need a cycle, and saying it does would make
 // `orc doctor` fail on every fleet from the moment it is made — which is how a check

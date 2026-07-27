@@ -103,7 +103,7 @@ func (a App) drawFleet(s caller) error {
 		// employed is what it tidies away.
 		loadCell := render.Text(render.GlyphNone)
 		if i.Employed() {
-			loadCell = render.Painted(fmt.Sprintf("%d", i.Load()),
+			loadCell = render.Painted(fmt.Sprintf("%d", s.fleet.LoadOf(name)),
 				func(p style.Palette, text string) string { return p.Authority(text) })
 		}
 
@@ -412,7 +412,7 @@ func (a App) sessionSection(s caller, who user.Name, i model.Identity) render.Se
 		if i.Employed() {
 			out.Fields = append(out.Fields, render.Field{
 				Label: "worklist", Value: i.Model().String() + "/" + i.Effort().Short(),
-				Note:  fmt.Sprintf("employed at load %d, not running", i.Load()),
+				Note:  fmt.Sprintf("employed at load %d, not running", s.fleet.LoadOf(who)),
 				Paint: func(p style.Palette, t string) string { return p.Dead(t) },
 			})
 		}
@@ -428,7 +428,7 @@ func (a App) sessionSection(s caller, who user.Name, i model.Identity) render.Se
 		render.Field{Label: "id", Value: state.ID,
 			Paint: func(p style.Palette, t string) string { return p.Live(t) }},
 		render.Field{Label: "running", Value: state.Model + "/" + state.Effort,
-			Note:  fmt.Sprintf("load %d", i.Load()),
+			Note:  fmt.Sprintf("load %d", s.fleet.LoadOf(who)),
 			Paint: func(p style.Palette, t string) string { return p.Value(t) }},
 	)
 	if started, err := state.StartedAt(); err == nil {
@@ -572,7 +572,9 @@ func (s caller) field(name string) (string, error) {
 		}
 		return i.Effort().String(), nil
 	case "load":
-		return fmt.Sprintf("%d", i.Load()), nil
+		// The fleet's price, not the built-in one: `orc introspect --only load` is
+		// read into a shell variable and compared against a budget this fleet set.
+		return fmt.Sprintf("%d", s.fleet.LoadOf(s.who)), nil
 
 	// The session id, or nothing when there is no session. Nothing is the right
 	// answer here rather than an error: "am I populated?" is a question with a
@@ -703,7 +705,6 @@ func plural2(n int, one, many string) string {
 	}
 	return many
 }
-
 
 // limitOf reports whether a session is sitting at a usage limit.
 //

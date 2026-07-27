@@ -112,8 +112,8 @@ func (a App) wake(args []string) error {
 		names = append(names, who)
 	}
 
-	cycle := &waker{app: a, quiet: quiet, message: text, dry: dry, tend: tend,
-		names: names, woken: map[string]string{}}
+	cycle := &waker{app: a, quiet: quiet, quietFlag: strings.TrimSpace(quietFor) != "",
+		message: text, dry: dry, tend: tend, names: names, woken: map[string]string{}}
 
 	if strings.TrimSpace(every) == "" {
 		return cycle.once(true)
@@ -140,12 +140,18 @@ func (a App) wake(args []string) error {
 // is a fact about this cycle's last pass, and a cycle that restarts should look at a
 // quiet fleet with fresh eyes.
 type waker struct {
-	app     App
-	quiet   time.Duration
-	message string
-	dry     bool
-	tend    bool
-	names   []user.Name
+	app App
+	// quiet is the threshold this pass will use, and quietFlag records that it was
+	// given on the command line. A flag wins over what is stored for the process it
+	// was given to: somebody debugging with `--after 1m` is deciding about this
+	// run, and a stored value quietly overriding it would be the tool arguing with
+	// the operator.
+	quiet     time.Duration
+	quietFlag bool
+	message   string
+	dry       bool
+	tend      bool
+	names     []user.Name
 
 	// woken maps an identity to the last event it had when it was poked. A session
 	// that has said nothing since is stuck, not silent, and is reported rather than
@@ -168,7 +174,7 @@ func (w *waker) once(verbose bool) error {
 		targets = s.fleet.Employed(s.who)
 	}
 
-	woke, stuck, quiet, dead, waiting := 0, 0, 0, 0, 0
+	woke, stuck, quiet, dead, waiting, paused := 0, 0, 0, 0, 0, 0
 	for _, who := range targets {
 		// A sweep skips what it may not direct rather than failing on it: the
 		// caller asked about their fleet, and somebody else's agent being in it is
@@ -177,6 +183,14 @@ func (w *waker) once(verbose bool) error {
 			if len(w.names) > 0 {
 				return err
 			}
+			continue
+		}
+
+		if w.paused(s, who) {
+			// Not woken, and not counted as quiet either: an agent nobody is
+			// waking is a decision somebody made, and a summary that folded it in
+			// with the working ones would hide the decision.
+			paused++
 			continue
 		}
 
@@ -317,7 +331,7 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 			"quiet cannot be said; check the clock", who, round(-quiet))
 		return working, nil
 	}
-	if quiet < w.quiet {
+	if quiet < w.after(s, who) {
 		return working, nil
 	}
 
@@ -563,6 +577,15 @@ func (w *waker) loop(interval time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	// The interval is re-read between passes, and here the *stored* value wins over
+	// the flag — which is the opposite of `--after`, deliberately.
+	//
+	// The two flags are about different things. `--after` is this pass's judgement
+	// about what counts as silence, and somebody who typed it is deciding about the
+	// run in front of them. `--every` is how long this process sleeps, and a cycle
+	// started days ago from a shell nobody has open is exactly what a stored setting
+	// has to be able to reach: there is no other way to tell it. So a change lands
+	// on the next pass, and the loop says so rather than changing pace in silence.
 	failures := 0
 	for {
 		if err := w.once(false); err != nil {
@@ -581,6 +604,12 @@ func (w *waker) loop(interval time.Duration) error {
 		// run by an old build.
 		dog.renew()
 
+		if next := w.interval(interval); next != interval {
+			w.app.note("the cycle is now every %s", round(next))
+			interval = next
+			ticker.Reset(interval)
+		}
+
 		select {
 		case <-stop:
 			return w.app.say("\n" + w.app.out.Muted("stopped"))
@@ -593,10 +622,56 @@ func (w *waker) loop(interval time.Duration) error {
 func round(d time.Duration) string {
 	switch {
 	case d >= time.Hour:
-		return d.Round(time.Minute).String()
+		// Trailing zero units dropped: Go renders a day as "24h0m0s", which is
+		// three facts where one was asked for. An hour and a half stays "1h30m".
+		got := d.Round(time.Minute).String()
+		got = strings.TrimSuffix(got, "0s")
+		return strings.TrimSuffix(got, "0m")
 	case d >= time.Minute:
 		return d.Round(time.Second).String()
 	default:
 		return d.Round(time.Second).String()
 	}
+}
+
+// --- what the store says --------------------------------------------------
+
+// after is how long this identity may be quiet before it is woken.
+//
+// Resolved per identity and per pass, which is the whole point of storing it: an
+// agent that runs long builds can be given a longer threshold than one that answers
+// mail, and a change made anywhere takes effect on the next pass with nothing to
+// restart.
+//
+// A `--after` on the command line wins. Anything else would make a flag a
+// suggestion.
+func (w *waker) after(s caller, who user.Name) time.Duration {
+	if w.quietFlag {
+		return w.quiet
+	}
+	got := s.store.Pacing(who, roleOf(s, who))
+	return got.WakeAfter.Duration(w.quiet)
+}
+
+// paused reports whether this identity's waking has been turned off.
+//
+// Off is a state and not a zero: an agent nobody is waking has to look different
+// from one that is being woken and not answering, which is why `orc pace` says so
+// and why the cycle says so too rather than passing over it in silence.
+func (w *waker) paused(s caller, who user.Name) bool {
+	return s.store.Pacing(who, roleOf(s, who)).WakeOff.Off()
+}
+
+// interval is how often the loop looks, re-read between passes.
+//
+// The stored value wins over the flag, unlike `--after` — see loop. A store that
+// cannot be read leaves the interval as it is, because a cycle that sped up or
+// stopped because a settings file was briefly unreadable would be worse than one
+// that carried on at the pace it had.
+func (w *waker) interval(given time.Duration) time.Duration {
+	s, err := w.app.begin()
+	if err != nil {
+		return given
+	}
+	return s.store.FleetPacing().WakeEvery.Duration(given)
 }

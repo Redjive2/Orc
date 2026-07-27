@@ -227,6 +227,12 @@ func (a App) dispatch(args []string) error {
 		return a.introspect(rest)
 	case "check-control":
 		return a.checkControl(rest)
+	case "activity":
+		return a.activity(rest)
+	case "pace":
+		return a.pace(rest)
+	case "tariff":
+		return a.tariff(rest)
 	case "check-permission":
 		return a.checkPermission(rest)
 	case "env":

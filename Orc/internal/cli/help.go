@@ -88,6 +88,12 @@ func usage(p style.Palette) string {
 	line("")
 	line("%s", p.Header("reading it"))
 	verb("orc status [<identity>] [--json]", "the fleet, or one card")
+	verb("orc activity [<identity>] [--since <dur>]", "what it is doing, and what it has cost")
+	verb("orc pace wake [<who>] [--after <dur>] [--every <dur>]", "how long silence lasts, and how often to look")
+	verb("orc pace tend [<who>] [--watch <dur>]", "how often the worklist is reconciled")
+	verb("orc tariff [<setting> <n>]", "what thinking costs, for every budget at once")
+	verb("orc tariff --calibrate", "what measurement suggests those weights should be")
+	verb("orc tariff --clear --yes", "back to the built-in prices")
 	verb("orc list identities|roles|permissions|grants", "the rosters; --json for any of them")
 	verb("orc introspect [--only <field>] [--json]", "who am I, and what may I do")
 	verb("orc check-control <agent>", "exit 0 if you control it, 8 if not")
@@ -266,8 +272,8 @@ func brief(p style.Palette) string {
 	line("")
 	group("the fleet", "bootstrap", "new", "remove")
 	group("who may what", "assign", "grant", "revoke", "move")
-	group("running them", "employ", "fire", "tend", "budget", "view", "attach", "poke", "refresh")
-	group("reading it", "status", "list", "introspect", "check-control", "check-permission",
+	group("running them", "employ", "fire", "tend", "pace", "tariff", "budget", "view", "attach", "poke", "refresh")
+	group("reading it", "status", "list", "activity", "introspect", "check-control", "check-permission",
 		"env", "verify", "doctor")
 	group("yours", "owner")
 	line("")
@@ -282,9 +288,9 @@ func brief(p style.Palette) string {
 func verbs() []string {
 	return []string{
 		"bootstrap", "new", "assign", "remove", "grant", "revoke", "move",
-		"status", "list", "budget", "model", "introspect", "check-control", "check-permission", "env", "verify",
+		"status", "list", "activity", "budget", "model", "introspect", "check-control", "check-permission", "env", "verify",
 		"doctor", "owner", "employ", "fire", "tend", "view", "attach", "poke", "wake", "refresh",
-		"workspace", "instruct", "help",
+		"workspace", "instruct", "pace", "tariff", "help",
 	}
 }
 
@@ -417,10 +423,13 @@ var topics = map[string]topic{
 			"naming where it came from — and an agent gets the result at the start of\n" +
 			"a session. An identity layer adds to its role's and cannot replace it:\n" +
 			"the fleet's layer is the floor, not a default.\n\n" +
-			"**wake** is a message, not a layer: what `orc wake` types at an agent\n" +
-			"that has gone quiet. Those *override* — the agent's, else its role's,\n" +
-			"else the fleet's, else `continue` — because a wake message is one thing\n" +
-			"you say, and three of them stapled together is not a message.\n\n" +
+			"**wake** is a message, not a layer: what is typed at an agent that has\n" +
+			"nothing to do. `orc wake` says it to one that has gone quiet, and\n" +
+			"`employ` and `refresh` say it to one that has just started — a session\n" +
+			"nobody has spoken to has no turn in which to act on the layers above.\n" +
+			"Those *override* — the agent's, else its role's, else the fleet's, else\n" +
+			"`continue` — because a wake message is one thing you say, and three of\n" +
+			"them stapled together is not a message.\n\n" +
 			"With no arguments it lists every layer, its size, and when it last\n" +
 			"changed. `show` prints what an agent actually gets, which is the question\n" +
 			"this feature generates most; `--diff` says whether a running session\n" +
@@ -551,6 +560,100 @@ var topics = map[string]topic{
 			"A poke to a session mid-turn queues in Claude's own input box, which is\n" +
 			"the correct behaviour and is what the command says it did.",
 		examples: []string{"orc poke ember", `orc poke ember "the tests are green now"`},
+	},
+	"tariff": {
+		forms: []string{
+			"orc tariff",
+			"orc tariff <setting> <n> [--yes]",
+			"orc tariff --calibrate",
+			"orc tariff --clear --yes",
+		},
+		does: "what thinking costs, for every budget at once",
+		detail: "A session costs model × effort, and a set of n costs\n" +
+			"⌈sum × (crowd-base + n) / crowd-scale⌉ — so the tenth agent costs more\n" +
+			"than the first and a fleet is charged for being a fleet.\n\n" +
+			"Those weights are a judgement about *money*: opus costing three haikus\n" +
+			"is a claim no code can settle, and two fleets can disagree without\n" +
+			"either being wrong. They were constants; this stores them, journaled\n" +
+			"like a permission, so the question \"what did it used to be, and who\n" +
+			"changed it\" has an answer.\n\n" +
+			"Every budget is derived, so a change is felt by everything at once:\n" +
+			"raising `opus` re-prices every running opus session, and an actor inside\n" +
+			"its budget can be over it without anybody touching that actor. It says\n" +
+			"who that would be, and asks for --yes when the list is not empty. It\n" +
+			"refuses nothing: a fleet over its own budget is information, and a tariff\n" +
+			"that could only be loosened while agents ran would be one nobody could\n" +
+			"tighten.\n\n" +
+			"`--calibrate` proposes weights from what the fleet actually spent, over\n" +
+			"the last week, counting new tokens only — a tariff that counted cache\n" +
+			"reads would be pricing context rather than work. It proposes and never\n" +
+			"applies: the numbers are one fleet over one window, and deciding from\n" +
+			"them is the judgement this feature exists to leave to a person.",
+		examples: []string{
+			"orc tariff",
+			"orc tariff opus 4",
+			"orc tariff --calibrate",
+		},
+	},
+	"pace": {
+		forms: []string{
+			"orc pace",
+			"orc pace wake [<identity>|<role>] [--after <dur>] [--every <dur>]",
+			"orc pace tend [<identity>|<role>] [--watch <dur>]",
+			"orc pace <cycle> <who> [--off|--on|--clear]",
+		},
+		does: "how often the fleet is woken and tended",
+		detail: "`orc wake --after`, `orc wake --every` and `orc tend --watch` are flags,\n" +
+			"read once when a process starts — so nothing but the person who started\n" +
+			"that process could change them, and a browser could not offer them at\n" +
+			"all. This stores them instead.\n\n" +
+			"They layer the way a wake message does: the identity's, else its role's,\n" +
+			"else the fleet's, else the built-in. `orc pace` with no arguments shows\n" +
+			"what each agent will actually do and where each value came from.\n\n" +
+			"Every cycle re-reads at the top of a pass, so a change lands on the next\n" +
+			"one with nothing to restart. Two rules about flags, and they differ on\n" +
+			"purpose: `--after` typed on the line wins for that run, because somebody\n" +
+			"debugging is deciding about the run in front of them — and a stored\n" +
+			"*interval* wins over the flag a loop was started with, because a cycle\n" +
+			"running since Tuesday in a shell nobody has open is exactly what a stored\n" +
+			"setting has to be able to reach.\n\n" +
+			"`--off` is a state and not a zero: an agent nobody is waking looks\n" +
+			"different from one being woken and not answering. `--on` turns back on\n" +
+			"what a layer above turned off, and `--clear` drops this layer entirely.",
+		examples: []string{
+			"orc pace",
+			"orc pace wake --after 20m --every 5m",
+			"orc pace wake ember --after 2m",
+			"orc pace tend --watch 30s",
+			"orc pace wake ember --off",
+		},
+	},
+	"activity": {
+		forms: []string{
+			"orc activity [<identity>]",
+			"orc activity [--since <dur>] [--json]",
+		},
+		does: "what it is doing, and what it has cost",
+		detail: "One line per agent: what it is doing now — generating, waiting, stuck,\n" +
+			"down, idle — and what it has done in the window: turns, tokens, and the\n" +
+			"files and lines it read and wrote. The default window is 24h.\n\n" +
+			"It reads before it reports, so the figures are current rather than as\n" +
+			"stale as the last thing that happened to run `tend`. What it reads is\n" +
+			"claude's own transcript, incrementally: a cursor records where the last\n" +
+			"pass stopped, so a long session costs one read and not one per command.\n\n" +
+			"**new** is input + output + cache writes — what the turns caused to be\n" +
+			"produced. **cached** is what was read back out of the cache, and it is\n" +
+			"kept separate because on a real session the two differ by five orders of\n" +
+			"magnitude and one column called `tokens` would only ever show the second.\n\n" +
+			"Files are counted from orc's own event feed and lines from the\n" +
+			"transcript, so a file count is always right and a line count is missing\n" +
+			"where claude's file could not be read. Nothing here is a privilege:\n" +
+			"reading what a fleet you are in has done is not one.",
+		examples: []string{
+			"orc activity",
+			"orc activity ember --since 7d",
+			"orc activity --json",
+		},
 	},
 	"wake": {
 		forms: []string{

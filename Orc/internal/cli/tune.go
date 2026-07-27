@@ -70,7 +70,7 @@ func (a App) tune(args []string) error {
 // fleet less legible to no end.
 func (a App) reportTuning(s caller, who user.Name, target model.Identity) error {
 	m, e := tuningOf(target)
-	load := model.SessionLoad(m, e)
+	load := s.fleet.Price(m, e)
 
 	line := fmt.Sprintf("%s is on %s/%s   load %s",
 		a.out.Identity(who.String()), a.out.Value(m.String()), a.out.Value(e.Short()),
@@ -116,7 +116,7 @@ func (a App) retune(s caller, who user.Name, target model.Identity, rest []strin
 	// The budget, before anything is written. An identity that is not employed
 	// costs nothing, so retuning it is free until somebody employs it — and that
 	// employment is where the arithmetic is checked again.
-	load := model.SessionLoad(m, e)
+	load := s.fleet.Price(m, e)
 	if target.Employed() {
 		if err := s.affordable(who, target, load); err != nil {
 			return err
@@ -143,7 +143,7 @@ func (a App) sayRetuned(s caller, who user.Name, before model.Identity, m model.
 		a.out.Good("retuned"), a.out.Identity(who.String()),
 		a.out.Muted(was.String()+"/"+wasEffort.Short()),
 		a.out.Value(m.String()+"/"+e.Short()),
-		a.out.Muted(fmt.Sprintf("%d", model.SessionLoad(was, wasEffort))),
+		a.out.Muted(fmt.Sprintf("%d", s.fleet.Price(was, wasEffort))),
 		a.out.Authority(fmt.Sprintf("%d", load)))
 
 	// The fleet total only means anything for something that is actually running.

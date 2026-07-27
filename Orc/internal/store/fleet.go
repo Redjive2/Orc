@@ -40,5 +40,8 @@ func (s *Store) Fleet() (authz.Fleet, error) {
 		Permissions: permissions,
 		Sessions:    sessions,
 		Now:         s.clock.Now(),
+		// What this fleet charges, read once per derivation and carried in, so
+		// every budget in the answer was computed against one price list.
+		Tariff: s.Tariff(),
 	})
 }
