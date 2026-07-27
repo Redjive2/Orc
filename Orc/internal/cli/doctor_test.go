@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -462,5 +463,133 @@ func TestDoctorReportsTheSessionCredential(t *testing.T) {
 	}, "doctor")
 	if !strings.Contains(got.stdout, "Bedrock") {
 		t.Errorf("a cloud provider should outrank a token:\n%s", got.stdout)
+	}
+}
+
+// --- is anything watching, and is anything stopped ------------------------
+
+// flat collapses the wrapping doctor does, so an assertion is about what the screen
+// says rather than about where the terminal happened to break a line.
+func flat(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// The wake cycle is a guard rather than a remark, and it counts, because its
+// absence is the difference between a fleet that recovers and one that does not.
+// Every other guard answers "is the wall holding"; this one answers "is anybody
+// watching" — and an unwatched fleet stops at no particular moment, with nothing
+// on any screen saying so.
+func TestDoctorSaysWhenNothingIsWakingTheFleet(t *testing.T) {
+	r := fullFleet(t)
+	// Something has to be running for a cycle to be missing: a fleet with nothing
+	// in it needs no waker, and a guard that failed on an empty fleet would fail on
+	// every fleet the moment it was made.
+	r.ok("boss", "employ", "ember")
+	feed(t, r, "ember", ago(1, "PreToolUse", "Bash", "go build ./..."))
+	got := r.run("boss", "doctor")
+
+	if !strings.Contains(got.stdout, "wake cycle") {
+		t.Fatalf("doctor says nothing about whether anything is waking agents:\n%s", got.stdout)
+	}
+	// The test machine is not running one, so this is the absent case — and it has
+	// to say what to run, because "absent" alone is a fact nobody can act on.
+	if !strings.Contains(flat(got.stdout), "orc wake --every") {
+		t.Errorf("it does not say how to start one:\n%s", got.stdout)
+	}
+	if !strings.Contains(flat(got.stdout), "usage limit") {
+		t.Errorf("it does not say what an unwatched fleet costs:\n%s", got.stdout)
+	}
+}
+
+// A session at a usage limit is not a guard that failed. It is a fleet working
+// normally against a clock, and counting it as a defect would fail a cron every
+// time an agent hit one — an alarm that fires on weather is an alarm nobody reads.
+func TestALimitedSessionIsReportedWithoutFailingTheCheck(t *testing.T) {
+	r := fullFleet(t)
+	r.ok("boss", "employ", "ember")
+	limitedFeed(t, r, "ember", "12:50 (UTC)", 10)
+
+	// The exit code is only ever about the guards, so the count must be the same as
+	// it is on the same fleet with nothing limited.
+	clean := fullFleet(t)
+	clean.ok("boss", "employ", "ember")
+	feed(t, clean, "ember", ago(1, "PreToolUse", "Bash", "go build ./..."))
+
+	before := r.run("boss", "doctor")
+	if guardCount(t, before.stdout) != guardCount(t, clean.run("boss", "doctor").stdout) {
+		t.Errorf("a limited session changed the guard count:\n%s", before.stdout)
+	}
+	if !strings.Contains(before.stdout, "sessions") {
+		t.Errorf("there is no section for what the fleet is doing:\n%s", before.stdout)
+	}
+	if !strings.Contains(before.stdout, "usage limit") {
+		t.Errorf("the limited session is not named:\n%s", before.stdout)
+	}
+	if !strings.Contains(before.stdout, "ember") {
+		t.Errorf("the line does not say which agent:\n%s", before.stdout)
+	}
+}
+
+// Past its reset and still sitting there is the state worth acting on, and what to
+// do about it depends on whether anything is watching. With nothing watching, the
+// answer is to run one.
+func TestDoctorSaysWhatToDoAboutALiftedLimit(t *testing.T) {
+	r := fullFleet(t)
+	r.ok("boss", "employ", "ember")
+	limitedFeed(t, r, "ember", "11:00 (UTC)", 120)
+
+	got := r.run("boss", "doctor")
+	if !strings.Contains(got.stdout, "lifted") {
+		t.Errorf("it does not say the limit is over:\n%s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, "orc wake") {
+		t.Errorf("it does not say what resumes the agent:\n%s", got.stdout)
+	}
+}
+
+// A fleet with nothing stopped still gets a line. A section that vanished when
+// there was nothing to say would leave a reader unable to tell "nothing is wrong"
+// from "this build does not check".
+func TestDoctorSaysWhenNothingIsStopped(t *testing.T) {
+	r := fullFleet(t)
+	got := r.run("boss", "doctor")
+	if !strings.Contains(got.stdout, "sessions") {
+		t.Fatalf("no sessions section:\n%s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, "nothing is running") {
+		t.Errorf("it does not say the fleet is idle rather than unchecked:\n%s", got.stdout)
+	}
+}
+
+
+// guardCount reads the summary line's number, or 0 when every guard is holding.
+func guardCount(t *testing.T, out string) int {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		flatLine := flat(line)
+		if !strings.Contains(flatLine, "not in force") {
+			continue
+		}
+		var n int
+		if _, err := fmt.Sscanf(flatLine, "%d guard", &n); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+
+// A fleet with nothing running does not need a cycle, and saying it does would make
+// `orc doctor` fail on every fleet from the moment it is made — which is how a check
+// earns the reputation that stops people reading it.
+func TestAnEmptyFleetIsNotMissingAWakeCycle(t *testing.T) {
+	withHook(t)
+	r := newRig(t)
+	r.bootstrap("root")
+
+	got := doctored(t, r, nil, "doctor")
+	if got.code != fault.CodeOK {
+		t.Fatalf("a fleet with nothing running exited %d:\n%s", got.code, got.stdout)
+	}
+	if !strings.Contains(flat(got.stdout), "nothing to wake yet") {
+		t.Errorf("it does not say why no cycle is needed:\n%s", got.stdout)
 	}
 }

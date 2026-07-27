@@ -468,6 +468,25 @@ state:
   cadence, measured from when the limit was hit. A poke to a still-limited session
   costs one refusal line; never poking costs the fleet.
 
+`orc doctor` has two things to say about all this, and they are deliberately not
+the same kind of thing.
+
+**`wake cycle`** is a guard, and it counts toward the exit code. Every other guard
+answers "is the wall holding"; this one answers "is anybody watching". A fleet with
+no cycle does not recover from anything — an agent that finishes a turn waits, an
+agent that hits a limit waits, and nobody ever speaks to either. The answer comes
+from the watcher registry, so it is about *this* fleet and the process it names is
+known to be alive; looking for `orc wake --every` in `ps` would count a cycle
+watching somebody else's fleet as cover for this one.
+
+**The `sessions` section** is not a guard and never sets the exit code. A session at
+a usage limit is a fleet working normally against a clock, and failing a cron every
+time an agent hits one is an alarm nobody reads. What each line says depends on what
+can be done about it: still limited says how long is left; lifted with nothing
+watching says to run a cycle; lifted with a cycle running and half an hour gone says
+the cycle is not doing its job and to check it is the current build — which is the
+one case that looks fine on every other screen.
+
 A limit is only current if it is the *last* thing in the transcript. Anything the
 agent or the operator said afterwards means the session moved on, and a limit that
 has been moved on from is history — otherwise an agent that recovered would be

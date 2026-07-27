@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"orc/common/fault"
+	"orc/common/watch"
 	"orc/orc/internal/style"
 )
 
@@ -75,6 +76,10 @@ type check struct {
 	guard  string
 	state  guardState
 	detail string
+	// lifted marks a session line whose limit is already over — the half that has
+	// something to be done about it. It is on the row rather than recomputed later
+	// so the advice and the state cannot disagree about the same clock.
+	lifted bool
 	// hole marks a guard that is *known* not to exist — §7.5's list. It prints
 	// like an absence because it is one, but it is not a defect and does not
 	// affect the exit code.
@@ -90,8 +95,22 @@ func (a App) doctor(args []string) error {
 		return err
 	}
 
-	checks := a.guards(s)
+	// The sessions are read before the guards, because whether a fleet needs a wake
+	// cycle depends on whether anything is running in it.
+	running, live := a.sessions(s)
+
+	checks := a.guards(s, live)
 	checks = append(checks, holes()...)
+	// What to advise about a stopped agent depends on whether anything is watching
+	// it: "nobody is looking" and "the cycle has not come round" are different
+	// things to do about, so the lines are finished once that is known.
+	watching := false
+	for _, c := range checks {
+		if c.guard == "wake cycle" && c.state == inForce {
+			watching = true
+		}
+	}
+	running = adviseOn(running, watching)
 
 	if err := a.say(fmt.Sprintf("fleet: %s   %s",
 		a.out.Value(s.store.Root()), a.where())); err != nil {
@@ -102,7 +121,7 @@ func (a App) doctor(args []string) error {
 	}
 
 	width := 0
-	for _, c := range checks {
+	for _, c := range append(append([]check{}, checks...), running...) {
 		width = max(width, len(c.guard))
 	}
 	broken := 0
@@ -110,27 +129,24 @@ func (a App) doctor(args []string) error {
 		if (c.state == absent || c.state == partial) && !c.hole {
 			broken++
 		}
-		// The pad is applied to the plain word and the colour added around it:
-		// %-*s over a painted string would indent a coloured line differently
-		// from a plain one.
-		// The detail is the part that says what to do, so it is wrapped rather
-		// than truncated: a table cut at the terminal's edge would lose exactly
-		// the half a reader needs. Continuation lines align under the column so
-		// the guard names stay a scannable stripe down the left.
-		indent := 2 + width + 2 + 12 + 1
-		for i, part := range wrap(c.detail, a.detailWidth(indent)) {
-			if i == 0 {
-				if err := a.say(fmt.Sprintf("  %s  %s %s",
-					pad(a.out.Header(c.guard), c.guard, width),
-					pad(c.state.paint(a.out, c.state.String()), c.state.String(), 12),
-					a.out.Muted(part))); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := a.say(strings.Repeat(" ", indent) + a.out.Muted(part)); err != nil {
-				return err
-			}
+		if err := a.row(c, width); err != nil {
+			return err
+		}
+	}
+
+	// The fleet's own state, under its own heading. Kept apart from the guards
+	// because it answers a different question — "is anything stopped" rather than
+	// "is the wall holding" — and because mixing the two would put a usage limit in
+	// the same column as a missing sandbox.
+	if err := a.say(""); err != nil {
+		return err
+	}
+	if err := a.say("  " + a.out.Header("sessions")); err != nil {
+		return err
+	}
+	for _, c := range running {
+		if err := a.row(c, width); err != nil {
+			return err
 		}
 	}
 
@@ -151,6 +167,34 @@ func (a App) doctor(args []string) error {
 	}
 	return fault.Conflict{Path: s.store.Root(), Reason: fmt.Sprintf(
 		"%d guard%s not in force", broken, plural(broken))}
+}
+
+// row draws one line of the screen, wrapped.
+//
+// The pad is applied to the plain word and the colour added around it: %-*s over a
+// painted string would indent a coloured line differently from a plain one.
+//
+// The detail is the part that says what to do, so it is wrapped rather than
+// truncated: a table cut at the terminal's edge would lose exactly the half a reader
+// needs. Continuation lines align under the column so the names stay a scannable
+// stripe down the left.
+func (a App) row(c check, width int) error {
+	indent := 2 + width + 2 + 12 + 1
+	for i, part := range wrap(c.detail, a.detailWidth(indent)) {
+		if i == 0 {
+			if err := a.say(fmt.Sprintf("  %s  %s %s",
+				pad(a.out.Header(c.guard), c.guard, width),
+				pad(c.state.paint(a.out, c.state.String()), c.state.String(), 12),
+				a.out.Muted(part))); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := a.say(strings.Repeat(" ", indent) + a.out.Muted(part)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // detailWidth is how much room the detail column has.
@@ -203,7 +247,7 @@ func pad(painted, plain string, column int) string {
 }
 
 // guards runs every check that can be run against this fleet.
-func (a App) guards(s caller) []check {
+func (a App) guards(s caller, live int) []check {
 	var out []check
 	out = append(out, sessionLock())
 	out = append(out, a.hookOnPath())
@@ -212,6 +256,7 @@ func (a App) guards(s caller) []check {
 	out = append(out, a.strayClaudes(s))
 	out = append(out, a.workspaceDrift(s))
 	out = append(out, a.sessionCredential())
+	out = append(out, a.wakeCycle(s, live))
 	return out
 }
 
@@ -565,3 +610,125 @@ func holes() []check {
 				"happily enforce"},
 	}
 }
+
+// --- what keeps the fleet moving ------------------------------------------
+
+
+
+// wakeCycle reports whether anything is poking silent agents.
+//
+// It is a guard rather than a remark, and it counts, because its absence is the
+// difference between a fleet that recovers and one that does not. Every other guard
+// here answers "is the wall holding"; this one answers "is anybody watching" — and
+// an unwatched fleet fails in the quietest way there is. An agent finishes a turn
+// and waits. An agent hits its usage limit and waits. Both are states somebody has
+// to speak to, and with no cycle running nobody ever does: the fleet is simply
+// stopped, at no particular moment, with nothing on any screen saying so.
+//
+// The answer comes from the watcher registry rather than from the process table.
+// Looking for an `orc wake --every` in `ps` is wrong in both directions: a cycle
+// watching *another* fleet has the same command line and would read as this one
+// being covered, and the registry already checks that the pid it names is alive.
+// This is the question `cq upgrade` asks of the same file, and two ways of asking
+// it would be two answers to keep in step.
+func (a App) wakeCycle(s caller, live int) check {
+	const guard = "wake cycle"
+
+	running, err := watch.Registry{Dir: filepath.Join(s.store.Root(), "watchers")}.Running(watch.Wake)
+	if err != nil {
+		return check{guard: guard, state: unchecked, detail: err.Error()}
+	}
+	// A fleet with nothing running has nothing to wake, and a guard that failed on
+	// an empty fleet would fail on every fleet the moment it was made — which is
+	// how a check earns the reputation that makes people stop reading it.
+	if live == 0 && !running {
+		return check{guard: guard, state: inForce,
+			detail: "no session is running, so there is nothing to wake yet — a fleet with agents " +
+				"in it wants `orc wake --every 5m --tend`"}
+	}
+	if running {
+		return check{guard: guard, state: inForce,
+			detail: "a sweep is running over this fleet — `orc wake --dry-run` says what its next pass would do"}
+	}
+	// A `tend --watch` is not this. It keeps sessions *running*, which is the other
+	// backstop and the one that cannot resume a session that is already up.
+	return check{guard: guard, state: absent,
+		detail: "nothing is waking silent agents, so an agent that finishes a turn or hits its " +
+			"usage limit stays stopped until somebody notices — run `orc wake --every 5m --tend`"}
+}
+
+// sessions is what the running fleet is doing, as opposed to what is guarding it.
+//
+// It is a second section rather than more guards, and it does not touch the exit
+// code, because these are not defects: an agent at a usage limit is a fleet working
+// normally against a clock. Counting it as a guard not in force would mean `orc
+// doctor` failed a cron every time an agent hit a limit, and an alarm that fires on
+// weather is an alarm nobody reads.
+//
+// What earns a line is a session that is up and cannot move on its own. That is one
+// state today — the usage limit — and it is here because it is invisible everywhere
+// else: the child is alive, the socket answers, and until this was read from the
+// transcript the only symptom was a fleet that had quietly stopped.
+// It returns the lines and how many sessions are up, because the guard above needs
+// the second: a fleet with nothing running does not need a cycle.
+func (a App) sessions(s caller) ([]check, int) {
+	identities, err := s.store.Identities()
+	if err != nil {
+		return []check{{guard: "sessions", state: unchecked, detail: err.Error(), hole: true}}, 0
+	}
+
+	now := s.store.Now()
+	var out []check
+	live := 0
+	for _, i := range identities {
+		if _, up, err := s.store.Session(i.Name()); err != nil || !up {
+			continue
+		}
+		live++
+
+		limit, hit := a.limitOf(s, i.Name())
+		if !hit {
+			continue
+		}
+		state := partial
+		if !limit.Over(now) {
+			// Nothing to do but wait, so it is not dressed up as a problem.
+			state = inForce
+		}
+		out = append(out, check{guard: i.Name().String(), state: state,
+			detail: limit.Says(now), hole: true, lifted: limit.Over(now)})
+	}
+
+	if len(out) == 0 {
+		what := fmt.Sprintf("%d session%s, none stopped", live, plural(live))
+		if live == 0 {
+			what = "nothing is running"
+		}
+		return []check{{guard: "sessions", state: inForce, detail: what, hole: true}}, live
+	}
+	return out, live
+}
+
+// adviseOn finishes the session lines once it is known whether anything is watching.
+//
+// The advice is the part that differs, and it differs in a way that matters: a
+// stopped agent with no cycle needs one started, and a stopped agent with a cycle
+// running that has not resumed it means the cycle is not doing its job — which is
+// the case that looks perfectly healthy on every other screen.
+func adviseOn(lines []check, watching bool) []check {
+	out := make([]check, 0, len(lines))
+	for _, c := range lines {
+		switch {
+		case !c.lifted:
+		case !watching:
+			c.detail += " — nothing is waking it; `orc wake` resumes it now, and a cycle " +
+				"would keep doing so"
+		default:
+			c.detail += " — a wake cycle is running and has not resumed it, so check it is " +
+				"the current build (`orc wake --dry-run` says what a pass would do)"
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
