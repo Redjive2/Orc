@@ -149,6 +149,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `PUT instruct/wake[/roles/<n>\|/identities/<n>]` | `orc instruct wake … --set`   |
 | `DELETE` on any of the five above      | `orc instruct … --clear`                 |
 | `POST upgrade`                         | pull, rebuild, restart — here and queued out |
+| `GET upgrade`                          | how this server's own last build went        |
 | `GET admin/state`                      | `admin mail` — the whole store           |
 | `GET library`                          | the repository's structure, no text      |
 | `GET library/file?path=`               | one file, with its text                  |
@@ -404,6 +405,19 @@ on a machine that has the token.
 `$CQ_SOURCE` is the checkout to pull; `$CQ_BIN` is where binaries are installed,
 defaulting to the directory the running one is in. A machine with neither refuses
 and says so, which is right for one that installs binaries rather than building.
+
+`$CQ_BIN` names two things and always has: `Common/nudge` reads it as *the cq command
+to run*, and this reads it as *the directory to install into*. Both spellings are
+accepted here — a path that is an existing file is taken as the binary and the tools
+go beside it — because both are already written into shell profiles and neither is
+wrong. A path that exists and is neither a directory nor a file is refused.
+
+The build itself is a promise. The response to the button is sent first and the work
+runs after it, because the work ends with the process going away — so
+`GET /api/v1/upgrade` reports how the serving machine's own build actually went, and
+the browser polls it while `tooling › rebuild` is open. A build that fails leaves the
+server running on the old binary, which is the right outcome and used to be a silent
+one: the reason reached a log and the page went on saying it was building.
 
 ## Driving Orc
 

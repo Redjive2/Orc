@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"orc/cq/internal/auth"
@@ -130,6 +131,10 @@ type Server struct {
 
 	upgrade upgrade.Options
 	restart func()
+	// How this machine's own last build went, and the lock over it. In memory
+	// because a build that succeeds ends in a restart — see selfUpgrade.
+	built       sync.Mutex
+	selfUpgrade *selfUpgrade
 
 	assets  http.Handler
 	index   []byte
@@ -322,6 +327,10 @@ func (s *Server) routes() {
 	// Rebuilding and restarting the whole fleet. See upgrade.go for why this is
 	// one request that becomes one local upgrade plus one queued action each.
 	s.route("POST /api/v1/upgrade", needEither, s.upgradeAll)
+	// And asking how the last one went. A GET because asking has no effect, and
+	// the same path because it is the same subject: the outcome of a build that
+	// happens after the response to the POST has already been sent.
+	s.route("GET /api/v1/upgrade", needSession, s.upgradeStatus)
 
 	// The task verbs, one route per Macmuffin command that changes something.
 	// See tasks.go for why this is a route each rather than one pass-through.

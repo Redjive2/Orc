@@ -76,7 +76,7 @@ settings=(
 	"cq|CQ_PASSWORD|optional|secret|the operator password, for cq admin operator"
 	"cq|CQ_LIBRARY|optional||a repository to mirror for reading"
 	"cq|CQ_SOURCE|optional||the checkout cq upgrade pulls and builds"
-	"cq|CQ_BIN|optional||the cq to spawn on a nudge, and where cq upgrade installs"
+	"cq|CQ_BIN|optional||the cq to spawn on a nudge; upgrade installs there, or beside it"
 	"cq|ORC|optional||the orc cq runs for fleet work (default: orc, on the path)"
 	"cq|ORC_NO_NUDGE|optional||set to stop mailman and muff spawning cq sync"
 	"cq|CQ_SUPERVISED|internal||cq serve sets it on its child, so it serves rather than supervising"

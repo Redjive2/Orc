@@ -267,7 +267,7 @@ var settings = []struct {
 	{"CQ_KEY", "That mailbox's orc key, so any agent's action can nudge", "agent"},
 	{"ORC", "The orc executable, if it is not on the path as `orc`", "agent"},
 	{"CQ_SOURCE", "The checkout `upgrade` pulls and builds", ""},
-	{"CQ_BIN", "Where `upgrade` installs binaries; else beside the running one", ""},
+	{"CQ_BIN", "Where `upgrade` installs binaries, or the cq to install beside", ""},
 	{"ORC_THEME", "Colour scheme, shared with every Orc tool", ""},
 }
 

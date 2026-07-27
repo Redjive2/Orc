@@ -1,10 +1,15 @@
 package server_test
 
 import (
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"orc/cq/internal/protocol"
+	"orc/cq/internal/server"
+	"orc/cq/internal/upgrade"
 )
 
 // The upgrade endpoint. Two halves, because the two machines are reachable in
@@ -111,4 +116,80 @@ func TestUpgradeTakesATokenOrASession(t *testing.T) {
 	if w := h.do(t, "POST", "/api/v1/upgrade", `{}`, h.withCookie(cookie)); w.Code == http.StatusAccepted {
 		t.Errorf("a session without a CSRF token was accepted")
 	}
+}
+
+// The answer to the button is a promise: the build runs after the response, on a
+// goroutine that ends with the process going away. So the outcome used to reach a
+// log file and nowhere else — a failed build left the page saying "pulling,
+// building, and restarting" indefinitely, which reads exactly like a build still
+// running and exactly like a restart about to happen.
+//
+// The one case nobody could see is the one case the server stays up to explain.
+func TestAFailedSelfUpgradeCanBeAskedAbout(t *testing.T) {
+	h := newHarness(t)
+	restarted := make(chan struct{}, 1)
+	// A source that is not a git checkout: the refusal is immediate and needs no
+	// commands run, which keeps this about the reporting rather than about git.
+	h.Server = mustServe(t, h, server.Options{
+		Upgrade: upgrade.Options{Source: t.TempDir()},
+		Restart: func() { restarted <- struct{}{} },
+	})
+
+	cookie, csrf := h.login(t)
+	if w := h.do(t, "POST", "/api/v1/upgrade", `{}`, h.withCookie(cookie), withCSRF(csrf)); w.Code != http.StatusAccepted {
+		t.Fatalf("status %d, want 202: %s", w.Code, w.Body)
+	}
+
+	var last struct {
+		State string `json:"state"`
+		Error string `json:"error"`
+	}
+	for range 200 {
+		w := h.do(t, "GET", "/api/v1/upgrade", "", h.withCookie(cookie))
+		if w.Code != http.StatusOK {
+			t.Fatalf("asking: %d %s", w.Code, w.Body)
+		}
+		var got struct {
+			Last *struct {
+				State string `json:"state"`
+				Error string `json:"error"`
+			} `json:"last"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decoding: %v\n%s", err, w.Body)
+		}
+		if got.Last != nil && got.Last.State != "building" {
+			last.State, last.Error = got.Last.State, got.Last.Error
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if last.State != "failed" {
+		t.Fatalf("the failed build reported state %q", last.State)
+	}
+	if last.Error == "" {
+		t.Error("a failed build recorded no reason, which is the whole point of recording it")
+	}
+	// And it did not restart. A restart after a failed build brings nothing up at
+	// all, which is worse than staying on the old binary.
+	select {
+	case <-restarted:
+		t.Error("the server restarted into a build that never happened")
+	default:
+	}
+}
+
+// mustServe rebuilds the harness's server with extra options, keeping its store and
+// credentials so a login still works.
+func mustServe(t *testing.T, h *harness, extra server.Options) *server.Server {
+	t.Helper()
+	extra.State, extra.Creds, extra.Admin = h.state, h.creds, true
+	extra.Logger = slog.New(slog.DiscardHandler)
+	extra.Now = func() time.Time { return h.now }
+	srv, err := server.New(extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv
 }

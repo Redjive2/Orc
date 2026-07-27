@@ -38,6 +38,10 @@ const statusBar = document.getElementById("status");
 let state = {
   session: null, adminEnabled: false, machines: [], fleet: [], fleetError: "",
   upgrading: null,
+  // What the server's own last build came to. Separate from `upgrading`, which is
+  // what it said it was *going* to do: the build happens after that answer, and
+  // until this existed a failure reached a log file and nowhere else.
+  built: null,
   inbox: [], archive: [], sent: [], queue: [], tasks: [],
   // The library's structure, the file texts read so far, and which folds are
   // open. Openness is state rather than DOM, so a redraw on sync does not
@@ -1258,6 +1262,16 @@ async function refresh() {
       syncPace = await api.syncPace().catch(() => state.syncPace);
     }
 
+    // How the server's own last build went. Only while the tab that draws it is
+    // open, and it fails to whatever was already known: the interesting case is a
+    // server that is up and did not rebuild, and a request that cannot be answered
+    // means it is down — which the page finds out anyway when everything else on it
+    // stops loading.
+    let built = state.built;
+    if (route.startsWith("/tooling/rebuild")) {
+      built = await api.built().then((got) => got.last || null).catch(() => state.built);
+    }
+
     let detail = state.detail;
     const match = /^\/message\/([^?]+)(?:\?machine=(.*))?$/.exec(route);
     if (match) {
@@ -1268,7 +1282,7 @@ async function refresh() {
     }
 
     set({
-      activity, syncPace,
+      activity, syncPace, built,
       session, adminEnabled: session.admin, machines: session.machines || [],
       inbox: inbox.messages || [], archive: archive.messages || [],
       sent: sent.messages || [],

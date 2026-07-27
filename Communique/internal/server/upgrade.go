@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"orc/cq/internal/protocol"
+	"orc/cq/internal/upgrade"
 )
 
 // Upgrading the whole fleet, from one request.
@@ -54,6 +55,60 @@ type upgradeView struct {
 	// from what it has done: the restart happens after this answer is sent.
 	Server     string `json:"server"`
 	Restarting bool   `json:"restarting"`
+	// Last is how the serving machine's own upgrade actually turned out, when one
+	// has been tried. See selfUpgrade.
+	Last *selfUpgrade `json:"last,omitempty"`
+}
+
+// selfUpgrade is the outcome of this machine's own build, kept in memory so it can
+// be asked about afterwards.
+//
+// It exists because the response to the button is a promise. The work runs on a
+// detached goroutine — it has to, since it ends with the process going away — so
+// everything that happens after the 202 used to reach a log file and nowhere else.
+// A build that failed left the page saying "pulling, building, and restarting"
+// indefinitely, which is indistinguishable from a build still running and from a
+// restart that is about to happen. The one case where nobody could find out what
+// went wrong is the one case where the server is still up to be asked.
+//
+// In memory and not on disk, deliberately: a successful upgrade ends in a restart,
+// so the only outcome that survives to be read is a failure, and a failure that
+// outlived the process it happened in would be a stale accusation against a build
+// that has since been replaced by hand.
+type selfUpgrade struct {
+	// State is `building`, `failed`, or `restarting`.
+	State   string          `json:"state"`
+	Started string          `json:"started"`
+	Ended   string          `json:"ended,omitempty"`
+	Error   string          `json:"error,omitempty"`
+	Report  *upgrade.Report `json:"report,omitempty"`
+}
+
+// lastUpgrade is what the serving machine's own build came to, or nil.
+func (s *Server) lastUpgrade() *selfUpgrade {
+	s.built.Lock()
+	defer s.built.Unlock()
+	if s.selfUpgrade == nil {
+		return nil
+	}
+	got := *s.selfUpgrade
+	return &got
+}
+
+func (s *Server) recordUpgrade(got selfUpgrade) {
+	s.built.Lock()
+	defer s.built.Unlock()
+	s.selfUpgrade = &got
+}
+
+// upgradeState is `GET /api/v1/upgrade`: how the serving machine's own build went.
+//
+// The same route as the button, because it is the same subject, and a GET because
+// asking has no effect. What the browser does with it is poll while the tab is open:
+// a failure has to arrive on the screen somebody is watching, not in a log on a
+// machine they would have to log into.
+func (s *Server) upgradeStatus(w http.ResponseWriter, r *http.Request) {
+	s.ok(w, r, upgradeView{Queued: []protocol.MachineID{}, Last: s.lastUpgrade()})
 }
 
 // upgradeAll is `POST /api/v1/upgrade`.
@@ -130,16 +185,27 @@ func (s *Server) upgradeAll(w http.ResponseWriter, r *http.Request) {
 // nothing up at all. So a build that fails leaves the running server exactly as it
 // was, which is the outcome an operator wants from a failed upgrade.
 func (s *Server) upgradeSelf() {
+	started := s.now().UTC().Format(time.RFC3339)
+	s.recordUpgrade(selfUpgrade{State: "building", Started: started})
+
 	report, err := s.upgrade.Upgrade(context.Background())
 	if err != nil {
-		// Loudly, and then carry on serving. There is no way to reach the caller —
-		// they have their 202 — so the log and the next `cq status` are where this
-		// has to be visible.
+		// Loudly, and then carry on serving. The caller has their 202 and cannot be
+		// reached, so this is recorded where the browser can ask for it: the one
+		// outcome nobody could see was the one the server stayed up to explain.
 		s.log.Error("upgrade failed; the server is still on the old build", "error", err)
+		s.recordUpgrade(selfUpgrade{
+			State: "failed", Started: started, Ended: s.now().UTC().Format(time.RFC3339),
+			Error: err.Error(), Report: &report,
+		})
 		return
 	}
 	s.log.Info("upgraded", "before", report.Before, "after", report.After,
 		"built", report.Built, "changed", report.Changed)
+	s.recordUpgrade(selfUpgrade{
+		State: "restarting", Started: started, Ended: s.now().UTC().Format(time.RFC3339),
+		Report: &report,
+	})
 
 	// The grace is for the response, not for the build: by here the reply is long
 	// gone, but a browser that is mid-poll deserves to finish rather than see a

@@ -306,3 +306,84 @@ func TestUpgradeSaysWhenItCannotFastForward(t *testing.T) {
 		t.Errorf("the failure does not say why:\n%v", err)
 	}
 }
+
+// $CQ_BIN names two different things in this tree: `Common/nudge` reads it as the
+// cq command to run, and this reads it as the directory to install into. A machine
+// that set it the way nudge documents had every upgrade die inside the build script
+// at `mkdir -p /usr/local/bin/cq` — which is a file — and the server went on serving
+// the old binary while the page said it was building.
+func TestTheInstallTargetMayBeTheBinaryItself(t *testing.T) {
+	dir := checkout(t)
+	bin := t.TempDir()
+	exe := filepath.Join(bin, "cq")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &recorder{}
+	if _, err := (upgrade.Options{Source: dir, Target: exe, Run: r.run}).Upgrade(t.Context()); err != nil {
+		t.Fatalf("upgrading: %v", err)
+	}
+
+	var to string
+	for _, call := range r.calls {
+		for i, arg := range call {
+			if arg == "--to" && i+1 < len(call) {
+				to = call[i+1]
+			}
+		}
+	}
+	if to != bin {
+		t.Errorf("the build was told to install into %q, want the binary's directory %q", to, bin)
+	}
+}
+
+// A directory is still a directory, and one that does not exist yet is still where
+// the tools go: the build script creates it, which is right for a fresh machine.
+func TestTheInstallTargetIsUsedAsGivenWhenItIsADirectory(t *testing.T) {
+	dir := checkout(t)
+	for _, target := range []string{t.TempDir(), filepath.Join(t.TempDir(), "not-yet")} {
+		r := &recorder{}
+		if _, err := (upgrade.Options{Source: dir, Target: target, Run: r.run}).Upgrade(t.Context()); err != nil {
+			t.Fatalf("upgrading into %s: %v", target, err)
+		}
+		var to string
+		for _, call := range r.calls {
+			for i, arg := range call {
+				if arg == "--to" && i+1 < len(call) {
+					to = call[i+1]
+				}
+			}
+		}
+		if to != target {
+			t.Errorf("the build was told to install into %q, want %q", to, target)
+		}
+	}
+}
+
+// A supervised process inherits the supervisor's environment, not a login shell's,
+// and Go is usually installed somewhere only a login shell knows about. Without this
+// the symptom is one `go: command not found` per module inside a few hundred lines
+// of build output — a message about the tree when the problem is the PATH.
+func TestAMissingToolchainIsNamedRatherThanLeftToTheBuild(t *testing.T) {
+	dir := checkout(t)
+	r := &recorder{failAt: "go version"}
+
+	report, err := (upgrade.Options{Source: dir, Target: t.TempDir(), Run: r.run}).Upgrade(t.Context())
+	if err == nil {
+		t.Fatal("a machine with no go toolchain upgraded anyway")
+	}
+	if !strings.Contains(err.Error(), "toolchain") {
+		t.Errorf("the refusal does not name the toolchain: %v", err)
+	}
+	// The pull still happened and is still reported: it is what the checkout now is,
+	// and a report that dropped it would leave the tree in a state nothing recorded.
+	if report.After == "" && len(report.Steps) == 0 {
+		t.Error("the report says nothing about what did run")
+	}
+	for _, call := range r.calls {
+		if strings.Contains(strings.Join(call, " "), "sh/build") {
+			t.Error("the build ran despite there being nothing to build with")
+		}
+	}
+}

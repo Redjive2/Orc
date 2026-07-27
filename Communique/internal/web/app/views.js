@@ -1083,7 +1083,43 @@ export function rebuild(state, actions) {
             got.restarting
               ? h("div", { class: "muted" }, "this page will fail to reach the server until it is back")
               : null)
-        : null)),
+        : null,
+      ...builtHere(state.built))),
+  ];
+}
+
+// builtHere is how the server's own build actually went.
+//
+// The answer to the button is a promise: the build runs after the response, on a
+// goroutine that ends with the process going away. So a build that *failed* left
+// this page saying "pulling, building, and restarting" for as long as anybody
+// looked at it — indistinguishable from one still running and from a restart about
+// to happen — while the reason sat in a log on a machine you would have to log into.
+//
+// The one case nobody could see is the one case the server stays up to explain.
+function builtHere(last) {
+  if (!last) return [];
+  if (last.state === "building") {
+    return [h("p", { class: "pending" }, "the server is pulling and building…")];
+  }
+  if (last.state === "restarting") {
+    const report = last.report || {};
+    return [h("p", { class: "muted" },
+      report.changed
+        ? `built ${report.before || "?"} → ${report.after || "?"}; restarting`
+        : "nothing new to pull; rebuilt and restarting")];
+  }
+
+  const report = last.report || {};
+  return [
+    h("p", { class: "failed" }, `the build failed — the server is still on the old one`),
+    h("p", { class: "warn" }, last.error || "no reason was recorded"),
+    // The steps, because the reason is usually in the output of one of them and a
+    // summary that dropped it would send somebody to the log this exists to replace.
+    ...(report.steps || []).filter((s) => s.output || s.error).map((s) =>
+      h("details", {},
+        h("summary", { class: s.error ? "failed" : "muted" }, s.what),
+        h("pre", {}, s.output || s.error))),
   ];
 }
 

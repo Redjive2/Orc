@@ -84,13 +84,9 @@ func (o Options) Upgrade(ctx context.Context) (Report, error) {
 		return Report{}, fault.Usage{Reason: fmt.Sprintf("%s is not a git checkout, so there is nothing to pull", source)}
 	}
 
-	target := strings.TrimSpace(o.Target)
-	if target == "" {
-		exe, err := os.Executable()
-		if err != nil {
-			return Report{}, fault.IO{Op: "find", Subject: "this executable", Err: err}
-		}
-		target = filepath.Dir(exe)
+	target, err := installDir(o.Target)
+	if err != nil {
+		return Report{}, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
@@ -144,12 +140,79 @@ func (o Options) Upgrade(ctx context.Context) (Report, error) {
 		return report, fault.IO{Op: "find", Subject: script,
 			Err: fmt.Errorf("the tree has no build script, so there is nothing to run")}
 	}
+	// Before the script rather than inside it: the script reports one failure per
+	// module, so a missing toolchain arrives as nine identical build failures and
+	// reads as a broken tree.
+	if err := o.toolchain(ctx, source); err != nil {
+		report.Steps = append(report.Steps, Step{What: "go version", Error: trim(err.Error())})
+		return report, err
+	}
 	out, err := step("build", source, script, "--to", target)
 	if err != nil {
 		return report, fault.IO{Op: "build", Subject: source, Err: fmt.Errorf("%s", trim(string(out)))}
 	}
 	report.Built = built(string(out))
 	return report, nil
+}
+
+// installDir works out where the binaries go, and tolerates being handed the
+// binary instead of the directory.
+//
+// `$CQ_BIN` names two different things in this tree and always has. `Common/nudge`
+// reads it as *the cq command to run*, and this reads it as *the directory to
+// install into* — so a machine that set it the way nudge documents had every upgrade
+// die inside the build script at `mkdir -p /usr/local/bin/cq`, which is a file. The
+// server logged that it was still on the old build and the browser said it was
+// building, which is the worst possible pair.
+//
+// Both readings are now accepted, because both are already out there in shell
+// profiles and neither is wrong: a path that is an existing file is the cq binary,
+// and its directory is where the tools go. What is refused is the third case — a
+// path that exists and is neither — because guessing there would install a fleet's
+// tools somewhere nobody asked for.
+func installDir(raw string) (string, error) {
+	target := strings.TrimSpace(raw)
+	if target == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return "", fault.IO{Op: "find", Subject: "this executable", Err: err}
+		}
+		return filepath.Dir(exe), nil
+	}
+
+	got, err := os.Stat(target)
+	switch {
+	case err != nil:
+		// Not there yet. The build script creates it, which is right for a fresh
+		// machine and is what `--to` has always done.
+		return target, nil
+	case got.IsDir():
+		return target, nil
+	case got.Mode().IsRegular():
+		return filepath.Dir(target), nil
+	default:
+		return "", fault.Usage{Reason: fmt.Sprintf(
+			"$CQ_BIN is %s, which is neither a directory to install into nor a binary to "+
+				"install beside", target)}
+	}
+}
+
+// Toolchain is the first thing checked before a build, and the failure it catches is
+// the commonest one on a server.
+//
+// A supervised process inherits the supervisor's environment, not a login shell's,
+// and Go is very often installed somewhere only a login shell knows about. The
+// symptom without this check is a build script that fails per module with
+// `go: command not found` buried in a few hundred lines of step output — a message
+// about the tree when the problem is the PATH of the process reading it.
+func (o Options) toolchain(ctx context.Context, source string) error {
+	if _, err := o.run(ctx, source, "go", "version"); err != nil {
+		return fault.Usage{Reason: fmt.Sprintf(
+			"no working go toolchain on this server's PATH (%s) — a supervised process does "+
+				"not inherit a login shell's environment, so go has to be on the PATH the "+
+				"supervisor gives it", os.Getenv("PATH"))}
+	}
+	return nil
 }
 
 // built picks the tool names out of the build script's output, so the report can

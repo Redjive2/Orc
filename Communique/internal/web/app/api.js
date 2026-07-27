@@ -216,6 +216,10 @@ export const api = {
   // Rebuild and restart everything. One request: the server upgrades itself, and
   // every agent machine gets a queued action it applies on its next sync.
   upgrade: (body) => request("POST", "/api/v1/upgrade", body || {}),
+  // How the server's own last build went. The POST answers with a promise — the
+  // build happens after it, on a goroutine that ends with the process going away —
+  // so this is the only way to learn that it failed.
+  built: () => request("GET", "/api/v1/upgrade"),
 
   deleteTask: (machine, name, sub) =>
     request("DELETE", `/api/v1/tasks/${encodeURIComponent(name)}`,
