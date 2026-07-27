@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"time"
+
 	"orc/common/clock"
 	"orc/common/fault"
 	"orc/common/user"
@@ -12,6 +14,7 @@ import (
 	"orc/orc/internal/render"
 	"orc/orc/internal/store"
 	"orc/orc/internal/style"
+	"orc/orc/internal/view"
 )
 
 // status shows one identity's card, or the whole fleet.
@@ -182,6 +185,16 @@ func (a App) sessionCell(s caller, name user.Name, i model.Identity) render.Cell
 		return render.Painted("unreadable", func(p style.Palette, t string) string { return p.Dead(t) })
 
 	case live && i.Employed():
+		// A limit first, because it is the state this column got wrong. A limited
+		// session is live by every measure the store has — the child is up, the
+		// socket answers, the id is right — and it will never do anything again
+		// until somebody speaks to it. Drawing it as `● 68ab61e4` said "working" to
+		// an operator scanning a fleet, which is how seven agents sat stopped for
+		// half a day under a status screen that looked perfect.
+		if limit, hit := a.limitOf(s, name); hit {
+			return render.Painted(render.GlyphDead+" "+limitWord(limit, s.store.Now()),
+				func(p style.Palette, t string) string { return p.Warn(t) })
+		}
 		text := render.GlyphLive + " " + short(state.ID)
 		if state.Restarts > 0 {
 			text += fmt.Sprintf(" ×%d", state.Restarts)
@@ -689,4 +702,31 @@ func plural2(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+
+// limitOf reports whether a session is sitting at a usage limit.
+//
+// It is a read of the transcript and nothing else, so a status screen cannot be
+// held up by it: an unreadable or absent transcript is simply not a limit, which is
+// the same answer this gives for the overwhelming majority of sessions.
+func (a App) limitOf(s caller, who user.Name) (view.Limit, bool) {
+	feed, err := view.Load(s.store.EventsPath(who), who)
+	if err != nil {
+		return view.Limit{}, false
+	}
+	return view.ReadLimit(feed.Transcript)
+}
+
+// limitWord is the column's version of the limit: short enough for a table, and
+// still the difference between "wait" and "do something".
+func limitWord(l view.Limit, now time.Time) string {
+	switch {
+	case !l.Known():
+		return "at a limit"
+	case l.Over(now):
+		return "limit lifted"
+	default:
+		return "limit · " + l.Reset.Local().Format("15:04")
+	}
 }

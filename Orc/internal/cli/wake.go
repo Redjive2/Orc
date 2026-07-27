@@ -168,7 +168,7 @@ func (w *waker) once(verbose bool) error {
 		targets = s.fleet.Employed(s.who)
 	}
 
-	woke, stuck, quiet, dead := 0, 0, 0, 0
+	woke, stuck, quiet, dead, waiting := 0, 0, 0, 0, 0
 	for _, who := range targets {
 		// A sweep skips what it may not direct rather than failing on it: the
 		// caller asked about their fleet, and somebody else's agent being in it is
@@ -198,18 +198,20 @@ func (w *waker) once(verbose bool) error {
 			stuck++
 		case down:
 			dead++
+		case limited:
+			waiting++
 		default:
 			quiet++
 		}
 	}
 
-	if woke == 0 && stuck == 0 && dead == 0 && !verbose {
+	if woke == 0 && stuck == 0 && dead == 0 && waiting == 0 && !verbose {
 		// The loop is quiet when it has nothing to say. A cycle that printed
 		// "nothing to do" every pass is one an operator stops reading — but an agent
 		// that is not running at all is something to say.
 		return nil
 	}
-	return w.report(woke, stuck, quiet, dead, len(targets))
+	return w.report(woke, stuck, quiet, dead, waiting, len(targets))
 }
 
 // outcome is what a pass decided about one identity.
@@ -222,6 +224,13 @@ const (
 	wokeIt
 	// alreadyWoken: it was poked and has not moved since.
 	alreadyWoken
+	// limited: it is at a usage limit, and the limit has not lifted yet.
+	//
+	// Counted apart from every other outcome because it is the one silence nobody
+	// should act on. An operator who sees "3 limited" knows the fleet is fine and
+	// the clock is the thing to wait for; the same three counted as stuck would send
+	// them to `orc doctor` to look for a fault that is not there.
+	limited
 	// down: the fleet says it should be running and it is not.
 	//
 	// Not this cycle's job to fix — `tend` reconciles, and two things reconciling
@@ -273,6 +282,27 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 	if err != nil {
 		return working, err
 	}
+	// A usage limit, before anything else, because it is the one silence the rest of
+	// this cannot see.
+	//
+	// The limit lands wherever the turn happened to be — almost always straight
+	// after a tool call — so the feed ends on a PostToolUse, and a feed ending
+	// mid-tool is precisely what `silence` reads as working. The cycle skipped these
+	// on every pass, which made the fleet's one backstop blind to the single most
+	// common way a fleet stops. Seven agents sat limited for twelve hours under a
+	// waker that was running the whole time.
+	if limit, hit := view.ReadLimit(feed.Transcript); hit {
+		resume, err := w.limited(s, who, limit, state.ID)
+		if err != nil || !resume {
+			return limited, err
+		}
+		// Past its reset, so it is poked — and poked *whatever* the wake mark says.
+		// The mark records that this silence has been nudged once already, which is
+		// the right rule for an agent that will not move and the wrong one here:
+		// the reason it did not move was the limit, and the limit is over.
+		return w.poke(s, who, state.ID, "the limit lifted", limitMark(limit), 0)
+	}
+
 	last, quiet, ok := silence(feed, started, s.store.Now())
 	if !ok {
 		return working, nil
@@ -319,6 +349,16 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 		return alreadyWoken, nil
 	}
 
+	return w.poke(s, who, state.ID, "waiting "+round(quiet), last, quiet)
+}
+
+// poke sends the wake message and records it.
+//
+// `why` is what the line on screen says about the silence, and `mark` is what the
+// wake is recorded against — the two things that differ between an ordinary silence
+// and a limit that has lifted. Everything else about a wake is the same either way,
+// and one path is what keeps it that way.
+func (w *waker) poke(s caller, who user.Name, session, why, mark string, quiet time.Duration) (outcome, error) {
 	// What to say. The flag wins; otherwise the identity's own message, else its
 	// role's, else the fleet's, else `continue`.
 	message, from, err := w.messageFor(s, who)
@@ -327,7 +367,7 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 	}
 
 	if w.dry {
-		said := "waiting " + round(quiet)
+		said := why
 		if from != "" {
 			said += " · " + string(from) + "'s message"
 		}
@@ -349,8 +389,8 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 		w.app.note("%s was employed and not running, so it was started before being woken", who)
 	}
 	w.app.noteTries("waking", who, tried)
-	w.woken[who.String()] = last
-	if err := s.store.RecordWake(who, state.ID, last); err != nil {
+	w.woken[who.String()] = mark
+	if err := s.store.RecordWake(who, session, mark); err != nil {
 		// The poke has already happened. The worst an unrecorded wake costs is one
 		// extra nudge next pass, which is much cheaper than failing the cycle.
 		w.app.note("%s was woken, but the wake could not be recorded, so it may be woken again: %v", who, err)
@@ -358,7 +398,55 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 
 	return wokeIt, w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Good("woke"),
 		w.app.out.Identity(who.String()),
-		w.app.out.Muted(fmt.Sprintf("waiting %s · %s", round(quiet), quoteShort(message)))))
+		w.app.out.Muted(fmt.Sprintf("%s · %s", why, quoteShort(message)))))
+}
+
+// limited decides what to do about a session sitting at a usage limit, and reports
+// whether it should now be poked.
+//
+// Three states, and they want different things:
+//
+//   - **Not yet reset.** Nothing to do but say so. Poking it would spend the agent's
+//     next turn on a second refusal, and — worse — would record a wake, which is how
+//     the cycle decides it has already tried. The limit is not a silence to nudge; it
+//     is a clock to wait for, and saying when it lifts is the useful thing.
+//   - **Reset, and it has not moved.** Poke it. This is the case the whole change
+//     exists for.
+//   - **No reset time in the message.** Fall back to the cadence: wake it once the
+//     ordinary quiet threshold has passed since the limit, and again on the same
+//     terms after that. A poke to a still-limited session costs one refusal line;
+//     never poking costs the fleet.
+func (w *waker) limited(s caller, who user.Name, limit view.Limit, session string) (bool, error) {
+	now := s.store.Now()
+	if limit.Over(now) {
+		return true, nil
+	}
+
+	if !limit.Known() {
+		// Unknown reset: treat the limit as an ordinary silence, measured from when
+		// it was hit, and let the mark below stop it becoming a stream of nudges.
+		if quiet := now.Sub(limit.At); quiet >= w.quiet {
+			mark, marked := w.woken[who.String()]
+			if !marked {
+				mark, marked = s.store.Woken(who, session)
+			}
+			if !marked || mark != limitMark(limit) {
+				return true, nil
+			}
+		}
+	}
+
+	return false, w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Warn("limited"),
+		w.app.out.Identity(who.String()), w.app.out.Muted(limit.Says(now))))
+}
+
+// limitMark is what a wake against a limit is recorded as.
+//
+// It names the limit rather than the last event, so that the one poke this cycle
+// allows per silence is one poke *per limit*: an agent that hits a second limit
+// after being resumed from the first is a fresh silence, not the same one twice.
+func limitMark(l view.Limit) string {
+	return "limit " + l.At.Format(time.RFC3339Nano)
 }
 
 // messageFor is what to say to one agent, and where it came from.
@@ -419,17 +507,23 @@ func silence(feed view.Session, started, now time.Time) (last string, quiet time
 }
 
 // report says what the pass came to.
-func (w *waker) report(woke, stuck, quiet, dead, total int) error {
+func (w *waker) report(woke, stuck, quiet, dead, waiting, total int) error {
 	if total == 0 {
 		return w.app.say(w.app.out.Muted("nothing is employed, so nothing can be silent"))
 	}
-	if woke == 0 && stuck == 0 && dead == 0 {
+	if woke == 0 && stuck == 0 && dead == 0 && waiting == 0 {
 		return w.app.say(fmt.Sprintf("%s   %s", w.app.out.Good("all working"),
 			w.app.out.Muted(fmt.Sprintf("%d session%s, none silent for %s",
 				quiet, plural(quiet), round(w.quiet)))))
 	}
 
 	line := fmt.Sprintf("%s of %d", w.app.out.Good(fmt.Sprintf("woke %d", woke)), total)
+	// Said before the two kinds of trouble, because it is not one: an agent at its
+	// limit is a fleet working normally against a clock, and reading it next to
+	// "still silent" is what would send somebody looking for a fault.
+	if waiting > 0 {
+		line += fmt.Sprintf("   %s", w.app.out.Muted(fmt.Sprintf("%d at a usage limit", waiting)))
+	}
 	if stuck > 0 {
 		line += fmt.Sprintf("   %s", w.app.out.Warn(fmt.Sprintf("%d still silent after a wake", stuck)))
 	}

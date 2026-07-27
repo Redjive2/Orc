@@ -434,6 +434,45 @@ A session that has never said anything at all is judged from when it started: up
 an hour with no tool call is as stopped as one that finished and waited, and the more
 worrying of the two.
 
+### Usage limits
+
+An agent that hits its usage limit does not fail, does not stop, and says nothing
+Orc can see from the outside. The child process is alive, the socket answers, and
+`orc status` shows a filled circle — and the agent will never do anything again
+until somebody speaks to it.
+
+It is invisible to the two rules above, and that is the point worth understanding.
+The limit lands wherever the turn happened to be, which is almost always straight
+after a tool call, so the feed's last event is a `PostToolUse` — and a feed ending
+mid-tool is exactly what *working* looks like. The one backstop built to notice a
+fleet that has quietly stopped skipped these on every pass. In one real fleet, seven
+agents stopped at 03:10 and were still stopped twelve hours later, nine of those
+after the limit had already lifted.
+
+So the fact is read where it exists: Claude's own transcript, which carries one line
+flagged as an API error saying what happened and when it resets. `orc status` shows
+`✗ limit · 06:10` instead of a healthy circle, and `orc wake` treats it as its own
+state:
+
+- **Before the reset**, nothing is poked. A poke spends the agent's next turn on a
+  second refusal, and — worse — records a wake, which is how the cycle decides it has
+  already tried. The pass says how long is left instead. These are counted apart from
+  every other outcome: an agent at a limit is a fleet working normally against a
+  clock, and reading it beside "still silent" would send somebody looking for a fault
+  that is not there.
+- **After the reset**, it is woken — whatever the wake mark says. The mark records
+  that a silence has been nudged once already, which is the right rule for an agent
+  that will not move and the wrong one here: the reason it did not move was the
+  limit, and the limit is over.
+- **When the message does not name a reset time**, it falls back to the ordinary
+  cadence, measured from when the limit was hit. A poke to a still-limited session
+  costs one refusal line; never poking costs the fleet.
+
+A limit is only current if it is the *last* thing in the transcript. Anything the
+agent or the operator said afterwards means the session moved on, and a limit that
+has been moved on from is history — otherwise an agent that recovered would be
+reported as stopped for the rest of its life.
+
 The cycle's memory lives in the running process, not the store — a wake is a fact
 about this cycle's last pass rather than about the fleet, so a restarted cycle looks
 at a quiet fleet with fresh eyes.
@@ -443,6 +482,27 @@ costing budget on the worklist, and running nothing is a louder kind of stopped 
 silence, and a cycle that said "all working" over it would be answering the wrong
 question. `orc tend` is what starts it, and `orc wake --tend` makes the cycle do it
 — for the machine where a cron entry running `wake` is the only thing there is.
+
+### The first thing a session is told
+
+A Claude session that nobody has spoken to does nothing. `employ` and `refresh` pass
+the composed standing instructions as `--append-system-prompt`, and a session with no
+user turn has no occasion to act on any of them — it sits at its prompt until the
+wake cycle calls that silence, which is however long `--after` is.
+
+So both verbs speak to the session they start, and what they say is the **wake
+message**: the identity's, else its role's, else the fleet's, else `continue`. The
+same override chain deliberately — a fleet that has written what to tell an idle
+agent has already written this, and a second setting to keep in step with the first
+would be a second thing to get wrong.
+
+A message that could not be delivered is reported and does not fail the command. The
+session is up, which is what was asked for, and an agent nobody has spoken to has
+said nothing — which is exactly what the wake cycle looks for.
+
+`tend` is unchanged: it resumes a conversation that was already going, and speaks
+only to a session whose predecessor stopped part-way through a turn. There is
+nothing to begin.
 
 ### Reaching a session that is not ready
 

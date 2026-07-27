@@ -274,3 +274,135 @@ func TestWakeMessage(t *testing.T) {
 		t.Fatalf("nothing was woken:\n%s", got.stdout)
 	}
 }
+
+// --- agents stopped at a usage limit --------------------------------------
+
+// The silence the cycle could not see.
+//
+// A limit lands wherever the turn happened to be, which is almost always straight
+// after a tool call — so the feed ends on a tool event, and a feed ending on a tool
+// event is exactly what `silence` reads as working. Every pass skipped these. Seven
+// agents in one real fleet stopped at 03:10 and were still stopped twelve hours
+// later, under a waker that was running the whole time.
+
+// limitedFeed writes a feed that ends mid-tool — the shape a limit leaves — and the
+// transcript it points at.
+func limitedFeed(t *testing.T, r *rig, who, resets string, minutesAgo int) {
+	t.Helper()
+
+	dir := filepath.Join(r.root, "identities", who, "session")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "transcript.jsonl")
+
+	at := epoch.Add(-time.Duration(minutesAgo) * time.Minute).UTC()
+	line := fmt.Sprintf(`{"type":"assistant","timestamp":%q,"isApiErrorMessage":true,`+
+		`"message":{"role":"assistant","content":[{"type":"text",`+
+		`"text":"You've hit your session limit · resets %s"}]}}`,
+		at.Format(time.RFC3339Nano), resets)
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The feed: a session start carrying the transcript, then a tool call. Nothing
+	// in it says anything about a limit — that is the point.
+	start := fmt.Sprintf(`{"at":%q,"session":"s","event":"SessionStart","transcript":%q}`,
+		epoch.Add(-time.Duration(minutesAgo+5)*time.Minute).UTC().Format("2006-01-02T15:04:05.000Z"), path)
+	body := start + "\n" + ago(minutesAgo, "PreToolUse", "Bash", "go build ./...") + "\n" +
+		ago(minutesAgo, "PostToolUse", "Bash", "") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The bug, stated as a test: an agent stopped at a limit whose reset has passed is
+// woken. Before this it was read as mid-tool and skipped forever.
+func TestWakeResumesAnAgentWhoseLimitHasLifted(t *testing.T) {
+	r := wakeable(t)
+	// Hit at 10:00, resetting at 11:00: an hour before the clock this rig runs on.
+	limitedFeed(t, r, "ember", "11:00 (UTC)", 120)
+
+	got := r.ok("boss", "wake", "--dry-run")
+	if !strings.Contains(got.stdout, "would wake") {
+		t.Errorf("an agent whose limit lifted was left stopped:\n%s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, "limit lifted") {
+		t.Errorf("the wake does not say why it was woken:\n%s", got.stdout)
+	}
+}
+
+// Before the reset there is nothing to do but say so. Poking would spend the
+// agent's next turn on a second refusal — and would record a wake, which is how the
+// cycle decides it has already tried.
+func TestWakeWaitsForTheLimitToLift(t *testing.T) {
+	r := wakeable(t)
+	// Hit ten minutes ago, resetting in fifty: still limited.
+	limitedFeed(t, r, "ember", "12:50 (UTC)", 10)
+
+	got := r.ok("boss", "wake", "--dry-run")
+	if strings.Contains(got.stdout, "would wake") {
+		t.Errorf("an agent still at its limit was poked, which spends its next turn on "+
+			"another refusal:\n%s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, "limited") {
+		t.Errorf("the pass does not say the agent is at a limit:\n%s", got.stdout)
+	}
+	// And it is not counted with the fleet that is fine. "all working" over a
+	// stopped agent is the report that let this go unnoticed for twelve hours.
+	if strings.Contains(got.stdout, "all working") {
+		t.Errorf("an agent at a limit was reported as working:\n%s", got.stdout)
+	}
+}
+
+// It says when, because "limited" without a time is a fact nobody can plan around.
+func TestWakeSaysWhenTheLimitLifts(t *testing.T) {
+	r := wakeable(t)
+	limitedFeed(t, r, "ember", "12:50 (UTC)", 10)
+
+	got := r.ok("boss", "wake", "--dry-run")
+	if !strings.Contains(got.stdout, "for another") || !strings.Contains(got.stdout, "m") {
+		t.Errorf("it does not say how long is left:\n%s", got.stdout)
+	}
+}
+
+// A limit is not a silence that has been nudged. The cycle pokes each silence once
+// and then reports it stuck — the right rule for an agent that will not move, and
+// the wrong one here, because the reason it did not move was the limit and the
+// limit is over.
+func TestALimitThatLiftsIsWokenEvenAfterAnEarlierWake(t *testing.T) {
+	r := wakeable(t)
+	feed(t, r, "ember", ago(40, "Stop", "", ""))
+	// An ordinary wake first, which records a mark.
+	r.ok("boss", "wake")
+
+	limitedFeed(t, r, "ember", "11:00 (UTC)", 120)
+	got := r.ok("boss", "wake", "--dry-run")
+	if !strings.Contains(got.stdout, "would wake") {
+		t.Errorf("the earlier wake suppressed the one that resumes it:\n%s", got.stdout)
+	}
+}
+
+// And a limit already recovered from is not a limit. An agent that was woken and
+// worked on must not be reported as stopped for the rest of its life.
+func TestAnAgentThatRecoveredIsNotStillLimited(t *testing.T) {
+	r := wakeable(t)
+	limitedFeed(t, r, "ember", "11:00 (UTC)", 120)
+
+	// It carried on: the transcript's last word is the assistant's, not the error.
+	path := filepath.Join(r.root, "identities", "ember", "session", "transcript.jsonl")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	more := string(body) + `{"type":"assistant","timestamp":"2026-07-25T11:59:00Z",` +
+		`"message":{"role":"assistant","content":[{"type":"text","text":"back to it"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(more), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := r.ok("boss", "wake", "--dry-run")
+	if strings.Contains(got.stdout, "limit") {
+		t.Errorf("an agent that recovered is still called limited:\n%s", got.stdout)
+	}
+}
