@@ -363,13 +363,42 @@ func TestTheShellIsShutByDefault(t *testing.T) {
 	}
 	for _, command := range []string{
 		"ls",
-		"anno write Anno/internal/tree.go",
 		"sed -i s/a/b/ " + ws + "/Common/user/user.go",
 		"curl https://example.com",
+		// The toolkit runs without a shell clause, but the parts that do not check
+		// their caller still need one.
+		"orc bootstrap",
+		"orc env ember",
+		"mailman admin mail",
 	} {
 		if out := bash(command); out.Code != hook.CodeBlock {
 			t.Errorf("%q ran with no shell permission:\n%s", command, out.Stderr)
 		}
+	}
+
+	// The toolkit itself runs: an agent that cannot ask what it may do has to guess,
+	// and `orc introspect` is the command that answers it.
+	for _, command := range []string{
+		"orc introspect",
+		"muff pool",
+		"mailman inbox",
+	} {
+		if out := bash(command); out.Code != hook.CodeOK {
+			t.Errorf("%q was blocked with no shell permission:\n%s", command, out.Stderr)
+		}
+	}
+
+	// And what the file-reading tools are pointed at is still decided by the
+	// clauses, which is what keeps them off the `cat` objection: ember may write
+	// Anno/internal/** and nothing else.
+	if out := bash("anno write Anno/internal/tree.go"); out.Code != hook.CodeOK {
+		t.Errorf("anno write inside the write clause was blocked:\n%s", out.Stderr)
+	}
+	if out := bash("anno write Communique/internal/web/app.js"); out.Code != hook.CodeBlock {
+		t.Errorf("anno write outside every write clause ran:\n%s", out.Stderr)
+	}
+	if out := bash("anno read " + ws + "/Common/user/user.go"); out.Code != hook.CodeBlock {
+		t.Errorf("anno read outside every read clause ran:\n%s", out.Stderr)
 	}
 
 	// The refusal names the command rather than the line, and says what to ask for.

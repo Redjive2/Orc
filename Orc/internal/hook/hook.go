@@ -476,6 +476,19 @@ func (p payload) targets() ([]string, model.Kind) {
 		if paths := annoWrites(p.ToolInput.Command); len(paths) > 0 {
 			return paths, model.KindWrite
 		}
+		// The tools that read a file by name, checked against read clauses for the
+		// same reason `anno write` is checked against write ones: they are how an
+		// agent reaches the filesystem on purpose, so the clause that was supposed
+		// to decide it should get to.
+		//
+		// This is what lets them be run without a `shell` clause at all. A reader
+		// that no clause governed would be a second path to what `read(...)` decides
+		// — the objection that keeps `cat` off the default list — and these are not
+		// that, because the path is right there in the command line where it can be
+		// checked.
+		if paths := toolReads(p.ToolInput.Command); len(paths) > 0 {
+			return paths, model.KindRead
+		}
 		if paths := storeMentions(p.ToolInput.Command); len(paths) > 0 {
 			return paths, model.KindRead
 		}
@@ -504,6 +517,54 @@ func annoWrites(command string) []string {
 		if target := unquote(fields[2]); !strings.HasPrefix(target, "-") {
 			out = append(out, target)
 		}
+	}
+	return out
+}
+
+// toolReads finds the files an Orc tool has been asked to read.
+//
+// Two shapes, because there are two tools that take a path and read it:
+//
+//	anno read <path>     anno's whole purpose, and its `index` and `blocks` too
+//	dock <path>          documentation by name
+//
+// Only the shapes that name a path. `anno index` with no argument reads nothing an
+// agent could have chosen, and a form this does not recognise falls through to the
+// same place every other shell command does — which Plan.md §7.5 already says is a
+// hole rather than a guarantee.
+func toolReads(command string) []string {
+	var out []string
+	for _, segment := range splitCommands(command) {
+		fields := strings.Fields(segment)
+		for len(fields) > 1 && (fields[0] == "cd" || fields[0] == "sudo" || fields[0] == "env") {
+			fields = fields[2:]
+		}
+		if len(fields) < 2 {
+			continue
+		}
+
+		var target string
+		switch filepath.Base(fields[0]) {
+		case "anno":
+			// `anno <verb> <path>`, for the verbs that take one.
+			if len(fields) < 3 {
+				continue
+			}
+			switch fields[1] {
+			case "read", "index", "blocks", "show":
+				target = unquote(fields[2])
+			}
+		case "dock":
+			// `dock <path>`, and `dock read <path>`.
+			target = unquote(fields[1])
+			if target == "read" && len(fields) > 2 {
+				target = unquote(fields[2])
+			}
+		}
+		if target == "" || strings.HasPrefix(target, "-") {
+			continue
+		}
+		out = append(out, target)
 	}
 	return out
 }

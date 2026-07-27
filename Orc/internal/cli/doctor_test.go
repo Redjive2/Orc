@@ -425,3 +425,42 @@ func TestDoctorReportsWorkspaceDrift(t *testing.T) {
 func asBoss(r *rig) map[string]string {
 	return map[string]string{"ORC_USER": "boss", "ORC_KEY": r.keys["boss"]}
 }
+
+// TestDoctorSaysWhetherASessionCanAuthenticate.
+//
+// A session with no credential does not crash: it opens a *login prompt*, and a login
+// prompt on a pty nobody is attached to is an agent that sits there for ever —
+// employed, running, and doing nothing. `orc status` calls it live, because it is.
+func TestDoctorReportsTheSessionCredential(t *testing.T) {
+	withHook(t)
+	r := newRig(t)
+	r.bootstrap("root")
+
+	// Nothing set: it says it cannot tell from here, and names what to run. Not
+	// "absent" — a subscription login in the keychain is the commonest case and is
+	// perfectly good; claiming it is missing would be crying wolf on a healthy fleet.
+	got := doctored(t, r, nil, "doctor")
+	if !strings.Contains(squeezed(got.stdout), "a session can authenticate") {
+		t.Fatalf("the check is not listed:\n%s", got.stdout)
+	}
+	if !strings.Contains(squeezed(got.stdout), "claude setup-token") {
+		t.Errorf("it does not say what to run when agents stop at a login:\n%s", got.stdout)
+	}
+
+	// With a token set, it says which credential a session would use — the fact an
+	// operator actually needs when a fleet will not authenticate.
+	got = doctored(t, r, map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-whatever"}, "doctor")
+	if !strings.Contains(squeezed(got.stdout), "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("it does not name the credential in force:\n%s", got.stdout)
+	}
+
+	// Claude's own precedence, so what is named is what would actually be used
+	// rather than the first thing orc happened to find.
+	got = doctored(t, r, map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-whatever",
+		"CLAUDE_CODE_USE_BEDROCK": "1",
+	}, "doctor")
+	if !strings.Contains(got.stdout, "Bedrock") {
+		t.Errorf("a cloud provider should outrank a token:\n%s", got.stdout)
+	}
+}

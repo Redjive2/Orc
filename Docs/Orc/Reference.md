@@ -163,6 +163,49 @@ agent, so without it their answer was lost rather than inherited.
 auto-denies any tool no allow rule covers, and Orc's allow list names no `Bash`,
 so agents would be refused every command they ran.
 
+### What an agent may run without a clause
+
+`shell` is deny by default, so the default set is the whole of what an
+unprivileged agent can do at a prompt. It is the Orc toolkit plus a handful of
+commands that cannot do anything:
+
+```
+anno  basename  dirname  dock  echo  false  mailman  muff  orc  printf  pwd  true
+```
+
+Each tool earns its place one of two ways. `orc`, `muff` and `mailman`
+**authenticate every command against the caller's own key** and then apply their
+own rules — `orc` refuses a verb the caller may not run, `muff` refuses a task it
+does not own — so a `shell(orc)` clause would narrow nothing they have not
+already decided. Without them a new agent cannot run `orc introspect`, which is
+the command that tells it what it may do.
+
+`anno` and `dock` earn it differently: they **name the file they are about**, so
+the hook checks it against the identity's read and write clauses exactly as it
+would a Read or an Edit. That is what keeps them off the same objection that
+keeps `cat` out — a reader no clause governed would be a second path to what
+`read(...)` decides.
+
+The parts that do not check their caller still need a clause: `mailman admin`,
+which bootstraps a store and can hand over the whole fleet's mail; `orc
+bootstrap`, which runs before there is an identity; and `orc env`, which prints
+a key.
+
+### Authenticating an unattended session
+
+A session with no credential does not fail — it opens a **login prompt**, and a
+login prompt on a pty nobody is attached to is an agent that sits there for ever,
+employed and running and doing nothing.
+
+Sessions inherit the real `HOME`, so a subscription login in the keychain
+reaches them. For a fleet that should not depend on one, `claude setup-token`
+mints a long-lived token for exactly this case, and `$CLAUDE_CODE_OAUTH_TOKEN`
+now reaches every session — along with `$ANTHROPIC_AUTH_TOKEN`, the Bedrock,
+Vertex and Foundry switches, and their region settings.
+
+`orc doctor` reports which credential a session would use, in Claude's own
+precedence order, and says what to run when it cannot tell.
+
 ### Coming back from a stop
 
 The supervisor restarts a session five times with a backoff, then gives up and

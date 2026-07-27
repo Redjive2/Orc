@@ -65,12 +65,12 @@ const (
 // by hand after reading a board.
 func (a App) wake(args []string) error {
 	var quietFor, every, message string
-	var dry bool
+	var dry, tend bool
 	rest, err := flagged(args, options{
 		values: map[string]*string{
 			"--after": &quietFor, "--every": &every, "--message": &message,
 		},
-		switches: map[string]*bool{"--dry-run": &dry},
+		switches: map[string]*bool{"--dry-run": &dry, "--tend": &tend},
 	})
 	if err != nil {
 		return err
@@ -112,7 +112,8 @@ func (a App) wake(args []string) error {
 		names = append(names, who)
 	}
 
-	cycle := &waker{app: a, quiet: quiet, message: text, dry: dry, names: names, woken: map[string]string{}}
+	cycle := &waker{app: a, quiet: quiet, message: text, dry: dry, tend: tend,
+		names: names, woken: map[string]string{}}
 
 	if strings.TrimSpace(every) == "" {
 		return cycle.once(true)
@@ -143,6 +144,7 @@ type waker struct {
 	quiet   time.Duration
 	message string
 	dry     bool
+	tend    bool
 	names   []user.Name
 
 	// woken maps an identity to the last event it had when it was poked. A session
@@ -166,7 +168,7 @@ func (w *waker) once(verbose bool) error {
 		targets = s.fleet.Employed(s.who)
 	}
 
-	woke, stuck, quiet := 0, 0, 0
+	woke, stuck, quiet, dead := 0, 0, 0, 0
 	for _, who := range targets {
 		// A sweep skips what it may not direct rather than failing on it: the
 		// caller asked about their fleet, and somebody else's agent being in it is
@@ -181,8 +183,12 @@ func (w *waker) once(verbose bool) error {
 		got, err := w.consider(s, who)
 		if err != nil {
 			// One unreadable session is not a reason to stop waking the rest: a
-			// fleet with one broken agent should still be kept moving.
+			// fleet with one broken agent should still be kept moving. It is counted
+			// as not-running rather than dropped, so the summary's numbers add up to
+			// the fleet and a pass that could reach nobody does not read as a fleet
+			// where everybody is fine.
 			w.app.note("%s could not be checked: %v", who, err)
+			dead++
 			continue
 		}
 		switch got {
@@ -190,17 +196,20 @@ func (w *waker) once(verbose bool) error {
 			woke++
 		case alreadyWoken:
 			stuck++
+		case down:
+			dead++
 		default:
 			quiet++
 		}
 	}
 
-	if woke == 0 && stuck == 0 && !verbose {
+	if woke == 0 && stuck == 0 && dead == 0 && !verbose {
 		// The loop is quiet when it has nothing to say. A cycle that printed
-		// "nothing to do" every pass is one an operator stops reading.
+		// "nothing to do" every pass is one an operator stops reading — but an agent
+		// that is not running at all is something to say.
 		return nil
 	}
-	return w.report(woke, stuck, quiet, len(targets))
+	return w.report(woke, stuck, quiet, dead, len(targets))
 }
 
 // outcome is what a pass decided about one identity.
@@ -213,6 +222,14 @@ const (
 	wokeIt
 	// alreadyWoken: it was poked and has not moved since.
 	alreadyWoken
+	// down: the fleet says it should be running and it is not.
+	//
+	// Not this cycle's job to fix — `tend` reconciles, and two things reconciling
+	// one fleet is how a fleet gets two answers — but very much its job to *say*.
+	// A cycle whose whole purpose is "nothing has quietly stopped" that stayed
+	// silent about an agent which is not running at all would be reporting on the
+	// least important kind of silence and hiding the worst.
+	down
 )
 
 // consider decides about one identity, and wakes it if it should.
@@ -222,9 +239,29 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 		return working, err
 	}
 	if !live {
-		// Not this cycle's business. A session that should be running and is not is
-		// `tend`'s job, and doing it here would be two things reconciling one fleet.
-		return working, nil
+		// `tend` is what starts it; this says so rather than passing over it. With
+		// --tend the cycle brings it up itself, for the machine where the wake cron
+		// entry is the only thing running.
+		if !revivable(s, who) {
+			return working, nil
+		}
+		if !w.tend {
+			return down, w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Warn("not running"),
+				w.app.out.Identity(who.String()),
+				w.app.out.Muted("employed with no session — `orc tend` starts it, or wake --tend")))
+		}
+		if w.dry {
+			return down, w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Muted("would start"),
+				w.app.out.Identity(who.String()), w.app.out.Muted("employed with no session")))
+		}
+		if err := w.app.tendOne(s, who); err != nil {
+			return down, err
+		}
+		// Started, and that is the state this pass was after: an agent that has just
+		// been given a fresh session is not a quiet one, and poking it on top of
+		// the nudge `tend` may already have sent would be two messages for one gap.
+		return down, w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Good("started"),
+			w.app.out.Identity(who.String()), w.app.out.Muted("it was employed with no session")))
 	}
 
 	feed, err := view.Load(s.store.EventsPath(who), who)
@@ -301,13 +338,17 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 		return wokeIt, nil
 	}
 
-	client, err := w.app.dial(s, who)
+	// Retried across the window where a restarting supervisor has no socket. A
+	// cycle that runs every ten minutes and gave up on a millisecond of silence
+	// would leave an agent stopped for ten minutes over a blip.
+	revived, tried, err := w.app.tell(s, who, message)
 	if err != nil {
-		return working, err
+		return working, unreached(who, tried, err)
 	}
-	if err := client.Poke(message); err != nil {
-		return working, err
+	if revived {
+		w.app.note("%s was employed and not running, so it was started before being woken", who)
 	}
+	w.app.noteTries("waking", who, tried)
 	w.woken[who.String()] = last
 	if err := s.store.RecordWake(who, state.ID, last); err != nil {
 		// The poke has already happened. The worst an unrecorded wake costs is one
@@ -378,11 +419,11 @@ func silence(feed view.Session, started, now time.Time) (last string, quiet time
 }
 
 // report says what the pass came to.
-func (w *waker) report(woke, stuck, quiet, total int) error {
+func (w *waker) report(woke, stuck, quiet, dead, total int) error {
 	if total == 0 {
 		return w.app.say(w.app.out.Muted("nothing is employed, so nothing can be silent"))
 	}
-	if woke == 0 && stuck == 0 {
+	if woke == 0 && stuck == 0 && dead == 0 {
 		return w.app.say(fmt.Sprintf("%s   %s", w.app.out.Good("all working"),
 			w.app.out.Muted(fmt.Sprintf("%d session%s, none silent for %s",
 				quiet, plural(quiet), round(w.quiet)))))
@@ -391,6 +432,15 @@ func (w *waker) report(woke, stuck, quiet, total int) error {
 	line := fmt.Sprintf("%s of %d", w.app.out.Good(fmt.Sprintf("woke %d", woke)), total)
 	if stuck > 0 {
 		line += fmt.Sprintf("   %s", w.app.out.Warn(fmt.Sprintf("%d still silent after a wake", stuck)))
+	}
+	// Not running is worse than silent and is said last, where a reader's eye
+	// finishes: a woken fleet with one agent down is not a healthy fleet.
+	if dead > 0 {
+		what := "not running"
+		if w.tend {
+			what = "started"
+		}
+		line += fmt.Sprintf("   %s", w.app.out.Warn(fmt.Sprintf("%d %s", dead, what)))
 	}
 	return w.app.say(line)
 }

@@ -392,6 +392,17 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 
 		switch {
 		case who.Employed() && !live:
+			// A start that keeps failing is tried again on a widening interval
+			// rather than on every command. See store/attempts.go: the point is to
+			// keep trying forever without forking a doomed supervisor every time
+			// somebody types `orc status`.
+			if due, left, got := s.store.StartDue(name); !due {
+				if verbose {
+					a.note("%s has failed to start %d time%s; the next attempt is in %s (%s)",
+						name, got.Failures, plural(got.Failures), round(left), got.Why)
+				}
+				continue
+			}
 			m, e := who.Model(), who.Effort()
 			if !m.Valid() {
 				m = model.DefaultModel
@@ -427,8 +438,18 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 				// One identity failing to populate is not a reason to stop tending the
 				// others: a fleet with one broken agent should still come up.
 				a.note("%s could not be populated: %v", name, err)
+				if err := s.store.RecordFailedStart(name, err.Error()); err != nil {
+					// The backoff is an optimisation over trying constantly, so a
+					// record that will not write costs the pacing and not the retry.
+					a.note("%s: the failed start could not be recorded: %v", name, err)
+				}
 				acted++
 				continue
+			}
+			// It came up, so whatever was wrong is over and the next failure starts
+			// counting from one again.
+			if err := s.store.ClearFailedStarts(name); err != nil {
+				a.note("%s: the start record could not be cleared: %v", name, err)
 			}
 			acted++
 			what := "populated"
@@ -497,11 +518,12 @@ func (a App) nudgeIfInterrupted(s caller, name user.Name) error {
 		return nil
 	}
 
-	// The session has only just been asked to start; its socket may not be there
-	// yet. This is a nudge rather than a command, so a failure to deliver is worth
-	// saying and not worth failing the tend for — the wake cycle is the backstop
-	// behind this one.
-	client, err := a.dial(s, name)
+	// The session has only just been asked to start, so its socket is very likely
+	// not there yet — this is the widest instance of that window in the tool, since
+	// the poke follows the populate by milliseconds. Retried rather than abandoned,
+	// and a failure is still worth saying and not worth failing the tend for: the
+	// wake cycle is the backstop behind this one.
+	client, _, err := a.reach(s, name)
 	if err != nil {
 		return err
 	}
@@ -509,7 +531,7 @@ func (a App) nudgeIfInterrupted(s caller, name user.Name) error {
 	if err != nil || strings.TrimSpace(message) == "" {
 		message = WakeMessage
 	}
-	if err := client.Poke(message); err != nil {
+	if _, err := keepTrying(func() error { return client.Poke(message) }); err != nil {
 		return err
 	}
 	return a.say("  " + a.out.Muted(fmt.Sprintf(
@@ -645,13 +667,19 @@ func (a App) poke(args []string) error {
 		return err
 	}
 
-	client, err := a.dial(s, who)
+	// Delivered rather than refused. A session that is coming up has state before it
+	// has a socket, a restarting one has no socket for a moment, and an employed
+	// identity that is not running is a fleet disagreeing with itself — none of
+	// those are reasons to tell somebody to go and run a different command. See
+	// deliver.go.
+	started, tried, err := a.tell(s, who, message)
 	if err != nil {
-		return err
+		return unreached(who, tried, err)
 	}
-	if err := client.Poke(message); err != nil {
-		return err
+	if started {
+		a.note("%s was employed and not running, so it was started first", who)
 	}
+	a.noteTries("poking", who, tried)
 	return a.say(fmt.Sprintf("%s %s   %s", a.out.Good("poked"),
 		a.out.Identity(who.String()), a.out.Muted(quoteShort(message))))
 }

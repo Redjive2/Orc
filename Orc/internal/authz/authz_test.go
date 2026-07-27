@@ -633,3 +633,47 @@ func mustName(t *testing.T, raw string) model.Name {
 	}
 	return n
 }
+
+// The order of a subtree is the shape of the tree, because that is what draws it.
+//
+// `orc status` and `orc list` indent each row by its depth and nothing else, so a
+// grandchild is understood to belong to whichever row precedes it. Breadth-first
+// order — every child, then every grandchild — put nib under ember when nib works
+// for atlas, and a fleet listing that misreports who reports to whom is wrong about
+// the one thing it exists to show.
+func TestASubtreeIsDepthFirst(t *testing.T) {
+	f := newBuild(t).
+		id("boss", "", "").
+		id("atlas", "boss", "").
+		id("ember", "boss", "").
+		id("nib", "atlas", "").
+		id("quill", "ember", "").
+		must()
+
+	want := []string{"boss", "atlas", "nib", "ember", "quill"}
+	got := user.Names(f.Subtree(mustUser(t, "boss")))
+	if len(got) != len(want) {
+		t.Fatalf("subtree is %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("subtree is %v, want %v", got, want)
+		}
+	}
+
+	// The property behind the order: everybody follows their own boss, with only
+	// their boss's branch in between.
+	at := map[string]int{}
+	for i, name := range got {
+		at[name] = i
+	}
+	for _, name := range got[1:] {
+		who, err := f.Identity(mustUser(t, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at[who.Boss().String()] >= at[name] {
+			t.Errorf("%s is drawn before its boss %s", name, who.Boss())
+		}
+	}
+}

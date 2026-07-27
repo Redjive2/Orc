@@ -211,6 +211,7 @@ func (a App) guards(s caller) []check {
 	out = append(out, a.compiledSettings(s))
 	out = append(out, a.strayClaudes(s))
 	out = append(out, a.workspaceDrift(s))
+	out = append(out, a.sessionCredential())
 	return out
 }
 
@@ -374,6 +375,45 @@ func denies(rules []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// credential reports whether a session Orc starts can authenticate at all.
+//
+// This is the guard for the failure that looks like nothing: a session with no
+// credential does not crash, it opens a *login prompt* — and a login prompt on a pty
+// nobody is attached to is an agent that sits there for ever, employed, running, and
+// doing nothing. `orc status` calls it live because it is.
+//
+// The order below is Claude's own precedence, so what this names is what a session
+// would actually use rather than the first thing Orc happens to find.
+//
+// A subscription login is the case Orc cannot check from here. It lives in the
+// macOS keychain — or `~/.claude/.credentials.json` elsewhere — reached through the
+// real HOME a session inherits, and reading it to find out would be Orc handling
+// somebody's credential to answer a question about it. So it is reported as
+// "cannot say from here", with what to run, rather than guessed at in either
+// direction.
+func (a App) sessionCredential() check {
+	const guard = "a session can authenticate"
+
+	for _, named := range []struct{ env, what string }{
+		{"CLAUDE_CODE_USE_BEDROCK", "Amazon Bedrock"},
+		{"CLAUDE_CODE_USE_VERTEX", "Google Cloud"},
+		{"CLAUDE_CODE_USE_FOUNDRY", "Microsoft Foundry"},
+		{"ANTHROPIC_AUTH_TOKEN", "$ANTHROPIC_AUTH_TOKEN"},
+		{"ANTHROPIC_API_KEY", "$ANTHROPIC_API_KEY"},
+		{"CLAUDE_CODE_OAUTH_TOKEN", "$CLAUDE_CODE_OAUTH_TOKEN, from `claude setup-token`"},
+	} {
+		if v, ok := a.Env(named.env); ok && strings.TrimSpace(v) != "" {
+			return check{guard: guard, state: inForce,
+				detail: "sessions inherit " + named.what}
+		}
+	}
+
+	return check{guard: guard, state: unchecked, detail: "no credential is in orc's environment, so a " +
+		"session falls back to the subscription login in the keychain — which orc cannot read from here. " +
+		"if agents stop at a login prompt, `claude setup-token` mints a token for exactly this and " +
+		"$CLAUDE_CODE_OAUTH_TOKEN reaches every session"}
 }
 
 // workspaceDrift reports sessions working somewhere their identity no longer says.

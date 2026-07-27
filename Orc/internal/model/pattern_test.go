@@ -199,12 +199,36 @@ func TestEveryGuardedCommandIsADefaultOne(t *testing.T) {
 			t.Errorf("%s is guarded but bare %s is not allowed", name, name)
 		}
 	}
-	// The other direction: nothing is guarded that is not on the list. There is no
-	// way to enumerate the map from outside, so this checks the names a fleet
-	// might plausibly hold and the one that exists.
-	for _, name := range []string{"ls", "rm", "curl", "git", "anno", "orc", "cq"} {
+	// The other direction: nothing is guarded that is not on the list. A guard on a
+	// command nobody may run anyway would make the refusal lie — it would name a
+	// subcommand as the problem when the whole command needed a clause.
+	for _, name := range []string{"ls", "rm", "curl", "git", "cq", "sed"} {
 		if sub := model.GuardedSubcommand(name); sub != "" {
 			t.Errorf("%s is guarded but is not on the default list, so its refusal would lie", name)
+		}
+	}
+
+	// And the seams themselves: the parts of a default command that do not check
+	// their caller still need a clause. Bare `orc` authenticates and authorises
+	// every verb; `orc bootstrap` runs before there is an identity to check, and
+	// `orc env` prints a key.
+	for _, tc := range []struct {
+		name string
+		args []string
+		ok   bool
+	}{
+		{"orc", []string{"introspect"}, true},
+		{"orc", []string{"status"}, true},
+		{"orc", []string{"bootstrap"}, false},
+		{"orc", []string{"env", "ember"}, false},
+		{"muff", []string{"pool"}, true},
+		{"anno", []string{"read", "x.go"}, true},
+		{"dock", []string{"Docs/Orc"}, true},
+		{"mailman", []string{"inbox"}, true},
+		{"mailman", []string{"admin", "mail"}, false},
+	} {
+		if got := model.InnocuousRun(tc.name, tc.args); got != tc.ok {
+			t.Errorf("%s %v allowed=%v, want %v", tc.name, tc.args, got, tc.ok)
 		}
 	}
 }

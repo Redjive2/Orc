@@ -132,10 +132,31 @@ func KnownTool(word string) bool {
 // fleet where that needs a grant is a fleet where a new identity is deaf until
 // somebody notices.
 //
-// The exception is `mailman admin`, which is the one part that does *not*
-// authenticate — it has to be able to bootstrap a store with no identities in it
-// — and which can hand its caller the whole fleet's mail. It is guarded below, so
-// running it needs a clause like anything else.
+// **The rest of the toolkit is on the list for the same reason.** `orc` and `muff`
+// authenticate every command against `$ORC_USER`/`$ORC_KEY` and then apply their own
+// rules to it: `orc` refuses a verb the caller may not run and an identity it does
+// not control, `muff` refuses a task the caller does not own. A `shell(orc)` clause
+// would narrow nothing they have not already decided — and without them a new agent
+// cannot run `orc introspect`, which is the command that tells it what it may do.
+// An agent that cannot ask what it is allowed to do is one that has to guess.
+//
+// `anno` and `dock` earn it a third way: they name the file they are about, right
+// there in the command line, so the hook checks it against the identity's read and
+// write clauses exactly as it would a Read or an Edit — see toolReads and annoWrites
+// in the hook. That is what keeps them off the `cat` objection below. They are the
+// token-efficient way to read a tree, and requiring a shell clause to run them while
+// `read(**)` was already granted was the gate refusing something the clauses had
+// already allowed.
+//
+// The exceptions are the parts that do *not* authenticate, guarded below so that
+// running them needs a clause like anything else:
+//
+//   - `mailman admin`, which bootstraps a store with no identities in it and can
+//     hand its caller the whole fleet's mail;
+//   - `orc bootstrap`, which is the one orc command that runs without an identity
+//     because it is what makes one;
+//   - `orc env`, which prints an identity's key — `orc help env` says so in as many
+//     words. Reading it for somebody else is how a fleet loses its keyring.
 //
 // And the near misses, because the reasons are the interesting part:
 //
@@ -148,24 +169,42 @@ func KnownTool(word string) bool {
 //   - `sleep` cannot change anything and is still absent: it spends the one
 //     resource a budget is denominated in.
 func Innocuous() []string {
-	return []string{"basename", "dirname", "echo", "false", "mailman", "printf", "pwd", "true"}
+	return []string{
+		"anno", "basename", "dirname", "dock", "echo", "false",
+		"mailman", "muff", "orc", "printf", "pwd", "true",
+	}
 }
 
-// guarded names the subcommand of a default command that the default does not
+// guarded names the subcommands of a default command that the default does not
 // reach, keyed by command.
 //
-// One entry, and a map rather than an `if` because the shape recurs: a tool earns
-// its place on the list by checking its own caller, and the part of it that
-// provisions the tool cannot check anything. Whatever is added next will have the
-// same seam in the same place.
-var guarded = map[string]string{"mailman": "admin"}
+// The shape recurs, which is why it is a table: a tool earns its place on the list
+// by checking its own caller, and the parts of it that *cannot* check anything are
+// the ones that provision the tool or hand out its credentials. Whatever is added
+// next will have the same seam in the same place.
+var guarded = map[string][]string{
+	"mailman": {"admin"},
+	// `bootstrap` makes a fleet and so runs before there is an identity to check;
+	// `env` prints a key.
+	"orc": {"bootstrap", "env"},
+}
 
-// GuardedSubcommand returns the subcommand a default command does not cover, or
-// the empty string. It is here so a refusal and cq's permission editor can say
-// which form of a default command still needs a clause, rather than each keeping
-// its own copy of a fact that decides access.
-func GuardedSubcommand(name string) string {
+// GuardedSubcommands returns the subcommands a default command does not cover.
+//
+// Here rather than in each caller so that a refusal, the help, and cq's permission
+// editor all say the same thing about which form of a default command still needs a
+// clause — it is a fact that decides access, and three copies of it would be three
+// chances to disagree.
+func GuardedSubcommands(name string) []string {
 	return guarded[strings.ToLower(strings.TrimSpace(name))]
+}
+
+// GuardedSubcommand is the first guarded subcommand, or the empty string.
+func GuardedSubcommand(name string) string {
+	if got := GuardedSubcommands(name); len(got) > 0 {
+		return got[0]
+	}
+	return ""
 }
 
 // InnocuousWords is the default set as it should be shown to a person, with the
@@ -180,8 +219,8 @@ func GuardedSubcommand(name string) string {
 func InnocuousWords() []string {
 	out := make([]string, 0, len(Innocuous()))
 	for _, name := range Innocuous() {
-		if sub := GuardedSubcommand(name); sub != "" {
-			out = append(out, name+" (not "+name+" "+sub+")")
+		if subs := GuardedSubcommands(name); len(subs) > 0 {
+			out = append(out, name+" (not "+name+" "+strings.Join(subs, ", not "+name+" ")+")")
 			continue
 		}
 		out = append(out, name)
@@ -201,7 +240,7 @@ func InnocuousRun(name string, args []string) bool {
 	if !slices.Contains(Innocuous(), name) {
 		return false
 	}
-	sub, ok := guarded[name]
+	subs, ok := guarded[name]
 	if !ok {
 		return true
 	}
@@ -215,8 +254,10 @@ func InnocuousRun(name string, args []string) bool {
 	// really need. That is the right way round. A false positive costs somebody a
 	// rephrase; a false negative hands out the whole fleet's mail.
 	for _, arg := range args {
-		if strings.EqualFold(strings.TrimSpace(arg), sub) {
-			return false
+		for _, sub := range subs {
+			if strings.EqualFold(strings.TrimSpace(arg), sub) {
+				return false
+			}
 		}
 	}
 	return true

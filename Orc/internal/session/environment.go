@@ -82,7 +82,23 @@ func Environment(s *store.Store, name user.Name, id string) ([]string, error) {
 	for _, key := range []string{
 		"PATH", "HOME", "SHELL", "LANG", "LC_ALL", "TZ", "TMPDIR", "SSH_AUTH_SOCK",
 		"CQ_SERVER", "CQ_USER", "CQ_KEY", "CQ_TOKEN", "CQ_MACHINE",
-		"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
+		// Every credential Claude will authenticate with, not only the two Orc
+		// happened to know about.
+		//
+		// `CLAUDE_CODE_OAUTH_TOKEN` is the one that matters for a fleet: it is what
+		// `claude setup-token` mints, and it exists precisely for "environments where
+		// interactive browser login isn't available", which is every session Orc
+		// starts. Dropping it meant the supported way to authenticate an unattended
+		// agent could not reach the agent — an operator who set it up correctly
+		// watched their sessions ask for a login anyway.
+		//
+		// The rest are here so that a fleet on a cloud provider or behind a gateway
+		// is not a special case somebody has to discover: a session that cannot
+		// authenticate is a session that stops at a login prompt nobody can answer.
+		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+		"CLAUDE_CODE_OAUTH_TOKEN",
+		"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+		"AWS_REGION", "AWS_PROFILE", "CLOUD_ML_REGION", "ANTHROPIC_VERTEX_PROJECT_ID",
 		"MAILMAN_HOME", "MACMUFFIN_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
 		sandbox.EnvActive,
 	} {

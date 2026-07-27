@@ -528,15 +528,32 @@ func (f Fleet) Children(name user.Name) []user.Name {
 	return out
 }
 
-// Subtree returns an identity and everyone below it, breadth-first.
+// Subtree returns an identity and everyone below it, depth-first: each identity
+// immediately followed by its own branch, siblings in name order.
+//
+// Depth-first because the order *is* the tree wherever it is drawn. `orc status`
+// and `orc list` indent each row by its depth, and breadth-first order — every
+// depth-1 identity, then every depth-2 identity — puts a grandchild under the last
+// of its parent's siblings rather than under its parent. The rows were right and
+// the shape was a lie: it said nib worked for ember when nib works for atlas, which
+// is the one thing a fleet listing exists to show.
+//
+// Nothing else depends on the order. Every other caller asks this for the *set* —
+// who is visible, who to reconcile, whose instructions to gather — and reads it to
+// the end.
 func (f Fleet) Subtree(name user.Name) []user.Name {
 	if !f.Has(name) {
 		return nil
 	}
-	out := []user.Name{f.identities[name.String()].Name()}
-	for head := 0; head < len(out); head++ {
-		out = append(out, f.Children(out[head])...)
+	var out []user.Name
+	var walk func(user.Name)
+	walk = func(at user.Name) {
+		out = append(out, f.identities[at.String()].Name())
+		for _, child := range f.Children(at) {
+			walk(child)
+		}
 	}
+	walk(name)
 	return out
 }
 
