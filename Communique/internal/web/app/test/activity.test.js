@@ -586,3 +586,102 @@ test("a completion with no timestamp is not counted", () => {
     [], []), null));
   assert.match(got, /0 tasks completed/);
 });
+
+// --- the scale a chart chooses for itself ----------------------------------
+
+// The complaint this answers: "all the bars are tiny, and they don't change no
+// matter the scale."
+//
+// Fitting to the peak sounds right and is wrong for this data. One compaction
+// writes a cache in a minute and an ordinary minute does not, so a real window
+// almost always holds an outlier a hundred times the bulk — and measured on a real
+// 48 hours, that put 47 of 48 bars at exactly the 4% floor. Two distinct heights on
+// the whole chart, in nearly one colour. Every question somebody opens this to ask
+// was unanswerable, and the hand-set ceiling only helped somebody who already knew
+// what number to type, which is what they came to find out.
+// Its own clock: `hour` above is anchored twenty hours back so the older fixtures
+// keep their ordering, and these want a full window ending now.
+const ago = (h) => new Date(Math.floor(Date.now() / 3600000) * 3600000 - h * 3600000).toISOString();
+
+function spiky() {
+  const out = [];
+  for (let h = 47; h >= 0; h--) {
+    const spike = h === 20;
+    const n = spike ? 100 : 1 + (h % 5) * 0.3;
+    out.push({
+      at: ago(h), turns: Math.round(4 * n),
+      tokens: { input: Math.round(200 * n), output: Math.round(300 * n),
+        cache_create: Math.round(500 * n), cache_read: Math.round(4000 * n) },
+    });
+  }
+  return out;
+}
+
+function heightsOf(state) {
+  return slots(view.activity(state, null))
+    .filter((b) => b.className === "bar")
+    .map((b) => Number(/height:([\d.]+)%/.exec(b.attributes.get("style"))[1]));
+}
+
+test("a spike does not flatten every other bar onto the floor", () => {
+  const heights = heightsOf(withSeries({ ember: spiky() }));
+  const floored = heights.filter((n) => n === 4).length;
+  assert.equal(floored, 0, `${floored} of ${heights.length} bars were pinned to the floor`);
+  // And they carry information: a chart of one repeated height is a chart that has
+  // told the reader nothing.
+  assert.ok(new Set(heights).size > 3,
+    `only ${new Set(heights).size} distinct heights across ${heights.length} bars`);
+});
+
+// Fitting hides nothing. The number that was left off the scale is the one most
+// worth seeing, so it stays in the heading and the axis says what was done.
+test("a fitted chart still says the peak and what stands above the fit", () => {
+  const got = text(view.activity(withSeries({ ember: spiky() }), null));
+  assert.match(got, /peak/, got);
+  assert.match(got, /fitted to .* above it/, got);
+});
+
+// Only when there is an outlier. A chart whose largest bar is the shape of the
+// data must be drawn at that scale — clipping something for the sake of it would
+// throw away the one bar the reader was looking for.
+test("a chart with no outlier is still drawn to its own peak", () => {
+  const even = [];
+  for (let h = 12; h >= 0; h--) {
+    even.push({ at: ago(h), turns: 4,
+      tokens: { input: 900 + h * 40, output: 100, cache_create: 0, cache_read: 50 } });
+  }
+  const heights = heightsOf(withSeries({ ember: even }));
+  assert.equal(Math.max(...heights), 100);
+  assert.doesNotMatch(text(view.activity(withSeries({ ember: even }), null)), /fitted to/);
+});
+
+// And a ceiling somebody set by hand still wins, because they looked at the chart
+// and decided; a rule that overrode that would be the tool arguing.
+test("a ceiling set by hand outranks the fitted one", () => {
+  const state = { ...withSeries({ ember: spiky() }), chartScale: { "new tokens": 500 } };
+  // That one chart, not the page: the other two are still fitting for themselves,
+  // which is the point of a ceiling being per chart.
+  const charts = view.activity(state, null).flatMap((n) => all(n, (x) => x.className === "chart"));
+  const tokens = charts.find((c) => text(all(c, (x) => x.className === "chart-label")) === "new tokens");
+  const got = text([tokens]);
+  assert.match(got, /top 500/, got);
+  assert.match(got, /clipped at 500/, got);
+  assert.doesNotMatch(got, /fitted to/, got);
+});
+
+// A bucket that is missing a counter loses that counter, not itself.
+//
+// The three token readers add fields together, so one `undefined` made the sum NaN
+// — and the guard that turned a missing bucket into zero turned the whole bucket
+// into zero with it. An agent machine whose orc predates a counter would have shown
+// an empty chart, which reads as "nothing happened" rather than "one number is not
+// being reported".
+test("a bucket missing one token field still counts the fields it has", () => {
+  const partial = [
+    { at: ago(2), turns: 1, tokens: { input: 400 } },
+    { at: ago(1), turns: 1, tokens: { input: 600, output: 200 } },
+  ];
+  const heights = heightsOf({ ...withSeries({ ember: partial }), activityWindow: "6h" });
+  assert.ok(heights.length >= 2, `only ${heights.length} bars were drawn`);
+  assert.equal(Math.max(...heights), 100, "nothing was drawn at all");
+});

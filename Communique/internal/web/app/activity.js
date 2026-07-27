@@ -276,7 +276,18 @@ function span(spec) {
 // contribution to every figure on it was nought. `sumFiles` already did this and
 // this is the same rule stated once.
 function tok(b) {
-  return b.tokens || {};
+  const got = b.tokens || {};
+  // Each field coerced, because the readers add three of them together and one
+  // missing field made the sum NaN — which `|| 0` then turned into a zero for the
+  // *whole* bucket. An agent machine whose orc predates a counter would have drawn
+  // an empty chart rather than a chart missing one term, and nothing on the screen
+  // would have said which had happened.
+  return {
+    input: Number(got.input) || 0,
+    output: Number(got.output) || 0,
+    cache_create: Number(got.cache_create) || 0,
+    cache_read: Number(got.cache_read) || 0,
+  };
 }
 
 // into drops every identity's buckets onto the axis, summing what lands in each slot.
@@ -315,12 +326,19 @@ function chart(label, slots, buckets, of, period, ceiling, actions) {
   const values = into(slots, buckets, of);
   const peak = Math.max(...values);
   const step = slots.length > 1 ? slots[1] - slots[0] : span(period);
-  // The ceiling is whatever was set for this chart, and the peak when nothing was.
-  // Fitting to the peak is the right default and the wrong fixed rule: it re-scales
-  // on every sync, so a chart watched over an afternoon silently changes what its
-  // height means, and two charts of the same quantity over different windows cannot
-  // be compared at all.
-  const top = ceiling > 0 ? ceiling : peak;
+  // The ceiling is whatever was set for this chart, and a fitted one when nothing
+  // was. Fitting to the *peak* was the old default and it made spiky data
+  // unreadable — which is most real data here, because one compaction writes a
+  // cache in a minute and an ordinary minute does not.
+  //
+  // Measured on a real 48 hours: one spike a hundred times the rest put 47 of 48
+  // bars at exactly the 4% floor. Two distinct heights on the whole chart, in
+  // nearly one colour, and every question somebody opens this to ask — when was it
+  // busy, is it busier than yesterday, did that agent ever stop — unanswerable.
+  // Setting a ceiling by hand fixed it, but only for somebody who already knew
+  // roughly what number to type, which is the thing they came here to find out.
+  const fitted = ceiling > 0 ? 0 : fit(values);
+  const top = ceiling > 0 ? ceiling : (fitted || peak);
 
   const bars = values.map((v, i) => {
     const share = top > 0 ? v / top : 0;
@@ -348,7 +366,11 @@ function chart(label, slots, buckets, of, period, ceiling, actions) {
     h("div", { class: "chart-head" },
       h("span", { class: "chart-label" }, label),
       h("span", { class: "chart-scale muted" },
-        ceiling > 0 ? `top ${number(ceiling)}` : `peak ${number(peak)}`,
+        ceiling > 0
+          ? `top ${number(ceiling)}`
+          : fitted
+            ? `top ${number(fitted)} · peak ${number(peak)}`
+            : `peak ${number(peak)}`,
         ` per ${every(step)}`),
       actions
         ? h("button", {
@@ -362,10 +384,52 @@ function chart(label, slots, buckets, of, period, ceiling, actions) {
       // The ceiling belongs on the axis and not only in the heading: it is the one
       // number that says what a full-height bar means, and a chart read without it
       // is a shape.
-      h("span", {}, ceiling > 0 && peak > ceiling
-        ? `clipped at ${number(ceiling)} — peak was ${number(peak)}`
+      h("span", {}, top > 0 && peak > top
+        ? (ceiling > 0
+          ? `clipped at ${number(ceiling)} — peak was ${number(peak)}`
+          : `fitted to ${number(fitted)} — ${clipped(values, fitted)} above it, peak ${number(peak)}`)
         : ""),
       h("span", {}, when(slots[slots.length - 1], step))));
+}
+
+// fit chooses a ceiling that leaves the ordinary values readable, or 0 to say the
+// peak is a fine one.
+//
+// The rule is the one an eye applies: a value far above the bulk of the data is an
+// outlier, and a scale that accommodates it describes the outlier rather than the
+// data. So the bulk is measured — the 95th percentile of the slots that have
+// anything in them — and the peak is only refused as a ceiling when it towers over
+// that. Below OutlierRatio the peak *is* the shape of the data and fitting to it is
+// right, which is why this returns 0 there rather than always clipping something.
+//
+// Non-zero slots only. An idle night is most of a 48-hour window and counting those
+// zeroes into the percentile would make the ceiling a statement about how long the
+// agent was asleep.
+//
+// Nothing is hidden by this. The peak stays in the heading, the axis says what was
+// fitted and how many bars are above it, and each of those bars is drawn clipped
+// and marked and says its own number when pointed at.
+const OutlierRatio = 4;
+const FitQuantile = 0.95;
+
+function fit(values) {
+  const busy = values.filter((v) => v > 0).sort((a, b) => a - b);
+  if (busy.length < 4) return 0;
+
+  const peak = busy[busy.length - 1];
+  const at = busy[Math.min(busy.length - 1, Math.floor(busy.length * FitQuantile))];
+  // The quantile can land on the outlier itself when there are several of them, in
+  // which case there is no bulk to protect and the peak is the honest scale.
+  if (at <= 0 || peak <= at * OutlierRatio) return 0;
+  return at;
+}
+
+// clipped says how many bars stand above a fitted ceiling, in words, because "one
+// bar is above this" and "half the chart is" are different situations and a reader
+// deciding whether to trust the scale needs to know which they are looking at.
+function clipped(values, top) {
+  const over = values.filter((v) => v > top).length;
+  return over === 1 ? "1 bar" : `${over} bars`;
 }
 
 // heat runs green to red across the chart's own range.
