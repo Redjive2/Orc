@@ -664,3 +664,71 @@ looking exactly like an agent that had decided not to work.
   slice, so a layer beginning `--dangerously-skip-permissions` is text, not a flag.
 - **The prompt is delivered on every start** — employ, refresh, and every supervisor
   restart — confirmed by a stand-in `claude` that records its argv.
+
+
+## §19 Coming back from a stop
+
+Reported: when the account hits its usage limit the agents stop, as expected — and
+afterwards they do not resume properly.
+
+**What was happening.** Two paths bring an agent back, and they behaved differently.
+The supervisor's own restart resumes: `--resume`, same conversation, five attempts
+with a backoff that tops out at thirty seconds. A usage limit lasts hours, so all
+five failed inside the first half-minute and the supervisor gave up — correctly,
+loudly, removing its state file so `orc tend` would see an employed identity with
+nothing running.
+
+`tend` then started a **new** session. Every time. The identity came back hours
+later as a blank agent that had never heard of the work it was part-way through,
+with the previous conversation still on disk and nothing pointing at it. From
+outside that is an agent that "did not come back properly".
+
+**The check, and what it is a check for.** A session's state file describes one that
+is *running*, so the supervisor removes it on the way out — and everything about the
+conversation used to go with it. It now writes down the ending first: which session
+it was, why it went, how many restarts it had spent, and the one fact that decides
+what to do next —
+
+> **`mid_turn`**: whether the session went while it was *working* rather than while
+> it was waiting for somebody.
+
+A session that ended waiting had finished its turn; resuming it is enough, and it
+sits at its prompt until something asks for more. A session that ended **mid-call**
+was part-way through a turn nobody will finish: the model call it was inside never
+came back. Resuming that one alone leaves an agent sitting silently on an unfinished
+thought — which is exactly the state a usage limit reached mid-turn leaves behind,
+and exactly what it looks like from outside when a fleet stops and does not restart.
+
+The feed answers it, because the hook writes a `Stop` when a turn ends: a last row
+that is not `Waiting` means the turn was still in progress. A feed that cannot be
+read answers "cannot say", recorded as not-mid-turn — the conservative direction,
+since the recovery for mid-turn nudges and the other does not, and a spurious nudge
+is cheaper than a spurious silence.
+
+**What recovery does now.** `orc tend` resumes the session that ended rather than
+minting one, and where that session had stopped mid-call it tells it to carry on —
+with the identity's own wake message, falling through to the fleet's, as the wake
+cycle would. The record is cleared as it is used, so a watch loop nudges once rather
+than on every pass.
+
+`orc refresh` and `orc fire` forget the ending. Both are somebody saying the
+conversation is over, and a backstop that resumed it afterwards would be Orc
+overruling the operator.
+
+**And it is visible.** `orc status <identity>` on an identity with nothing running
+now says what became of the last session: `a630a627…, part-way through a turn — exit
+status 1 (after 5 restarts)`. Before, "employed, not running" read the same whether
+the session had ended an hour ago mid-turn or had never been started, and that
+difference is what decides whether the next tend resumes a conversation or begins
+one.
+
+**Verified end to end**, with a stand-in Claude that dies on every start: the
+supervisor spent its five restarts, recorded `mid_turn: true` with the reason and the
+count, the card showed it, `orc tend` resumed *that* session id and nudged it once,
+and a second tend did nothing.
+
+**Still true, and worth knowing.** The restart budget is five attempts over about
+thirty seconds. That is right for a crash and far too short for a limit, so a
+long outage will always end with the supervisor giving up — the recovery is `tend`,
+and a fleet that wants to come back unattended wants `orc tend --watch` running.
+What has changed is that coming back is now continuing rather than starting again.

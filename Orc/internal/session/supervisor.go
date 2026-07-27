@@ -41,6 +41,7 @@ import (
 	"orc/orc/internal/provision"
 	"orc/orc/internal/pty"
 	"orc/orc/internal/store"
+	"orc/orc/internal/view"
 )
 
 // Restart policy.
@@ -281,6 +282,16 @@ func (s *Supervisor) Run() error {
 	go s.serve(listener)
 
 	defer func() {
+		// What became of this session, written down *before* the state file goes.
+		//
+		// The state file describes a session that is running, so it is removed here;
+		// everything about the conversation used to go with it, and `orc tend` then
+		// found an employed identity with no session and started a blank one. An
+		// agent that stopped because of something outside itself — a usage limit
+		// reached mid-turn, a network that came and went — came back an hour later
+		// with no memory of the work it had been part-way through.
+		s.recordEnding()
+
 		// Its own session and never a newer one: a supervisor that gave up, or that
 		// is slow to unwind, exits after its replacement has started, and removing
 		// by identity alone would delete the replacement's state file. See
@@ -419,6 +430,53 @@ func (s *Supervisor) once() error {
 	s.mu.Unlock()
 	_ = p.Close()
 	return err
+}
+
+// recordEnding writes down what became of this session.
+//
+// The interesting half is `MidTurn`: whether the session went while it was *working*
+// rather than while it was waiting for somebody. A session that ended waiting had
+// finished its turn, and resuming it is enough. A session that ended mid-call was
+// part-way through a turn nobody will finish — the model call it was inside never
+// came back — so resuming it alone leaves an agent sitting silently on an unfinished
+// thought. That is what a fleet looks like from outside when it "stops and does not
+// come back", and it is the state a usage limit leaves behind.
+//
+// The feed answers it, because the hook writes a Stop when a turn ends: a last row
+// that is not Waiting means the turn was still in progress. A feed that cannot be
+// read answers "cannot say", which is recorded as not-mid-turn — the conservative
+// direction, since the recovery for mid-turn nudges the agent and the recovery for
+// the other does not, and a spurious nudge is cheaper than a spurious silence.
+func (s *Supervisor) recordEnding() {
+	s.mu.Lock()
+	why, restarts, stopping := s.lastExit, s.restarts, s.stopping
+	s.mu.Unlock()
+
+	if stopping {
+		// Asked to stop. Somebody decided this session was over, and reviving it
+		// behind them would be Orc overruling the operator.
+		if err := s.store.ForgetEnded(s.spec.Identity); err != nil {
+			s.note("cleanup", err.Error())
+		}
+		return
+	}
+
+	midTurn := false
+	if feed, err := view.Load(s.store.EventsPath(s.spec.Identity), s.spec.Identity); err == nil {
+		if _, ok := feed.Last(); ok {
+			midTurn = !feed.Waiting
+		}
+	}
+
+	if err := s.store.RecordEnded(s.spec.Identity, store.Ended{
+		Session: s.spec.ID, Why: why, MidTurn: midTurn, Restarts: restarts,
+	}); err != nil {
+		s.note("cleanup", "the ending could not be recorded, so a recovery will start a fresh session: "+err.Error())
+		return
+	}
+	if midTurn {
+		s.note("interrupted", "the session ended part-way through a turn; a recovery resumes it and nudges it on")
+	}
 }
 
 // pump copies the session's output into the scrollback and to every watcher.

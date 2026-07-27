@@ -196,6 +196,13 @@ func (a App) fire(args []string) error {
 				"  its memories, mail, and tasks are kept; pass --yes to go ahead", who)}
 	}
 
+	// Taking somebody off the worklist ends the conversation deliberately. Forgetting
+	// the ending stops `tend` resuming what was just fired, which would be a backstop
+	// overruling the operator.
+	if err := s.store.ForgetEnded(who); err != nil {
+		return err
+	}
+
 	if _, err := s.store.ApplyIdentity(who, func(current model.Identity) (model.IdentityEvent, error) {
 		if !current.Employed() {
 			return model.IdentityEvent{}, nil
@@ -385,10 +392,6 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 
 		switch {
 		case who.Employed() && !live:
-			id, err := session.NewID()
-			if err != nil {
-				return acted, err
-			}
 			m, e := who.Model(), who.Effort()
 			if !m.Valid() {
 				m = model.DefaultModel
@@ -396,7 +399,31 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 			if !e.Valid() {
 				e = model.DefaultEffort
 			}
-			if err := a.populate(s.store, name, id, m, e, false); err != nil {
+
+			// Continue the conversation that was there, rather than replacing it.
+			//
+			// An agent does not usually stop because its conversation is broken. It
+			// stops because something outside it went wrong for a while — a usage
+			// limit reached mid-turn, a network that came and went, a machine that
+			// slept — and by the time `tend` runs, that is over. Starting a fresh
+			// session then throws away the work the agent was part-way through and
+			// gives back something that has never heard of it, which is what "it did
+			// not come back properly" means in practice.
+			//
+			// `orc refresh` and `orc fire` forget the ending, so a conversation
+			// somebody deliberately ended is never resurrected by a backstop.
+			id, resume := "", false
+			if ended, ok := s.store.LastEnded(name); ok {
+				id, resume = ended.Session, true
+			} else {
+				fresh, err := session.NewID()
+				if err != nil {
+					return acted, err
+				}
+				id = fresh
+			}
+
+			if err := a.populate(s.store, name, id, m, e, resume); err != nil {
 				// One identity failing to populate is not a reason to stop tending the
 				// others: a fleet with one broken agent should still come up.
 				a.note("%s could not be populated: %v", name, err)
@@ -404,10 +431,22 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 				continue
 			}
 			acted++
+			what := "populated"
+			if resume {
+				what = "resumed"
+			}
 			if err := a.say(fmt.Sprintf("%s %s at %s/%s   session %s",
-				a.out.Good("populated"), a.out.Identity(name.String()),
+				a.out.Good(what), a.out.Identity(name.String()),
 				a.out.Value(m.String()), a.out.Value(e.Short()), a.out.Muted(short(id)))); err != nil {
 				return acted, err
+			}
+			// A session that went mid-turn comes back sitting on an unfinished
+			// thought: the model call it was inside never returned, and nothing will
+			// finish it on its own. Resuming is not enough — it has to be told to
+			// carry on, which is what the wake cycle would eventually do and what an
+			// operator should not have to do by hand.
+			if err := a.nudgeIfInterrupted(s, name); err != nil {
+				a.note("%s was resumed but could not be nudged on: %v", name, err)
 			}
 
 		case !who.Employed() && live:
@@ -434,6 +473,57 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 		}
 	}
 	return acted, nil
+}
+
+// nudgeIfInterrupted tells a recovered session to carry on, when the one it
+// continues had stopped part-way through a turn.
+//
+// Only for that case. A session that ended *waiting* had finished what it was doing,
+// and poking it would be Orc inventing work; one that ended mid-call was interrupted,
+// and the nudge is the difference between an agent that comes back and one that comes
+// back and sits there.
+//
+// The record is cleared either way, so the nudge happens once rather than on every
+// pass of a watch loop.
+func (a App) nudgeIfInterrupted(s caller, name user.Name) error {
+	ended, ok := s.store.LastEnded(name)
+	if !ok {
+		return nil
+	}
+	if err := s.store.ForgetEnded(name); err != nil {
+		return err
+	}
+	if !ended.MidTurn {
+		return nil
+	}
+
+	// The session has only just been asked to start; its socket may not be there
+	// yet. This is a nudge rather than a command, so a failure to deliver is worth
+	// saying and not worth failing the tend for — the wake cycle is the backstop
+	// behind this one.
+	client, err := a.dial(s, name)
+	if err != nil {
+		return err
+	}
+	message, _, err := s.store.WakeMessage(name, roleOf(s, name))
+	if err != nil || strings.TrimSpace(message) == "" {
+		message = WakeMessage
+	}
+	if err := client.Poke(message); err != nil {
+		return err
+	}
+	return a.say("  " + a.out.Muted(fmt.Sprintf(
+		"it had stopped part-way through a turn, so it was told to carry on: %s", quoteShort(message))))
+}
+
+// roleOf is an identity's role, or the zero name when it cannot be read. The wake
+// message falls back through the role's layer, and an unreadable role costs that
+// layer rather than the whole message.
+func roleOf(s caller, name user.Name) model.Name {
+	if got, err := s.fleet.Identity(name); err == nil {
+		return got.Role()
+	}
+	return model.Name{}
 }
 
 // refresh replaces a session: same identity, new conversation.
@@ -478,6 +568,12 @@ func (a App) refresh(args []string) error {
 		if err := a.depopulate(s.store, who); err != nil {
 			return err
 		}
+	}
+
+	// A refresh is somebody saying the old conversation is over. Forgetting the
+	// ending stops the backstop resurrecting what they chose to end.
+	if err := s.store.ForgetEnded(who); err != nil {
+		return err
 	}
 
 	id, err := session.NewID()

@@ -230,3 +230,48 @@ func TestResumeAndSessionIDAreNeverBothPassed(t *testing.T) {
 		t.Errorf("a restart passed both, which claude refuses outright: %v", resumed)
 	}
 }
+
+// TestASessionThatWentMidTurnSaysSo.
+//
+// A session that ended *waiting* had finished its turn: resuming it is enough. One
+// that ended part-way through a turn was interrupted — the model call it was inside
+// never came back — so resuming it alone leaves an agent sitting silently on an
+// unfinished thought. That is what a fleet looks like from outside when it stops and
+// does not come back, and it is the state a usage limit reached mid-turn leaves.
+func TestTheEndingRecordsWhetherItWasMidTurn(t *testing.T) {
+	for _, tc := range []struct {
+		what    string
+		feed    string
+		midTurn bool
+	}{
+		{
+			what:    "a turn that had finished",
+			feed:    `{"at":"2026-07-26T12:00:00.000Z","session":"s","event":"Stop"}`,
+			midTurn: false,
+		},
+		{
+			what:    "a tool call that never returned",
+			feed:    `{"at":"2026-07-26T12:00:00.000Z","session":"s","event":"PreToolUse","tool":"Bash","path":"go test ./..."}`,
+			midTurn: true,
+		},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			s, who := fleet(t, "ember")
+			writeRaw(t, s, "identities/ember/session/events.jsonl", tc.feed+"\n")
+
+			sup := supervisorFor(t, s, who)
+			session.RecordEndingFor(sup)
+
+			got, ok := s.LastEnded(who)
+			if !ok {
+				t.Fatal("nothing was remembered about the session")
+			}
+			if got.MidTurn != tc.midTurn {
+				t.Errorf("mid-turn = %v, want %v", got.MidTurn, tc.midTurn)
+			}
+			if got.Session == "" {
+				t.Error("the record names no session to resume")
+			}
+		})
+	}
+}

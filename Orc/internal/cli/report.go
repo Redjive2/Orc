@@ -354,6 +354,30 @@ func instructedField(state store.SessionState) render.Field {
 	}
 }
 
+// endedNote says what became of the previous session, on a card that has no live one.
+//
+// Without it, an identity that is employed with nothing running says only that — and
+// "employed, not running" is the same sentence whether the session ended an hour ago
+// mid-turn or was never started. The difference decides whether the next `orc tend`
+// resumes a conversation or begins one.
+func endedNote(ended store.Ended) render.Field {
+	what := "waiting"
+	if ended.MidTurn {
+		what = "part-way through a turn"
+	}
+	value := fmt.Sprintf("%s, %s", short(ended.Session), what)
+	if ended.Why != "" {
+		value += " — " + ended.Why
+	}
+	if ended.Restarts > 0 {
+		value += fmt.Sprintf(" (after %d restart%s)", ended.Restarts, plural(ended.Restarts))
+	}
+	return render.Field{
+		Label: "last session", Value: value,
+		Paint: func(p style.Palette, t string) string { return p.Muted(t) },
+	}
+}
+
 func (a App) sessionSection(s caller, who user.Name, i model.Identity) render.Section {
 	out := render.Section{Title: "session"}
 
@@ -378,6 +402,11 @@ func (a App) sessionSection(s caller, who user.Name, i model.Identity) render.Se
 				Note:  fmt.Sprintf("employed at load %d, not running", i.Load()),
 				Paint: func(p style.Palette, t string) string { return p.Dead(t) },
 			})
+		}
+		// What became of the one before, when there is one to say. It decides what
+		// the next `orc tend` does — resume a conversation, or begin one.
+		if ended, ok := s.store.LastEnded(who); ok {
+			out.Fields = append(out.Fields, endedNote(ended))
 		}
 		return out
 	}

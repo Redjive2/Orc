@@ -163,6 +163,24 @@ agent, so without it their answer was lost rather than inherited.
 auto-denies any tool no allow rule covers, and Orc's allow list names no `Bash`,
 so agents would be refused every command they ran.
 
+### Coming back from a stop
+
+The supervisor restarts a session five times with a backoff, then gives up and
+removes its state, leaving the identity employed with nothing running for `orc
+tend` to pick up. Before it goes it records the ending: the session id, why it
+went, how many restarts it spent, and whether it stopped **mid-turn** — while
+working, rather than while waiting for somebody.
+
+`orc tend` resumes that session rather than starting a new one, so an agent
+stopped by something outside itself — a usage limit reached mid-turn, a network
+that came and went — comes back to the work it was part-way through instead of to
+a blank conversation. Where the session had stopped mid-call it is also told to
+carry on, since the turn it was inside will never finish on its own.
+
+`orc refresh` and `orc fire` forget the ending: both are somebody saying the
+conversation is over. `orc status <identity>` shows what became of the last
+session when there is nothing running.
+
 ### The toolkit
 
 Every fleet is made with these. A fresh fleet used to have no permissions at all,
