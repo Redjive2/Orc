@@ -360,10 +360,17 @@ function chart(label, slots, buckets, of, period, ceiling, actions) {
       // own height, because a percentage height on one of these resolves to zero on
       // WebKit — see the note in app.css. `--fill` carries the number so there is
       // still one place it is written down.
+      //
+      // An object, applied through the CSSOM. This site's content policy is
+      // `default-src 'self'` with no `unsafe-inline`, so a `style` *attribute* is
+      // discarded by the browser without a word — which is how these bars went on
+      // being invisible after they had been given a shape that works. See dom.js.
       style: v > 0
-        ? `--fill:${Math.min(100, Math.max(4, share * 100)).toFixed(1)}%;` +
-          `background:linear-gradient(to top,${heat(share)} 0 var(--fill),transparent var(--fill))`
-        : "",
+        ? {
+          "--fill": `${Math.min(100, Math.max(4, share * 100)).toFixed(1)}%`,
+          background: `linear-gradient(to top,${heat(share)} 0 var(--fill),transparent var(--fill))`,
+        }
+        : null,
     });
   });
 

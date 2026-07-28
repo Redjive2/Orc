@@ -40,6 +40,18 @@ class Element extends Node {
     this.attributes = new Map();
     this.className = "";
     this.listeners = {};
+    // Enough CSSOM to record what `h` sets. It matters that this is *not* the
+    // `style` attribute: the site's content policy discards that attribute in a
+    // real browser, so a stub that folded the two together would go on passing
+    // over exactly the bug it is meant to catch. `setProperty` is here because a
+    // custom property cannot be assigned as a member.
+    this.style = new Proxy({}, {
+      get: (own, key) =>
+        key === "setProperty"
+          ? (name, value) => { own[name] = String(value); }
+          : own[key],
+      set: (own, key, value) => { own[key] = String(value); return true; },
+    });
   }
   // classList, enough of it for the application: the toggle a dialog uses to dim
   // a submit that will not go yet, and the reads a test does to see whether it

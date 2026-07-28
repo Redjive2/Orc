@@ -388,7 +388,12 @@ function fold({ key, ctx, depth, label, note, children, controls, onOpen }) {
     // The depth is handed to CSS rather than turned into padding here: a phone
     // cannot afford a two-character indent five levels down a repository, and
     // that is a layout decision, which belongs in the stylesheet.
-    style: `--depth: ${depth}`,
+    //
+    // An object, so it goes through the CSSOM. As a `style` attribute this never
+    // reached the browser at all — the site's content policy has no
+    // `unsafe-inline` — so every fold in the tree was drawn at depth zero. See
+    // dom.js.
+    style: { "--depth": depth },
     onclick: () => {
       if (!open && onOpen) onOpen();
       ctx.actions.toggle(key);

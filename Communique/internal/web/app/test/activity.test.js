@@ -199,14 +199,14 @@ test("a chart draws the whole window, not only the buckets that exist", () => {
 test("a bar has a real height and a colour that runs with it", () => {
   const bars = slots(view.activity(withSeries({ ember: busy }), null))
     .filter((b) => b.className === "bar")
-    .map((b) => b.attributes.get("style"));
+    .map((b) => b.style);
   assert.equal(bars.length, 2);
   // The taller of the two is the peak, and the peak is at the red end.
-  const heights = bars.map((s) => Number(/--fill:([\d.]+)%/.exec(s)[1]));
+  const heights = bars.map((s) => Number(String(s["--fill"]).replace("%", "")));
   assert.equal(Math.max(...heights), 100);
   assert.ok(Math.min(...heights) < 100 && Math.min(...heights) >= 4,
     `a non-peak bar was ${Math.min(...heights)}%`);
-  const hues = bars.map((s) => Number(/hsl\((\d+)/.exec(s)[1]));
+  const hues = bars.map((s) => Number(/hsl\((\d+)/.exec(s.background)[1]));
   assert.equal(Math.min(...hues), 0, "the peak is not at the red end");
   assert.ok(Math.max(...hues) > 0, "a smaller bar is not further towards green");
 });
@@ -219,7 +219,7 @@ test("a set ceiling is what bars are drawn against, not the peak", () => {
   // The peak of "new tokens" across `busy` is 500; half that clips the taller bar.
   const bars = slots(view.activity({ ...state, chartScale: { "new tokens": 250 } }, null))
     .filter((b) => b.className.startsWith("bar") && b.className !== "bar empty");
-  const heights = bars.map((b) => Number(/--fill:([\d.]+)%/.exec(b.attributes.get("style"))[1]));
+  const heights = bars.map((b) => Number(String(b.style["--fill"]).replace("%", "")));
   // 200 of 250 is 80%, and 500 is clipped to the ceiling rather than drawn past it.
   assert.ok(heights.includes(100), `heights were ${heights}`);
   assert.ok(heights.some((n) => n > 75 && n < 85), `heights were ${heights}`);
@@ -620,7 +620,7 @@ function spiky() {
 function heightsOf(state) {
   return slots(view.activity(state, null))
     .filter((b) => b.className === "bar")
-    .map((b) => Number(/--fill:([\d.]+)%/.exec(b.attributes.get("style"))[1]));
+    .map((b) => Number(String(b.style["--fill"]).replace("%", "")));
 }
 
 test("a spike does not flatten every other bar onto the floor", () => {
@@ -695,11 +695,10 @@ test("a bucket missing one token field still counts the fields it has", () => {
 test("a bar carries no percentage height for a browser to disagree about", () => {
   const styles = slots(view.activity(withSeries({ ember: busy }), null))
     .filter((b) => b.className === "bar")
-    .map((b) => b.attributes.get("style"));
+    .map((b) => b.style);
   assert.ok(styles.length > 0, "no bars were drawn at all");
   for (const style of styles) {
-    assert.doesNotMatch(style, /(^|;)\s*height\s*:/,
-      `a bar was sized with a height again: ${style}`);
-    assert.match(style, /linear-gradient/, style);
+    assert.equal(style.height, undefined, "a bar was sized with a height again");
+    assert.match(String(style.background), /linear-gradient/);
   }
 });

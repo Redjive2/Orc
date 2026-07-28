@@ -309,7 +309,7 @@ test("a fold states its depth rather than its padding", () => {
   const styles = [];
   const collect = (node) => {
     if (node.tagName === "BUTTON" && String(node.className).includes("fold")) {
-      styles.push(node.attributes.get("style") || "");
+      styles.push(node.style);
     }
     for (const child of node.childNodes || []) collect(child);
   };
@@ -317,12 +317,12 @@ test("a fold states its depth rather than its padding", () => {
 
   assert.ok(styles.length > 0, "no folds were drawn");
   for (const style of styles) {
-    assert.match(style, /--depth:\s*\d+/, `a fold should state its depth: ${style}`);
-    assert.doesNotMatch(style, /padding/, `a fold should not set its own padding: ${style}`);
+    assert.match(String(style["--depth"]), /^\d+$/, `a fold should state its depth: ${style["--depth"]}`);
+    assert.equal(style.padding, undefined, "a fold should not set its own padding");
   }
   // And the depth really is the nesting, not a constant.
-  assert.ok(styles.some((s) => /--depth:\s*0/.test(s)), "the top level should be depth 0");
-  assert.ok(styles.some((s) => /--depth:\s*1/.test(s)), "a child should be deeper than its parent");
+  assert.ok(styles.some((s) => s["--depth"] === "0"), "the top level should be depth 0");
+  assert.ok(styles.some((s) => s["--depth"] === "1"), "a child should be deeper than its parent");
 });
 
 // --- editing -------------------------------------------------------------

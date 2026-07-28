@@ -7,6 +7,7 @@ export function h(tag, attrs = {}, ...children) {
   for (const [key, value] of Object.entries(attrs)) {
     if (value === null || value === undefined || value === false) continue;
     if (key === "class") el.className = value;
+    else if (key === "style") style(el, value);
     else if (key.startsWith("on") && typeof value === "function") {
       el.addEventListener(key.slice(2).toLowerCase(), value);
     } else el.setAttribute(key, value === true ? "" : String(value));
@@ -16,6 +17,35 @@ export function h(tag, attrs = {}, ...children) {
     el.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
   return el;
+}
+
+// style applies per-element style through the CSSOM, and takes an object rather than
+// a string on purpose.
+//
+// The site's content policy is `default-src 'self'` with no `unsafe-inline`, so a
+// `style` attribute is **discarded by the browser without a word**. That is not a
+// theoretical constraint: the activity charts were written with
+// `style: "height:80%;background:…"`, every test passed because the stub DOM has no
+// content policy, and every bar arrived in a real browser with no height at all.
+//
+// Writing through `el.style` is not a way around the policy — `style-src` governs
+// attributes and stylesheets, not the CSSOM, which is exactly the seam this needs. An
+// object is required so nothing can pass a string here and quietly get the attribute
+// back, which is the bug this exists to make unwritable.
+//
+// Almost nothing should use it. A style set here is invisible to the stylesheet, so
+// it is for values that are *computed* — a bar's height, a colour taken from a
+// reading — and never for anything that could be a class.
+function style(el, styles) {
+  if (!styles || typeof styles !== "object") return;
+  for (const [property, value] of Object.entries(styles)) {
+    if (value === null || value === undefined || value === false) continue;
+    // A custom property is not a member of the style object and has to be set by
+    // name. Getting this wrong is silent: `el.style["--fill"] = x` assigns a
+    // property nobody reads and no CSS ever sees it.
+    if (property.startsWith("--")) el.style.setProperty(property, String(value));
+    else el.style[property] = String(value);
+  }
 }
 
 export function clear(el) {
