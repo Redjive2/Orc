@@ -33,6 +33,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -289,6 +290,33 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 			}
 		}
 	}
+
+	// What the identity keeps is nobody's to permit, so it is taken out of the
+	// question before the permissions are consulted at all.
+	//
+	// Without this the carve-out in `protected` was dead letter. It says an
+	// agent's CLAUDE.md and memory are "the agent's to keep" and lets them past
+	// the escape check — and then the workspace test below refused them anyway,
+	// because they sit *beside* the workspace rather than inside it and no
+	// workspace-relative clause can ever reach them. The provisioned CLAUDE.md
+	// tells every agent "anything you want to survive this session goes in
+	// `memory/`", so the one thing every session was told to do was the one thing
+	// it could not.
+	//
+	// Before the permissions ladder rather than inside the loop below, so that
+	// what an identity keeps needs no clause of any kind — not a `write` clause it
+	// would have to be granted, and not a `read` clause to see its own notes.
+	//
+	// It does *not* survive the third rung, and that is a limit rather than an
+	// oversight. The directory is found by asking the store where it is, because
+	// the store is the only package that knows the layout; with no store there is
+	// nothing to ask, and a hook that composed the path itself would be a second
+	// place that had to agree about it — which is the bug this whole function
+	// replaces. A store that cannot be opened is also one whose memory directory
+	// is not there to write to.
+	targets = slices.DeleteFunc(targets, func(t string) bool {
+		return keeps(s, who, resolve(p.CWD, t))
+	})
 	if len(targets) == 0 {
 		return pass
 	}
@@ -718,15 +746,35 @@ func protected(s *store.Store, who user.Name, path string) bool {
 	if _, own := relativeTo(s.WorkspaceDir(who), path); own {
 		return false
 	}
-	if rel, own := relativeTo(s.ClaudeDir(who), path); own {
-		// The agent's own memories and instructions. settings.json is deliberately
-		// *not* in this list: it carries the hook's own wiring, and an agent that
-		// could edit it could switch off the thing refusing this.
-		if rel == "CLAUDE.md" || rel == "memory" || strings.HasPrefix(rel, "memory"+string(filepath.Separator)) {
-			return false
-		}
+	return !keeps(s, who, path)
+}
+
+// keeps reports whether a path is one of the things Orc provisions for an
+// identity and then leaves alone.
+//
+// Two of them: its CLAUDE.md and its memory directory. Both live in the identity's
+// Claude configuration, which is inside the fleet's store and *beside* the
+// workspace rather than inside it — so neither the escape check nor any
+// workspace-relative clause reaches them correctly, and both have to ask this
+// instead.
+//
+// settings.json is deliberately not here. It carries the hook's own wiring, and an
+// agent that could edit it could switch off the thing refusing this.
+//
+// It is one function rather than a test in each caller because the two callers
+// disagreeing is exactly the bug this replaces: `protected` allowed these through
+// and `decide` then refused them, so the fleet's own documentation described a
+// capability no agent had.
+func keeps(s *store.Store, who user.Name, path string) bool {
+	if s == nil {
+		return false
 	}
-	return true
+	rel, own := relativeTo(s.ClaudeDir(who), path)
+	if !own {
+		return false
+	}
+	return rel == "CLAUDE.md" || rel == store.MemoryDir ||
+		strings.HasPrefix(rel, store.MemoryDir+string(filepath.Separator))
 }
 
 func plural(n int) string {

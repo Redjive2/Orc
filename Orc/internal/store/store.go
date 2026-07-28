@@ -65,6 +65,20 @@ const (
 	sessionDir   = "session"
 )
 
+// MemoryDir is where an identity keeps what it wants to outlive a session, inside
+// its Claude configuration.
+//
+// Exported, and here rather than beside either of its users, because two packages
+// have to agree about it and neither should depend on the other: `provision`
+// creates it, and `hook` decides who may write to it. They disagreed once already
+// — the guard allowed a directory the provisioner had not been asked about — and
+// the symptom was that agents could not write the memories their own CLAUDE.md
+// told them to keep.
+//
+// The provisioned CLAUDE.md names this directory to the agent in prose, which
+// makes the string part of the contract rather than a layout detail.
+const MemoryDir = "memory"
+
 // Environment variables consulted when no root is given.
 const (
 	EnvHome    = "ORC_HOME"

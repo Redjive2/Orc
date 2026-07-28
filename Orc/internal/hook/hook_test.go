@@ -960,3 +960,88 @@ func TestTheDefaultSetSurvivesABlindRung(t *testing.T) {
 		}
 	}
 }
+
+// TestAnAgentKeepsItsOwnMemory is the promise the provisioned CLAUDE.md makes.
+//
+// Every agent is told "anything you want to survive this session goes in
+// `memory/`, beside this file" — and until this was fixed, that was the one thing
+// no session could do. The directory sits *beside* the workspace rather than
+// inside it, so the workspace test refused it and no clause could ever have
+// helped: every permission an identity holds is workspace-relative.
+func TestAnAgentKeepsItsOwnMemory(t *testing.T) {
+	r := newRig(t)
+	opts := r.as("ember", nil)
+	claude := r.store.ClaudeDir(r.who)
+
+	keeps := []string{
+		filepath.Join(claude, "memory", "a-fact.md"),
+		filepath.Join(claude, "memory", "deep", "nested.md"),
+		filepath.Join(claude, "memory"),
+		filepath.Join(claude, "CLAUDE.md"),
+	}
+	// Reads as well as writes: ember holds a read clause, so a read outside the
+	// workspace is refused too. Its own memory is not a place it needs one for.
+	for _, name := range []string{"Read", "Write", "Edit"} {
+		for _, path := range keeps {
+			if out := r.call(opts, tool(name, path, r.workspace())); out.Code != hook.CodeOK {
+				t.Errorf("%s %s was refused:\n%s", name, path, out.Stderr)
+			}
+		}
+	}
+}
+
+// The carve-out is exactly two things, and everything around them still stops.
+func TestWhatAnAgentDoesNotKeep(t *testing.T) {
+	r := newRig(t)
+	opts := r.as("ember", nil)
+	claude := r.store.ClaudeDir(r.who)
+
+	for _, c := range []struct{ name, path string }{
+		// The hook's own wiring. An agent that could edit this could switch off
+		// the thing refusing everything else.
+		{"its settings", filepath.Join(claude, "settings.json")},
+		// A name that merely starts with the directory's. A prefix comparison
+		// without the separator would let this through.
+		{"a lookalike beside it", filepath.Join(claude, "memory-notes.md")},
+		{"a lookalike directory", filepath.Join(claude, "memoryX", "f.md")},
+		// The configuration directory itself, which is not a file it keeps.
+		{"the claude directory", claude},
+		// Somebody else's, reached through the same shape.
+		{"another agent's memory", filepath.Join(r.store.ClaudeDir(mustUser(t, "boss")), "memory", "x.md")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if out := r.call(opts, tool("Write", c.path, r.workspace())); out.Code != hook.CodeBlock {
+				t.Errorf("%s was writable", c.path)
+			}
+		})
+	}
+}
+
+// The third rung takes memory with it, and that is the honest behaviour to pin.
+//
+// The directory is found by asking the store where it is — the store being the
+// only package that knows the layout — so with no store there is nothing to ask.
+// Composing the path in the hook instead would be a second place that had to
+// agree about it, which is the disagreement the carve-out exists to end. A store
+// that cannot be opened is also one whose memory directory is not there.
+func TestMemoryNeedsAStoreToBeFound(t *testing.T) {
+	r := newRig(t)
+	root := filepath.Join(t.TempDir(), "gone")
+	opts := hook.Options{
+		Root:  root,
+		Clock: clock.NewFake(epoch, time.Second),
+		Env: func(key string) (string, bool) {
+			v, ok := map[string]string{"ORC_IDENTITY": "ember"}[key]
+			return v, ok
+		},
+	}
+	memory := filepath.Join(root, "identities", "ember", "claude", "memory", "note.md")
+
+	if out := r.call(opts, tool("Write", memory, r.workspace())); out.Code != hook.CodeBlock {
+		t.Error("a write was allowed with no store to say where memory is")
+	}
+	// The rung's own rule is unchanged: reads pass, writes block.
+	if out := r.call(opts, tool("Read", memory, r.workspace())); out.Code != hook.CodeOK {
+		t.Errorf("a read was blocked on the blind rung:\n%s", out.Stderr)
+	}
+}

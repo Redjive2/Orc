@@ -194,6 +194,32 @@ which bootstraps a store and can hand over the whole fleet's mail; `orc
 bootstrap`, which runs before there is an identity; and `orc env`, which prints
 a key.
 
+### What an agent keeps
+
+Two things belong to the identity rather than to the fleet, and neither needs a
+clause:
+
+| Path                    | Is                                              |
+|-------------------------|-------------------------------------------------|
+| `<claude>/CLAUDE.md`    | its standing instructions; Orc writes this once at creation and never again |
+| `<claude>/memory/`      | anything it wants to outlive a session          |
+
+Both sit in the identity's Claude configuration, which is **beside** its workspace
+rather than inside it. That matters, because every `read` and `write` clause is
+workspace-relative: no permission that could be written or granted would reach
+them, so they are decided before the clauses are consulted at all rather than by
+them.
+
+Everything else in that directory still stops, `settings.json` most of all — it
+carries the hook's own wiring, and an agent that could edit it could switch off
+the thing refusing everything else. So does another identity's memory, and so does
+a lookalike like `memory-notes.md`.
+
+One limit: the directory is found by asking the store where it is, so when the
+store cannot be opened at all — the third rung — memory goes with it and a write
+there is refused like any other. A store that cannot be opened is also one whose
+memory directory is not there to write to.
+
 ### Authenticating an unattended session
 
 A session with no credential does not fail — it opens a **login prompt**, and a

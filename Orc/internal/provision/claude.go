@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"orc/common/user"
+	"orc/orc/internal/store"
 )
 
 // The identity's own Claude configuration.
@@ -20,11 +21,10 @@ import (
 // settings file that exists and permits everything is a claim that the permission
 // model is in force when it is not, and the one thing Plan.md §7 insists on is
 // that each layer says what it actually enforces.
-const memoryDir = "memory"
 
 // claudeConfig lays out an identity's configuration directory.
 func (p Provisioner) claudeConfig(name user.Name) error {
-	if err := p.store.MakeClaudeDir(name, memoryDir); err != nil {
+	if err := p.store.MakeClaudeDir(name, store.MemoryDir); err != nil {
 		return err
 	}
 	return p.store.WriteClaudeFile(name, "CLAUDE.md", []byte(instructions(name)))
