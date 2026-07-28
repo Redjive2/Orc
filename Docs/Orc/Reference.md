@@ -437,6 +437,42 @@ A session that has never said anything at all is judged from when it started: up
 an hour with no tool call is as stopped as one that finished and waited, and the more
 worrying of the two.
 
+### Delivery is confirmed, not assumed
+
+Writing into a pty is not delivery. A write to the master succeeds whether or not
+anything on the other end is listening, so every path that speaks to an agent —
+`poke`, `wake`, the opening message a start sends, and `^S` from an attached
+session — was writing and hoping. Measured against the real Claude binary, a
+message written while it is starting is dropped: sometimes the whole thing, and
+sometimes only the return that submits it, which leaves the text sitting in the
+input box unsent. The binary has finished painting its interface by about a
+quarter of a second and is *still* losing input a second later, so there is no
+moment to wait for and no output that says "ready".
+
+So Orc asks. Claude's `UserPromptSubmit` hook — already installed, already
+recorded in the event feed — fires once per submitted prompt and nothing else
+appends one. A poke notes the count, types, and waits for it to move.
+
+When it does not, two things are tried, and the order is the safety of it:
+
+1. **A bare return.** If the text is loaded and unsent this submits it. It carries
+   no content, so it cannot duplicate anything, and it fixes the more common
+   failure outright.
+2. **The message again.** Only reached when a bare return changed nothing, which
+   means the box was empty and the text never landed.
+
+The other order would deliver the message twice every time the first attempt was
+merely unsent, and an agent acting twice on one instruction is a worse outcome
+than one that missed it. Past both, the poke is **refused** with the reason, so a
+caller reports a fleet that cannot be spoken to rather than logging a success.
+
+Two cases are not retried. A session **mid-turn** has its prompt queued by Claude
+and submitted when the turn ends, so the hook may be minutes away and the message
+is exactly where it belongs. And a session that has **never written an event** —
+a fleet whose hooks are not installed, or the instant before a session records its
+start — cannot report, so absence of a submission means nothing there; those are
+written to once and believed, as before.
+
 ### Usage limits
 
 An agent that hits its usage limit does not fail, does not stop, and says nothing

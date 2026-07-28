@@ -35,6 +35,7 @@ import (
 	"orc/common/clock"
 	"orc/common/fault"
 	"orc/common/user"
+	"orc/orc/internal/event"
 	"orc/orc/internal/instruct"
 	"orc/orc/internal/model"
 	"orc/orc/internal/proc"
@@ -104,6 +105,10 @@ type Supervisor struct {
 	restarts int
 	stopping bool
 	lastExit string
+	// feedSize is the size of the event feed when it was last parsed, so a poll
+	// waiting for a submission can skip the parse while nothing has been appended.
+	// Only ever touched from Poke, which is serialised by the caller.
+	feedSize int64
 
 	// prompt is the composed system prompt: the fleet's layer, the role's, and the
 	// identity's, under headings naming each. Empty where nothing is set, which is
@@ -527,6 +532,18 @@ func (s *Supervisor) Poke(text string) error {
 		return err
 	}
 
+	// What the agent had submitted before this, so the confirmation below can tell
+	// "it arrived" from "something else arrived".
+	before := s.submissions()
+
+	if err := s.type_(p, text); err != nil {
+		return err
+	}
+	return s.confirm(p, text, before)
+}
+
+// type_ writes one message into the terminal.
+func (s *Supervisor) type_(p *pty.Pty, text string) error {
 	payload := text
 	// Bracketed on any line ending, not only "\n". A lone carriage return is Enter
 	// to a terminal, so text carrying one submits early and the rest arrives as a
@@ -534,10 +551,221 @@ func (s *Supervisor) Poke(text string) error {
 	if strings.ContainsAny(text, "\n\r") {
 		payload = pasteStart + text + pasteEnd
 	}
-	if _, err := p.Master.WriteString(payload + "\r"); err != nil {
+	if _, err := p.Master.WriteString(payload + submit); err != nil {
 		return fault.IO{Op: "write to", Path: p.Name, Err: err}
 	}
 	return nil
+}
+
+// confirm waits for the agent to say it received the message, and tries again in the
+// two ways it can fail.
+//
+// Writing into a pty is not delivery. A write to the master succeeds whether or not
+// anything on the other end was listening, and measured against the real binary a
+// message written while it is starting is dropped — sometimes the whole thing,
+// sometimes the submitting return on its own, leaving the text sitting in the box
+// unsent. The app has finished painting by ~0.25s and is still losing input at 1s, so
+// there is no moment that can be waited for and no output that says "ready". Orc was
+// writing and hoping, and a prompt that never arrived looked exactly like one that
+// did.
+//
+// The proof is Claude's own `UserPromptSubmit` hook, which Orc already installs and
+// already records. A submitted prompt appends an event; nothing else does.
+//
+// The ladder matters as much as the retry, because the two failures need different
+// answers and one of them must not be answered with the other:
+//
+//  1. **A bare return.** If the text is loaded and unsent, this submits it. It cannot
+//     duplicate anything — there is no content in it — so it is safe to try first and
+//     it fixes the more common failure outright.
+//  2. **The whole message again.** Only if a bare return changed nothing, which means
+//     the box was empty and the text never landed at all.
+//
+// Doing that in the other order would deliver the message twice whenever the first
+// attempt was merely unsent, and an agent that acts on a duplicated instruction is a
+// worse outcome than one that missed it.
+//
+// A session that is mid-turn is not waited for. Claude queues a prompt typed during a
+// turn and submits it when that turn ends, so the hook may be minutes away — and the
+// message is in the box, which is exactly where it should be.
+func (s *Supervisor) confirm(p *pty.Pty, text string, before int) error {
+	if s.store == nil || s.spec.ID == "" {
+		// No feed to read: nothing can be confirmed, and refusing to poke at all
+		// would be worse than the fire-and-forget this replaces.
+		return nil
+	}
+	// And nothing is confirmed for a session that has never written an event.
+	//
+	// This is the guard that makes the ladder safe rather than reckless. Its second
+	// rung sends the message again, which is only ever right when the *absence* of a
+	// submission means something — and on a fleet whose hooks are not installed, or
+	// in the moment before a session has recorded its start, absence means nothing
+	// at all. Retrying there would deliver every prompt twice to every agent, which
+	// is worse than the problem.
+	//
+	// A session that is running writes SessionStart before anybody can poke it, so
+	// the ordinary case is covered and the exception is a fleet that genuinely
+	// cannot report — where this correctly returns to writing and hoping.
+	if s.events() == 0 {
+		return nil
+	}
+
+	for attempt := 0; attempt < len(retries); attempt++ {
+		if s.submitted(before, ConfirmWithin) {
+			return nil
+		}
+		if s.midTurn() {
+			// It is queued behind a turn, which is delivery — just not yet.
+			return nil
+		}
+		// The same terminal, still open. A supervisor restarts its child on a
+		// crash, which closes this one — and a retry written into a closed master
+		// is an error about a session that no longer exists. The restart is its own
+		// event with its own opening message, so there is nothing to say here.
+		if s.currentPty() != p {
+			return nil
+		}
+		var err error
+		switch retries[attempt] {
+		case retrySubmit:
+			_, err = p.Master.WriteString(submit)
+		case retryWhole:
+			err = s.type_(p, text)
+		}
+		if err != nil {
+			return fault.IO{Op: "write to", Path: p.Name, Err: err}
+		}
+	}
+	if s.submitted(before, ConfirmWithin) {
+		return nil
+	}
+	return fault.Unavailable{Peer: s.spec.Identity.String(), Err: errors.New(
+		"the message was typed but the session never reported submitting it")}
+}
+
+// The two ways a poke is followed up, in the order they are safe to try.
+type retry int
+
+const (
+	retrySubmit retry = iota // a bare return: submits text that is loaded and unsent
+	retryWhole               // the message again: for text that never landed
+)
+
+var retries = []retry{retrySubmit, retryWhole}
+
+// ConfirmWithin is how long a poke waits to be told it arrived, per attempt.
+//
+// Short, because this is the gap between a keystroke and a hook firing on the same
+// machine, and because the ladder above spends it more than once. Long enough that a
+// loaded machine is not declared broken.
+const ConfirmWithin = 1500 * time.Millisecond
+
+// submit is the key that sends whatever is in the box.
+const submit = "\r"
+
+// submitted waits for the agent's submission count to pass what it was.
+//
+// The feed's size is checked before it is parsed. A poll every 50ms that re-read and
+// decoded a long session's whole feed each time would be megabytes of work per second
+// to answer a question whose answer cannot change unless the file has grown — and the
+// sessions with the largest feeds are exactly the ones that have been up longest.
+func (s *Supervisor) submitted(before int, within time.Duration) bool {
+	path := s.store.EventsPath(s.spec.Identity)
+	grown := func() bool {
+		info, err := os.Stat(path)
+		if err != nil {
+			// Gone or unreadable: fall through to the parse, which has its own
+			// answer for that and is the one place the decision is made.
+			return true
+		}
+		return info.Size() != s.feedSize
+	}
+	if info, err := os.Stat(path); err == nil {
+		s.feedSize = info.Size()
+	}
+
+	deadline := time.Now().Add(within)
+	for {
+		if grown() {
+			if info, err := os.Stat(path); err == nil {
+				s.feedSize = info.Size()
+			}
+			if s.submissions() > before {
+				return true
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(ConfirmPoll)
+	}
+}
+
+// ConfirmPoll is how often the feed is re-read while waiting. The file is small and
+// local, and the whole wait is measured in a second or two.
+const ConfirmPoll = 50 * time.Millisecond
+
+// submissions counts the prompts this session has submitted.
+//
+// Unreadable is zero rather than an error. The count is only ever compared against an
+// earlier count of the same thing, so a feed that cannot be read yields "no progress"
+// and the ladder does what it does when a message did not arrive — which is the safe
+// direction for a feed that is missing because the session has not written one yet.
+func (s *Supervisor) submissions() int {
+	events, _, err := event.Read(s.store.EventsPath(s.spec.Identity))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range events {
+		if e.Name == "UserPromptSubmit" && e.Session == s.spec.ID {
+			n++
+		}
+	}
+	return n
+}
+
+// currentPty is the terminal this session is attached to right now, which is not
+// necessarily the one a caller started writing to.
+func (s *Supervisor) currentPty() *pty.Pty {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pty
+}
+
+// events counts everything this session has reported, which is how Poke tells "the
+// prompt did not arrive" from "this fleet does not report".
+func (s *Supervisor) events() int {
+	got, _, err := event.Read(s.store.EventsPath(s.spec.Identity))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range got {
+		if e.Session == s.spec.ID {
+			n++
+		}
+	}
+	return n
+}
+
+// midTurn reports whether the agent is working, in which case a prompt is queued
+// rather than submitted and the hook is not the right thing to wait for.
+//
+// The same question recordEnding asks, and the same answer: the feed's last row says
+// whether the turn ended. Where it cannot be read the answer is "not mid-turn", which
+// sends the ladder down its retry path — the safe direction here, because the cost of
+// a needless bare return is nothing and the cost of assuming a message is safely
+// queued when it was dropped is the silence this whole thing exists to stop.
+func (s *Supervisor) midTurn() bool {
+	feed, err := view.Load(s.store.EventsPath(s.spec.Identity), s.spec.Identity)
+	if err != nil {
+		return false
+	}
+	if _, ok := feed.Last(); !ok {
+		return false
+	}
+	return !feed.Waiting
 }
 
 // The terminal's paste markers. Named because the closing one is the sequence that
