@@ -297,6 +297,94 @@ func (s *Store) SetSyncPace(watch string) error {
 	return atomic.WriteJSON(s.path("pace.json"), map[string]string{"watch": watch}, fileMode)
 }
 
+// FleetPace is the fleet-layer pacing the server intends a machine to run at.
+//
+// Per machine, because a fleet is per machine: each one has its own Orc store, and
+// a single value across all of them would be one machine's decision imposed on the
+// rest. Sync's pace is genuinely global — it is about the link, and the link is the
+// same everywhere — which is why that one is not keyed and this one is.
+//
+// Unreadable reads as no opinion, deliberately. This is the input to a
+// reconciliation that runs on every sync, and a settings file that could not be
+// read for a moment must not be able to reset a fleet.
+func (s *Store) FleetPace(machine protocol.MachineID) protocol.DesiredPace {
+	if machine.Validate() != nil {
+		return protocol.DesiredPace{}
+	}
+	var got protocol.DesiredPace
+	if err := atomic.ReadJSON(s.fleetPacePath(machine), &got); err != nil {
+		return protocol.DesiredPace{}
+	}
+	return got
+}
+
+// SetFleetPace records what the server intends. A zero value clears the file, so
+// "no opinion" leaves nothing behind that a later reader could mistake for one.
+func (s *Store) SetFleetPace(machine protocol.MachineID, want protocol.DesiredPace) error {
+	if err := machine.Validate(); err != nil {
+		return err
+	}
+	if err := want.Validate(); err != nil {
+		return err
+	}
+	if want.Zero() {
+		return atomic.Remove(s.fleetPacePath(machine))
+	}
+	if err := os.MkdirAll(filepath.Dir(s.fleetPacePath(machine)), dirMode); err != nil {
+		return fault.IO{Op: "create", Subject: filepath.Dir(s.fleetPacePath(machine)), Err: err}
+	}
+	return atomic.WriteJSON(s.fleetPacePath(machine), want, fileMode)
+}
+
+// IntendFleetPace folds one `orc pace` into what the server intends, and returns
+// what it now intends.
+//
+// Folding rather than replacing, because the command is a patch: `orc pace wake
+// --every 20m` says nothing about tend and must not clear it. `--clear` is the one
+// that does say something about the whole cycle, and it says "no opinion" — the
+// layer goes back to orc's own resolution, which is exactly what an absent field
+// means here.
+//
+// Only the fleet layer arrives; the caller decides that, because a role's or an
+// identity's pace is that layer's business and orc resolves it.
+func (s *Store) IntendFleetPace(machine protocol.MachineID, a protocol.Args) (protocol.DesiredPace, error) {
+	want := s.FleetPace(machine)
+
+	wake := a.Cycle == "wake"
+	if a.PaceClear {
+		if wake {
+			want.WakeAfter, want.WakeEvery, want.WakeOff = "", "", ""
+		} else {
+			want.TendWatch, want.TendOff = "", ""
+		}
+	}
+	if a.After != "" {
+		want.WakeAfter = a.After
+	}
+	if a.Every != "" {
+		want.WakeEvery = a.Every
+	}
+	if a.Watch != "" {
+		want.TendWatch = a.Watch
+	}
+	if a.PaceOff || a.PaceOn {
+		state := map[bool]string{true: "yes", false: "no"}[a.PaceOff]
+		if wake {
+			want.WakeOff = state
+		} else {
+			want.TendOff = state
+		}
+	}
+	if err := s.SetFleetPace(machine, want); err != nil {
+		return protocol.DesiredPace{}, err
+	}
+	return want, nil
+}
+
+func (s *Store) fleetPacePath(machine protocol.MachineID) string {
+	return s.path("machines", string(machine), "fleet-pace.json")
+}
+
 // Snapshot returns a machine's last snapshot and metadata.
 func (s *Store) Snapshot(machine protocol.MachineID) (protocol.Snapshot, Meta, error) {
 	if err := machine.Validate(); err != nil {

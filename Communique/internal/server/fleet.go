@@ -107,6 +107,14 @@ func (b *fleetBody) Validate() error { return nil }
 // line of arguments and this.
 func (s *Server) fleetAction(w http.ResponseWriter, r *http.Request, op protocol.Op,
 	fill func(body fleetBody, args *protocol.Args)) {
+	s.fleetActionThen(w, r, op, fill, nil)
+}
+
+// fleetActionThen is fleetAction with something to record once the action is
+// queued. Only `pace` uses it, because only pace is a setting rather than an event.
+func (s *Server) fleetActionThen(w http.ResponseWriter, r *http.Request, op protocol.Op,
+	fill func(body fleetBody, args *protocol.Args),
+	after func(protocol.MachineID, protocol.Args) error) {
 	var body fleetBody
 	if err := decode(r, MaxRequestBytes, &body); err != nil {
 		s.fail(w, r, err)
@@ -116,7 +124,11 @@ func (s *Server) fleetAction(w http.ResponseWriter, r *http.Request, op protocol
 	if fill != nil {
 		fill(body, &args)
 	}
-	s.enqueue(w, r, body.Machine, op, args)
+	var then func(protocol.MachineID) error
+	if after != nil {
+		then = func(id protocol.MachineID) error { return after(id, args) }
+	}
+	s.enqueueThen(w, r, body.Machine, op, args, then)
 }
 
 // named is the subject of a verb: the path segment where there is one, else the
@@ -323,7 +335,7 @@ func (s *Server) tendFleet(w http.ResponseWriter, r *http.Request) {
 // three commands: the body says which cycle and whose layer, and a route per layer
 // would be three that differ only in what they name.
 func (s *Server) pace(w http.ResponseWriter, r *http.Request) {
-	s.fleetAction(w, r, protocol.OpOrcPace, func(b fleetBody, a *protocol.Args) {
+	s.fleetActionThen(w, r, protocol.OpOrcPace, func(b fleetBody, a *protocol.Args) {
 		a.Cycle = b.Cycle
 		a.Identity = b.Identity
 		a.Role = b.Role
@@ -333,5 +345,15 @@ func (s *Server) pace(w http.ResponseWriter, r *http.Request) {
 		a.PaceOff = b.Off
 		a.PaceOn = b.On
 		a.PaceClear = b.Clear
+	}, func(id protocol.MachineID, a protocol.Args) error {
+		// The fleet layer only. A role's or an identity's pace is that layer's
+		// business and orc resolves the three together; a server that asserted all
+		// of them every sync would overwrite what somebody set on the machine with
+		// whatever was last typed in a browser.
+		if a.Identity != "" || a.Role != "" {
+			return nil
+		}
+		_, err := s.state.IntendFleetPace(id, a)
+		return err
 	})
 }

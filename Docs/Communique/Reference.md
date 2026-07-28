@@ -133,7 +133,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `POST fleet/roles/<n>/permissions`     | `orc assign permission`                  |
 | `POST fleet/roles/<n>/budget`          | `orc budget <role> <load>`               |
 | `DELETE fleet/roles/<n>`               | `orc remove role --yes`                  |
-| `POST fleet/pace`                      | `orc pace <cycle> [<who>] [flags]`       |
+| `POST fleet/pace`                      | `orc pace <cycle> [<who>] [flags]`‡      |
 | `POST fleet/tariff`                    | `orc tariff <setting> <n> --yes`         |
 | `GET/POST sync/pace`                   | how often each machine syncs — the server's own |
 | `GET activity?since=<dur>`             | the series: what each agent cost and touched, folded to a `period` it names |
@@ -167,6 +167,39 @@ afterwards — so the agent machine compares `from` against where the identity
 works *now* and refuses a move made against a stale view, rather than silently
 overturning one somebody made in between. It is the same protection the library's
 writes get from a digest.
+
+‡ `pace` is the one write that is a **setting** rather than an event, and it is
+treated as one. Everything else in the table happens once: it is queued, it is
+applied, and it is over. A pace was the same, which meant a fleet that lost it —
+an action that failed, a queue somebody cleared, a machine rebuilt from a
+checkout — stayed lost, and neither end knew, because nothing ever compared what
+the cycles were doing against what anybody had asked for.
+
+So the **fleet layer** of a pace is recorded as an intention, per machine, and
+handed back on every sync response beside the sync interval. `cq sync` compares
+it against what `orc` actually resolves and runs `orc pace` to close any gap.
+Three consequences, all of them deliberate:
+
+- A pace changed **by hand on the agent machine** is put back on the next sync.
+  That is what "the server intends this" means. It is never silent — the sync
+  says `pace put back: wake --after 20m` on the line it prints, and the same goes
+  to the log — because the alternative is learning it from a fleet's behaviour
+  days later.
+- **Only the fleet layer.** Orc resolves a pace through identity, then role, then
+  fleet; a role's or an identity's pace stays a one-shot action, because those
+  are that layer's business and a server asserting all three would overwrite what
+  somebody set on the machine with the last thing typed in a browser.
+- **An absent value is no opinion, not "clear it".** A server that has never been
+  asked about tend does not turn tend off. `--clear` on a cycle removes the
+  intention rather than recording one, which puts that layer back under orc's own
+  resolution.
+
+The sync interval itself is now written down in the agent's `settings.json`
+alongside the mirrored directory. It only ever lived in a running watcher's head:
+a one-shot `cq sync` read it off the response and dropped it, and a watcher
+restarted by a service manager went back to the number on its command line — set
+when the service was installed and unchanged since. A watcher now opens at what
+the server last asked for, and the flag decides only when the server never has.
 
 † `toolkit` installs the permissions every fleet is made with, on a fleet that
 does not have all of them — `orc bootstrap` is safe to run again and creates only

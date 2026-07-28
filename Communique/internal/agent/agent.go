@@ -171,6 +171,9 @@ type Report struct {
 	// Pace is how often the server would like to be synced, when it says. Empty
 	// means it did not, which a watcher reads as "keep the interval you have".
 	Pace string
+	// Paced is what the fleet's own cycles were put back to, when they had drifted
+	// from what the server intends. Empty on the ordinary sync where they agreed.
+	Paced []string
 }
 
 // String renders the report in one line.
@@ -255,6 +258,12 @@ func (a *Agent) Sync(ctx context.Context) (Report, error) {
 			report.Applied++
 		}
 	}
+
+	// 5. Put the fleet's cycles back, if they have drifted from what is intended.
+	//
+	// After the actions, so a pace queued this round is not immediately argued with
+	// by a snapshot taken before it ran.
+	report.Paced = a.reconcilePace(ctx, snap, resp.FleetPace)
 
 	if err := a.journal.writeCursor(cursor{
 		LastSync: a.now(), Machine: a.machine, Server: a.server,
@@ -406,3 +415,116 @@ func (a *Agent) serverError(resp *http.Response) error {
 // rounds by construction — the alternative is a lock around a field written once
 // an hour by the same goroutine that reads it.
 func (a *Agent) UseLibrary(root string) { a.library = root }
+
+// reconcilePace puts the fleet's own cycles back to what the server intends.
+//
+// This is the difference between a setting and an event. A pace set in the browser
+// used to be one queued action: if it failed, or the queue was cleared, or the
+// machine was rebuilt from a checkout, the setting was gone and neither end knew.
+// The server now says what it intends on every response, and this compares that
+// against what orc actually resolved and corrects the difference.
+//
+// Consequences worth being plain about:
+//
+//   - A pace changed by hand on the machine is put back on the next sync. That is
+//     what "the server intends this" means, and it is the reason the correction is
+//     reported rather than made silently — somebody who ran `orc pace` and finds it
+//     reverted should be able to see why in the sync's own output.
+//   - Only the fleet layer. A role's or an identity's pace is that layer's, and orc
+//     resolves the three; the fleet layer is the one the browser's panel sets.
+//   - The comparison is against the snapshot taken at the start of this sync, which
+//     is one round stale where an action changed things in between. That costs at
+//     most one redundant `orc pace` with the values it already has, and converges.
+//
+// It never fails a sync. A machine that could not be corrected is a machine running
+// at the wrong pace, which is worth reporting and is not worth throwing away a
+// mirror that otherwise worked.
+func (a *Agent) reconcilePace(ctx context.Context, snap protocol.Snapshot,
+	want *protocol.DesiredPace) []string {
+	if want == nil || want.Zero() || snap.Fleet == nil {
+		return nil
+	}
+
+	var changed []string
+	for _, cycle := range []struct {
+		name string
+		args protocol.Args
+		says []string
+	}{
+		{"wake", paceArgs("wake", *want, snap.Fleet.Pace), paceSays("wake", *want, snap.Fleet.Pace)},
+		{"tend", paceArgs("tend", *want, snap.Fleet.Pace), paceSays("tend", *want, snap.Fleet.Pace)},
+	} {
+		if len(cycle.says) == 0 {
+			continue
+		}
+		err := a.source.Apply(ctx, protocol.Action{
+			Machine: a.machine, Op: protocol.OpOrcPace, Args: cycle.args,
+		})
+		if err != nil {
+			a.log.Warn("could not put the fleet's pace back",
+				"cycle", cycle.name, "error", err)
+			continue
+		}
+		a.log.Info("fleet pace put back", "cycle", cycle.name, "to", cycle.says)
+		changed = append(changed, cycle.says...)
+	}
+	return changed
+}
+
+// paceArgs is the `orc pace` that would make one cycle match what is intended.
+func paceArgs(cycle string, want protocol.DesiredPace, got protocol.FleetPace) protocol.Args {
+	args := protocol.Args{Cycle: cycle}
+	if cycle == "wake" {
+		if want.WakeAfter != "" && want.WakeAfter != got.WakeAfter {
+			args.After = want.WakeAfter
+		}
+		if want.WakeEvery != "" && want.WakeEvery != got.WakeEvery {
+			args.Every = want.WakeEvery
+		}
+		args.PaceOff, args.PaceOn = switchTo(want.WakeOff, got.WakeOff)
+		return args
+	}
+	if want.TendWatch != "" && want.TendWatch != got.TendWatch {
+		args.Watch = want.TendWatch
+	}
+	args.PaceOff, args.PaceOn = switchTo(want.TendOff, got.TendOff)
+	return args
+}
+
+// paceSays describes the correction in the words the report prints, and is empty
+// when there is nothing to correct — which is how the caller decides whether to run
+// anything at all.
+func paceSays(cycle string, want protocol.DesiredPace, got protocol.FleetPace) []string {
+	args := paceArgs(cycle, want, got)
+	var out []string
+	for _, f := range []struct{ flag, value string }{
+		{"--after", args.After}, {"--every", args.Every}, {"--watch", args.Watch},
+	} {
+		if f.value != "" {
+			out = append(out, fmt.Sprintf("%s %s %s", cycle, f.flag, f.value))
+		}
+	}
+	switch {
+	case args.PaceOff:
+		out = append(out, cycle+" off")
+	case args.PaceOn:
+		out = append(out, cycle+" on")
+	}
+	return out
+}
+
+// switchTo turns "the server wants this cycle off/on" and "it is currently off/on"
+// into the pair of flags that closes the gap, or neither where there is none.
+//
+// An absent intention is no opinion rather than "on": a server nobody has asked
+// about tend must not start turning tend on every sync.
+func switchTo(want string, off bool) (turnOff, turnOn bool) {
+	switch {
+	case want == "yes" && !off:
+		return true, false
+	case want == "no" && off:
+		return false, true
+	default:
+		return false, false
+	}
+}

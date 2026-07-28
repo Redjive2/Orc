@@ -849,6 +849,18 @@ func actionID(r *http.Request) (protocol.ActionID, error) {
 }
 
 func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, machine string, op protocol.Op, args protocol.Args) {
+	s.enqueueThen(w, r, machine, op, args, nil)
+}
+
+// enqueueThen is enqueue with something to record once the action is safely
+// queued.
+//
+// The hook runs after the write and before the response, and only on success: a
+// server that recorded an intention for an action it then failed to queue would be
+// asserting something nobody asked for. It takes the resolved machine because that
+// is settled in here — a request may name one or be answered from the session.
+func (s *Server) enqueueThen(w http.ResponseWriter, r *http.Request, machine string, op protocol.Op,
+	args protocol.Args, after func(protocol.MachineID) error) {
 	id := protocol.MachineID(machine)
 	if machine == "" {
 		var err error
@@ -879,6 +891,15 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request, machine string,
 	if err != nil {
 		s.fail(w, r, serverSide(err))
 		return
+	}
+	if after != nil {
+		if err := after(id); err != nil {
+			// Reported, not fatal. The action is queued and will happen; what
+			// failed is the note that says it should keep happening, and losing a
+			// 202 over that would make the operator queue it a second time.
+			s.log.Error("could not record what was intended",
+				"op", op, "machine", id, "error", err)
+		}
 	}
 	s.log.Info("action queued", "id", action.ID, "op", op, "machine", id)
 	s.events.Publish()
@@ -934,5 +955,19 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 		// How often to come back. It rides on the response because that is the
 		// only moment the server is in contact with a watcher it can never call.
 		Pace: s.state.SyncPace(),
+		// And what the fleet is meant to be paced at, so a machine that lost the
+		// setting — a failed action, a cleared queue, a checkout rebuilt from
+		// scratch — is put back rather than left quietly wrong.
+		FleetPace: intended(s.state.FleetPace(req.Snapshot.Machine)),
 	})
+}
+
+// intended is a desired pace as the response carries it: absent when the server has
+// no opinion, so "nothing to say" and "everything should be cleared" stay different
+// things on the wire.
+func intended(want protocol.DesiredPace) *protocol.DesiredPace {
+	if want.Zero() {
+		return nil
+	}
+	return &want
 }

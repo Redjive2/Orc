@@ -504,6 +504,10 @@ func (a App) sync(args []string) error {
 		if err != nil {
 			return err
 		}
+		// A one-shot cannot change its own interval — it is about to exit — but it
+		// is often the only thing that ever runs on a machine driven by cron, and
+		// it is where the next watcher's starting interval comes from.
+		a.rememberPace(*home, report.Pace)
 		return a.report(report)
 	}
 	return a.watchSync(ag, src, *home, *interval, *ttl, typed)
@@ -536,6 +540,14 @@ func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
 	exe, stamp, err := watch.Own()
 	if err != nil {
 		return err
+	}
+
+	// What the server last asked for, rather than what this command line says. See
+	// startingPace: the flag deciding the first round made it the one round that
+	// did not follow the rule.
+	if next := a.startingPace(home, every); next != every {
+		_ = a.say("cq: syncing every %s, as the server last asked", round(next))
+		every = next
 	}
 
 	started := time.Now()
@@ -595,6 +607,7 @@ func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
 		// failed says nothing about the pace, so the interval stands — a mirror
 		// that sped up or slowed down because it could not reach the server would
 		// be reacting to the wrong fact.
+		a.rememberPace(home, report.Pace)
 		if next := syncPace(report.Pace, every); next != every {
 			_ = a.say("cq: syncing every %s from now on", round(next))
 			every = next
@@ -684,6 +697,12 @@ func (a App) report(r agent.Report) error {
 	}
 	if r.Truncated {
 		parts = append(parts, a.ink("journal tail was incomplete", style.Warn))
+	}
+	// Said out loud, never silently. A pace put back is a change somebody may have
+	// made on this machine by hand being undone, and finding that out from the
+	// behaviour of a fleet days later is the worst way to learn it.
+	for _, put := range r.Paced {
+		parts = append(parts, a.ink("pace put back: "+put, style.Warn))
 	}
 	return a.say("%s", strings.Join(parts, a.ink(" · ", style.Frame)))
 }
@@ -1041,4 +1060,45 @@ func syncPace(asked string, now time.Duration) time.Duration {
 		return now
 	}
 	return got
+}
+
+// rememberPace records what the server last asked for, so the next process starts
+// where this one ended rather than where its command line did.
+//
+// Failing to write it is worth a word and not worth a failed sync: the mirror ran,
+// and what is lost is the *starting* interval of some future watcher, which the
+// server will correct on that watcher's first round anyway.
+func (a App) rememberPace(home, pace string) {
+	if strings.TrimSpace(pace) == "" {
+		return
+	}
+	got, err := stored.Read(home)
+	if err != nil {
+		a.complain(err)
+		return
+	}
+	if got.Pace == pace {
+		return
+	}
+	got.Pace = pace
+	if err := stored.Write(home, got); err != nil {
+		a.complain(err)
+	}
+}
+
+// startingPace is the interval a watcher opens with: what the server last asked
+// for, or the flag when it has never asked.
+//
+// The flag used to decide every start, which made the first round of every watcher
+// an exception to the rule every later round follows. On a machine whose watcher is
+// respawned by a service manager that was not a brief exception — the command line
+// is fixed at install time, so a pace chosen in the browser was overridden at every
+// restart by a number nobody had looked at since.
+func (a App) startingPace(home string, flag time.Duration) time.Duration {
+	got, err := stored.Read(home)
+	if err != nil {
+		a.complain(err)
+		return flag
+	}
+	return syncPace(got.Pace, flag)
 }

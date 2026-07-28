@@ -32,7 +32,11 @@ type fakeSource struct {
 	snapshot protocol.Snapshot
 	snapErr  error
 
-	applied  []protocol.ActionID
+	applied []protocol.ActionID
+	// calls is every action in full, because not every action has an id: the
+	// pace reconciliation builds one locally and never reports it, so `applied`
+	// records it as the empty id and says nothing about what it did.
+	calls    []protocol.Action
 	applyErr map[protocol.ActionID]error
 	// onApply runs inside Apply, so a test can simulate a crash at the one
 	// moment that matters: after the action took effect, before it was recorded.
@@ -64,6 +68,7 @@ func (f *fakeSource) Snapshot(context.Context, source.Options) (protocol.Snapsho
 func (f *fakeSource) Apply(_ context.Context, a protocol.Action) error {
 	f.mu.Lock()
 	f.applied = append(f.applied, a.ID)
+	f.calls = append(f.calls, a)
 	hook, err := f.onApply, f.applyErr[a.ID]
 	f.mu.Unlock()
 
@@ -71,6 +76,19 @@ func (f *fakeSource) Apply(_ context.Context, a protocol.Action) error {
 		hook(a)
 	}
 	return err
+}
+
+// paceCalls is every `orc pace` the agent ran, whatever its origin.
+func (f *fakeSource) paceCalls() []protocol.Args {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []protocol.Args
+	for _, c := range f.calls {
+		if c.Op == protocol.OpOrcPace {
+			out = append(out, c.Args)
+		}
+	}
+	return out
 }
 
 func (f *fakeSource) timesApplied(id protocol.ActionID) int {

@@ -214,3 +214,66 @@ func TestFleetIsServedPerMachine(t *testing.T) {
 		t.Errorf("a machine with no fleet was listed: %+v", out.Fleets)
 	}
 }
+
+// --- what the server intends, as against what it queued ---------------------
+
+// A pace set in the browser was one queued action and nothing else, so a fleet
+// that lost it — a failed action, a cleared queue, a machine rebuilt from a
+// checkout — stayed lost, and neither end knew. The fleet layer is now recorded as
+// an intention and handed back on every sync for the agent to reconcile against.
+func TestAFleetPaceIsRecordedAsSomethingIntended(t *testing.T) {
+	h := newHarness(t)
+	cookie, csrf := h.login(t)
+	putSnapshot(t, h, "studio")
+
+	post := func(body string) {
+		t.Helper()
+		if w := h.do(t, "POST", "/api/v1/fleet/pace", body,
+			h.withCookie(cookie), withCSRF(csrf)); w.Code != http.StatusAccepted {
+			t.Fatalf("status %d: %s", w.Code, w.Body)
+		}
+	}
+	post(`{"machine":"studio","cycle":"wake","after":"20m"}`)
+
+	want := h.state.FleetPace("studio")
+	if want.WakeAfter != "20m" {
+		t.Fatalf("the wake pace was not recorded: %+v", want)
+	}
+
+	// Folded, not replaced: `orc pace` is a patch, and a command about tend must
+	// not wipe what was said about wake.
+	post(`{"machine":"studio","cycle":"tend","watch":"1m"}`)
+	if want = h.state.FleetPace("studio"); want.WakeAfter != "20m" || want.TendWatch != "1m" {
+		t.Fatalf("one cycle overwrote the other: %+v", want)
+	}
+
+	// And `--clear` on a cycle is "no opinion" rather than "off": the layer goes
+	// back to whatever orc resolves for itself.
+	post(`{"machine":"studio","cycle":"wake","clear":true}`)
+	if want = h.state.FleetPace("studio"); want.WakeAfter != "" || want.TendWatch != "1m" {
+		t.Fatalf("clear did not clear its own cycle only: %+v", want)
+	}
+}
+
+// Roles and identities keep their own layers. Orc resolves a pace through
+// identity, then role, then fleet, and a server that asserted all three every sync
+// would overwrite what somebody set on the machine with the last thing typed in a
+// browser.
+func TestOnlyTheFleetLayerIsIntended(t *testing.T) {
+	h := newHarness(t)
+	cookie, csrf := h.login(t)
+	putSnapshot(t, h, "studio")
+
+	for _, body := range []string{
+		`{"machine":"studio","cycle":"wake","identity":"atlas","after":"20m"}`,
+		`{"machine":"studio","cycle":"wake","role":"engineer","after":"30m"}`,
+	} {
+		if w := h.do(t, "POST", "/api/v1/fleet/pace", body,
+			h.withCookie(cookie), withCSRF(csrf)); w.Code != http.StatusAccepted {
+			t.Fatalf("status %d: %s", w.Code, w.Body)
+		}
+	}
+	if want := h.state.FleetPace("studio"); !want.Zero() {
+		t.Errorf("a layer that is not the fleet's was recorded as the fleet's: %+v", want)
+	}
+}

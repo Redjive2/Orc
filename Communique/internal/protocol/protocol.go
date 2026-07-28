@@ -1237,6 +1237,70 @@ type SyncResponse struct {
 	// Empty from a server that has none, which a watcher reads as "keep the
 	// interval you have" rather than as "stop".
 	Pace string `json:"pace,omitempty"`
+	// FleetPace is the fleet-layer wake and tend pacing the server intends this
+	// machine to run at, for the agent to reconcile against what orc actually has.
+	//
+	// It rides here for the same reason Pace does, and it is *state* rather than an
+	// event on purpose. A pace set in the browser used to be a single queued action
+	// and nothing more: if it failed, or the queue was cleared, or the machine was
+	// rebuilt from a checkout, the setting was simply gone and nothing on either
+	// side knew. Sending what is intended on every response makes it converge —
+	// the machine is put back the next time it syncs, whatever lost it.
+	//
+	// Absent means the server has no opinion, which is different from an opinion
+	// that everything should be cleared.
+	FleetPace *DesiredPace `json:"fleet_pace,omitempty"`
+}
+
+// DesiredPace is a fleet's pacing as the server intends it.
+//
+// The fleet layer only. Roles and identities have their own layers, and those stay
+// one-shot actions: orc resolves a pace through identity, then role, then fleet, and
+// a server that asserted all three would be overwriting decisions somebody made on
+// the machine with the last thing anybody typed in a browser. The fleet layer is the
+// one the browser's own panel sets, and it is the one worth holding.
+//
+// Every field is optional and an absent one means no opinion — not "clear it". A
+// server that had never been asked about tend must not turn tend off.
+type DesiredPace struct {
+	WakeAfter string `json:"wake_after,omitempty"`
+	WakeEvery string `json:"wake_every,omitempty"`
+	TendWatch string `json:"tend_watch,omitempty"`
+	// WakeOff and TendOff are "yes", "no", or absent. Three states rather than a
+	// bool, because a cycle nobody has expressed a view about and a cycle somebody
+	// has deliberately left running are different, and a bool cannot hold both.
+	WakeOff string `json:"wake_off,omitempty"`
+	TendOff string `json:"tend_off,omitempty"`
+}
+
+// Zero reports whether the server has no opinion at all, so a response can leave
+// the field out rather than carrying an empty object every sync.
+func (p DesiredPace) Zero() bool {
+	return p.WakeAfter == "" && p.WakeEvery == "" && p.TendWatch == "" &&
+		p.WakeOff == "" && p.TendOff == ""
+}
+
+// Validate checks the durations parse and the switches say one of the two things
+// they may say.
+func (p DesiredPace) Validate() error {
+	for _, f := range []struct{ field, value string }{
+		{"wake_after", p.WakeAfter}, {"wake_every", p.WakeEvery}, {"tend_watch", p.TendWatch},
+	} {
+		if f.value == "" {
+			continue
+		}
+		if err := checkDuration("DesiredPace", f.field, f.value); err != nil {
+			return err
+		}
+	}
+	for _, f := range []struct{ field, value string }{
+		{"wake_off", p.WakeOff}, {"tend_off", p.TendOff},
+	} {
+		if f.value != "" && f.value != "yes" && f.value != "no" {
+			return fault.Field("DesiredPace", f.field, "%q is not yes or no", f.value)
+		}
+	}
+	return nil
 }
 
 // Validate checks the version, then that the batch is ordered and unique —
@@ -1247,6 +1311,11 @@ func (r SyncResponse) Validate() error {
 	}
 	if r.ServerTime.IsZero() {
 		return fault.Field("SyncResponse", "server_time", "server time is missing")
+	}
+	if r.FleetPace != nil {
+		if err := r.FleetPace.Validate(); err != nil {
+			return err
+		}
 	}
 	if r.Pace != "" {
 		if err := checkDuration("SyncResponse", "pace", r.Pace); err != nil {

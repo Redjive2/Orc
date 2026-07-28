@@ -30,6 +30,19 @@ type Settings struct {
 	// directory the library verbs may write. Empty means nobody has chosen one
 	// from the website and $CQ_LIBRARY still decides.
 	Library string `json:"library,omitempty"`
+	// Pace is how often the server last asked to be synced.
+	//
+	// Recorded because the interval only ever lived in a running watcher's head.
+	// It arrives on a sync response and was applied by resetting a ticker, so a
+	// one-shot `cq sync` read it and dropped it, and a watcher that restarted —
+	// after an upgrade, a reboot, a crash — went back to whatever its command line
+	// said and stayed there until its first round. On a machine whose watcher is
+	// respawned by a service manager that is not a transient: the flag wins at
+	// every start, and the setting somebody chose in the browser is overridden by
+	// a number nobody has looked at since the service was installed.
+	//
+	// Empty means the server has never said, and the flag decides.
+	Pace string `json:"pace,omitempty"`
 }
 
 // settingsName is the file, beside the journal and the cursor.
