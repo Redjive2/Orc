@@ -85,13 +85,23 @@ func TestNothingScrollsThePageSideways(t *testing.T) {
 // TestTheFoldIndentIsAStylesheetDecision: it used to be an inline padding
 // written by library.js, which no media query can reach — so a repository five
 // levels deep pushed its own filenames off a phone.
+//
+// The depth has to travel as a *style object*, which `h` applies through the
+// CSSOM. Written as a `style` attribute it never reaches the browser at all: the
+// site's content policy has no `unsafe-inline`, so the attribute is discarded
+// without a word and every fold in the tree draws at depth zero. That is why the
+// check below is for the object form rather than for the property name anywhere
+// — the name appearing in a comment, or in a string handed to an attribute, is
+// exactly the state this is meant to fail on.
 func TestTheFoldIndentIsAStylesheetDecision(t *testing.T) {
 	js := read(t, "app/library.js")
 	if strings.Contains(js, "padding-left:") {
 		t.Error("library.js still writes its own padding, which a media query cannot override")
 	}
-	if !strings.Contains(js, "--depth:") {
-		t.Error("library.js no longer states a fold's depth for the stylesheet")
+	if !regexp.MustCompile(`style:\s*\{\s*"--depth"`).MatchString(js) {
+		t.Error("library.js no longer hands a fold's depth to the stylesheet as a style object; " +
+			"as a style attribute the content policy would discard it and every fold would " +
+			"draw at depth zero")
 	}
 	if !strings.Contains(read(t, "app/app.css"), "var(--depth") {
 		t.Error("app.css does not use the depth it is given")
