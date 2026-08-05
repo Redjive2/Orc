@@ -416,15 +416,20 @@ func (a App) instructShow(s caller, words []string, diff bool) error {
 	}
 
 	if !diff {
-		if composed == "" {
+		// What the fleet set, rather than what the agent receives. Every agent now
+		// receives the house writing rule, so a composition is never empty — and
+		// printing that rule under the heading "here is what you set" would tell an
+		// operator they had set something they had not.
+		if layers.Empty() {
 			return a.say(a.out.Muted(fmt.Sprintf(
-				"%s runs on claude's own instructions; nothing is set for it", who)))
+				"%s runs on claude's own instructions and the house writing rule; "+
+					"nothing else is set for it", who)))
 		}
 		return a.write(composed + "\n")
 	}
 
 	// --diff: what would change if it restarted now. The session's own prompt is
-	// not recorded, so the honest answer compares what it *would* be composed with
+	// not recorded, so the best available answer compares what it *would* be composed with
 	// against what is running, which is only knowable as "there is a session and it
 	// started before the last change".
 	change, ok, err := s.store.LastChange(store.IdentityPrompt(who, false))

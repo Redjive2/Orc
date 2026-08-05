@@ -12,6 +12,7 @@ import (
 	"orc/common/fault"
 	"orc/common/user"
 	"orc/orc/internal/cli"
+	"orc/orc/internal/instruct"
 	"orc/orc/internal/model"
 	"orc/orc/internal/session"
 	"orc/orc/internal/store"
@@ -124,7 +125,9 @@ func (r *rig) populate(s *store.Store, name user.Name, id string, m model.Model,
 	if err != nil {
 		state.InstructError = err.Error()
 	}
-	state.Instructed = len(prompt)
+	// What the fleet set, as the supervisor records it: the house writing rule is
+	// in every composition and nobody set it.
+	state.Instructed = instruct.Beyond(prompt)
 	if err := s.WriteSession(name, state); err != nil {
 		return err
 	}

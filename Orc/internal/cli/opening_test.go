@@ -167,3 +167,42 @@ func TestASilentSocketDoesNotFailTheEmploy(t *testing.T) {
 		t.Errorf("it did not say the opening turn was lost:\n%s", got.stderr)
 	}
 }
+
+// A session the *backstop* built is a session nobody has spoken to either.
+//
+// Which message a new session gets used to depend on who asked for it: `employ` said
+// "opening" and `tend` said nothing, so a fresh session started by a backstop was
+// never told to begin. That is the case it matters most in — a fleet nobody is
+// watching, an agent whose session went away, and a `tend --watch` that brings it
+// back to sit silently at its prompt until the wake cycle notices a whole interval
+// later.
+//
+// It follows from the session now, not from the caller: resumed conversations carry
+// on, and new ones are told to begin, whoever made them.
+func TestTendTellsAFreshSessionToBegin(t *testing.T) {
+	r := fullFleet(t)
+	heard := poking(t, r, "ember")
+
+	r.ok("boss", "employ", "ember")
+
+	// The session goes away with no ending recorded, which is what a machine that
+	// was restarted — or a store that lost the record — leaves behind: still on the
+	// worklist, nothing running, and no conversation to resume. `tend` has to build
+	// a new one, and a new one has never been spoken to.
+	store := mustStore(t, r)
+	who := mustName(t, "ember")
+	if err := store.RemoveSession(who); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ForgetEnded(who); err != nil {
+		t.Fatal(err)
+	}
+	before := len(heard.said())
+
+	got := r.ok("boss", "tend")
+	said := heard.said()
+	if len(said) <= before {
+		t.Fatalf("a session tend started fresh was never spoken to: %q (%s%s)",
+			said, got.stdout, got.stderr)
+	}
+}

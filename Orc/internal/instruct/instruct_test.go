@@ -6,6 +6,7 @@ import (
 
 	"orc/common/fault"
 	"orc/orc/internal/instruct"
+	"orc/orc/internal/prose"
 )
 
 // The two composition rules are opposites, and everything built on this assumes
@@ -73,7 +74,10 @@ func TestComposeEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "" {
+	// The house writing rule, and nothing else. It is not a layer anybody sets —
+	// see Compose — so a fleet that has written no instructions still has one thing
+	// to say to its agents.
+	if got != "# how to write\n\n"+instruct.House {
 		t.Errorf("nothing set composed to %q", got)
 	}
 
@@ -227,4 +231,44 @@ func errorsIs(err, target error) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// The writing rule reaches every agent, whatever the fleet has or has not set.
+//
+// It is not a layer. A fleet where half the agents write one way produces documents
+// that read as though several people wrote them, which is what the rule is for — so
+// nobody can turn it off and nobody has to remember to turn it on.
+func TestTheWritingRuleIsAlwaysComposedIn(t *testing.T) {
+	for _, layers := range []instruct.Layers{
+		{},
+		{System: "the fleet's own words"},
+		{System: "a", Role: "b", Identity: "c", RoleName: "engineer", IdentityName: "ember"},
+	} {
+		got, err := instruct.Compose(layers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"ASD-STE100", "80%", "orc prose", "load-bearing"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("the composition does not mention %q:\n%s", want, got)
+			}
+		}
+		// First, so it is read before whatever else a fleet says.
+		if !strings.HasPrefix(got, "# how to write") {
+			t.Errorf("the writing rule is not at the top:\n%s", got)
+		}
+	}
+}
+
+// And the rule itself obeys the rule. A prompt that broke its own instruction would
+// be the first thing an agent read and the first thing it learned to discount.
+func TestTheWritingRuleObeysItself(t *testing.T) {
+	got := prose.Check(instruct.House)
+	if got.Banned() {
+		t.Errorf("the writing rule uses a word it bans: %+v", got.Findings)
+	}
+	if !got.OK() {
+		t.Errorf("the writing rule scores %.0f%%, under its own threshold: %+v",
+			got.Score()*100, got.Findings)
+	}
 }

@@ -100,6 +100,7 @@ func usage(p style.Palette) string {
 	verb("orc check-permission <name>", "exit 0 if you hold it, 8 if not")
 	verb("orc env <identity>", "the export block — discloses a key")
 	verb("orc verify", "walk the store and report damage")
+	verb("orc prose <path…>", "measure writing against the house rule")
 	verb("orc doctor", "which guards are in force, and which are not")
 	line("")
 	line("%s", p.Header("yours"))
@@ -274,7 +275,7 @@ func brief(p style.Palette) string {
 	group("who may what", "assign", "grant", "revoke", "move")
 	group("running them", "employ", "fire", "tend", "pace", "tariff", "budget", "view", "attach", "poke", "refresh")
 	group("reading it", "status", "list", "activity", "introspect", "check-control", "check-permission",
-		"env", "verify", "doctor")
+		"env", "verify", "doctor", "prose")
 	group("yours", "owner")
 	line("")
 	line("  %s", p.Muted("orc help for all of it: every form, the model, the patterns, the load table"))

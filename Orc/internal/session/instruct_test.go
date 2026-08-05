@@ -46,18 +46,36 @@ func writeRaw(t *testing.T, s *store.Store, rel, body string) {
 //
 // The flag was checked against the real `claude` before this was built
 // (Instruct.md §5, §14): 2.1.220 documents it, and an unknown flag errors, so
-// acceptance means it is parsed. What is tested here is that Orc passes it, with
-// what, and — the case that matters more — that a fleet which has set no prompts
-// passes nothing at all.
+// acceptance means it is parsed. What is tested here is that Orc passes it and with
+// what.
 
-func TestNoPromptsMeansNoFlag(t *testing.T) {
+// A fleet that has set nothing still passes one thing: the house writing rule.
+//
+// This used to assert the opposite — no prompts, no flag — and that was right while
+// every layer was optional. The writing rule is not a layer. A fleet where half the
+// agents write one way produces documents that read as though several people wrote
+// them, so nobody sets it and nobody can turn it off.
+func TestAFleetWithNoPromptsStillPassesTheHouseRule(t *testing.T) {
 	s, who := fleet(t, "ember")
 	sup := supervisorFor(t, s, who)
 
-	for _, arg := range sup.Args() {
+	args := sup.Args()
+	at := -1
+	for i, arg := range args {
 		if arg == "--append-system-prompt" {
-			t.Errorf("a fleet with no prompts still passed one: %v", sup.Args())
+			at = i
 		}
+	}
+	if at < 0 || at+1 >= len(args) {
+		t.Fatalf("a fleet with no prompts passed no instructions at all: %v", args)
+	}
+	got := args[at+1]
+	if !strings.Contains(got, "ASD-STE100") {
+		t.Errorf("the writing rule did not reach the session: %q", got)
+	}
+	// And nothing else, because nothing else was set.
+	if strings.Contains(got, "# the fleet") || strings.Contains(got, "# the ") {
+		t.Errorf("a fleet that set nothing passed a layer heading: %q", got)
 	}
 }
 
@@ -161,11 +179,17 @@ func TestABrokenPromptDoesNotStopTheSession(t *testing.T) {
 func TestComposeForReportsWhatWouldBeDelivered(t *testing.T) {
 	s, who := fleet(t, "ember")
 
-	// Nothing set composes to nothing, and that is not an error: most fleets have
-	// never used the feature.
+	// Nothing set composes to the house writing rule, which every agent receives
+	// whether or not the fleet has ever used the feature.
 	got, err := session.ComposeFor(s, who)
-	if err != nil || got != "" {
-		t.Fatalf("an unconfigured fleet composed %q (%v)", got, err)
+	if err != nil {
+		t.Fatalf("an unconfigured fleet failed to compose: %v", err)
+	}
+	if !strings.Contains(got, "ASD-STE100") {
+		t.Fatalf("an unconfigured fleet composed %q", got)
+	}
+	if instruct.Beyond(got) != 0 {
+		t.Fatalf("an unconfigured fleet composed a layer of its own: %q", got)
 	}
 
 	if err := s.WritePrompt(store.FleetPrompt(false), who, "ask before you guess"); err != nil {

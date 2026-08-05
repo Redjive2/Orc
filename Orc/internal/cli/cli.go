@@ -233,6 +233,8 @@ func (a App) dispatch(args []string) error {
 		return a.pace(rest)
 	case "tariff":
 		return a.tariff(rest)
+	case "prose":
+		return a.proseCmd(rest)
 	case "check-permission":
 		return a.checkPermission(rest)
 	case "env":

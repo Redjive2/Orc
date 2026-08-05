@@ -137,7 +137,7 @@ func (a App) tryNow(s caller, who user.Name) error {
 	if err := s.store.ClearFailedStarts(who); err != nil {
 		a.note("%s: the start record could not be cleared: %v", who, err)
 	}
-	return a.openOne(s, who)
+	return a.tendOne(s, who)
 }
 
 // affordable refuses an employment the caller's budget does not cover, and explains
@@ -286,22 +286,13 @@ func (a App) tend(args []string) error {
 // buys is a smaller window, at the cost of a machine that never idles.
 const MinWatch = 5 * time.Second
 
-// WatchGiveUp is how many consecutive failed passes end the loop.
-//
-// A pass that fails once is a session dying mid-read or a store being written to,
-// and the next pass will see a settled world — that is the whole point of a
-// backstop. A pass that fails this many times running is not a race, and a loop
-// that cannot make progress should say so and stop rather than fill a terminal
-// with the same line until somebody notices.
-const WatchGiveUp = 5
-
 // tendOnce reconciles the caller's subtree a single time.
 func (a App) tendOnce(verbose bool) error {
 	s, err := a.begin()
 	if err != nil {
 		return err
 	}
-	acted, err := a.reconcile(s, s.fleet.Subtree(s.who), verbose, false)
+	acted, err := a.reconcile(s, s.fleet.Subtree(s.who), verbose)
 	if err != nil {
 		return err
 	}
@@ -345,8 +336,10 @@ func (a App) tendLoop(interval time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	failures := 0
-	var last error
+	// A cycle that stops is a fleet with no backstop, and nothing restarts one. See
+	// backstop.go: a pass may fail as often as it likes, and only how often that is
+	// said out loud changes.
+	guard := &backstop{app: a, what: "tending"}
 	quiet := false
 	for {
 		// Paused, and quiet about it after the first time. The loop keeps looping
@@ -366,20 +359,7 @@ func (a App) tendLoop(interval time.Duration) error {
 		}
 		quiet = false
 
-		if err := a.tendOnce(false); err != nil {
-			failures++
-			last = err
-			// The failure is reported every time rather than once: two different
-			// failures in a row are two different problems, and collapsing them
-			// would hide the second.
-			_, _ = fmt.Fprintf(a.Stderr, "%s %v\n", a.err.Alarm("orc:"), err)
-			if failures >= WatchGiveUp {
-				return fault.Conflict{Path: "tend --watch", Reason: fmt.Sprintf(
-					"%d passes in a row failed; the last was: %v", failures, last)}
-			}
-		} else {
-			failures = 0
-		}
+		guard.pass(func() error { return a.tendOnce(false) })
 
 		// Between passes, never during one: reconciling a fleet is the last thing
 		// that should be interrupted by the process image changing underneath it.
@@ -406,19 +386,7 @@ func (a App) tendLoop(interval time.Duration) error {
 
 // tendOne reconciles a single identity, after employ or fire changed it.
 func (a App) tendOne(s caller, who user.Name) error {
-	_, err := a.reconcile(s, []user.Name{who}, false, false)
-	return err
-}
-
-// openOne reconciles a single identity and speaks to a session it starts.
-//
-// The difference from tendOne is who asked. A backstop that noticed a crashed
-// session resumes a conversation that was already going; `orc employ` creates one
-// that has never been spoken to, and a Claude session nobody has said anything to
-// does nothing at all — it sits at its prompt with a system prompt it has no turn
-// in which to act on. See openWith.
-func (a App) openOne(s caller, who user.Name) error {
-	_, err := a.reconcile(s, []user.Name{who}, false, true)
+	_, err := a.reconcile(s, []user.Name{who}, false)
 	return err
 }
 
@@ -429,7 +397,7 @@ func (a App) openOne(s caller, who user.Name) error {
 // enforced, because that is the moment somebody asked for something; killing a
 // running agent to balance a number would destroy work to satisfy a check that
 // should have refused earlier.
-func (a App) reconcile(s caller, names []user.Name, verbose, opening bool) (acted int, err error) {
+func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, err error) {
 	for _, name := range names {
 		// Read from the store rather than from the fleet the command started with.
 		// The snapshot in `s.fleet` was derived before this command changed anything,
@@ -538,7 +506,25 @@ func (a App) reconcile(s caller, names []user.Name, verbose, opening bool) (acte
 			// has just employed has the opposite problem — nothing is unfinished and
 			// nothing has started, because a Claude session that has not been spoken
 			// to has no turn in which to act on its instructions.
-			if opening {
+			// What a session needs said to it follows from the session, not from
+			// who started it.
+			//
+			// This used to ask the caller: `employ` said "opening" and a backstop
+			// said nothing, so a *fresh* session started by `tend` was never spoken
+			// to. A Claude session with no user turn does nothing at all — it holds
+			// its instructions and has no occasion to act on them — so an agent whose
+			// session the backstop rebuilt sat at its prompt until the wake cycle
+			// noticed it, a whole interval later, and an `orc refresh` left one that
+			// looked started and never moved.
+			//
+			// The session answers it instead. A conversation that was resumed carries
+			// on, and is nudged only where it stopped mid-turn. One that is new has
+			// never heard anything and is told to begin, every time, whoever asked.
+			if resume {
+				if err := a.nudgeIfInterrupted(s, name); err != nil {
+					a.note("%s was resumed but could not be nudged on: %v", name, err)
+				}
+			} else {
 				if err := a.openWith(s, name); err != nil {
 					a.note("%s was started but could not be told to begin: %v", name, err)
 				}
@@ -548,8 +534,6 @@ func (a App) reconcile(s caller, names []user.Name, verbose, opening bool) (acte
 				if err := s.store.ForgetEnded(name); err != nil {
 					a.note("%s: the ending could not be cleared: %v", name, err)
 				}
-			} else if err := a.nudgeIfInterrupted(s, name); err != nil {
-				a.note("%s was resumed but could not be nudged on: %v", name, err)
 			}
 
 		case !who.Employed() && live:

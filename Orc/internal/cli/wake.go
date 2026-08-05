@@ -324,7 +324,7 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 	// A negative silence means the clock moved: an event stamped in the future, or a
 	// machine whose time was corrected between the event and now. Waking on it would
 	// be waking on arithmetic nobody can check, and skipping it silently would let a
-	// genuinely stuck agent hide behind a bad timestamp — so it is said out loud and
+	// truly stuck agent hide behind a bad timestamp — so it is said out loud and
 	// left for the next pass, by which time the clock has usually settled.
 	if quiet < 0 {
 		w.app.note("%s: its last event is stamped %s in the future, so how long it has been "+
@@ -586,18 +586,12 @@ func (w *waker) loop(interval time.Duration) error {
 	// started days ago from a shell nobody has open is exactly what a stored setting
 	// has to be able to reach: there is no other way to tell it. So a change lands
 	// on the next pass, and the loop says so rather than changing pace in silence.
-	failures := 0
+	// The same guard `tend --watch` runs under, and for the same reason: the two
+	// cycles are the whole of what keeps a fleet alive, and neither has anything
+	// above it to start it again.
+	guard := &backstop{app: w.app, what: "waking"}
 	for {
-		if err := w.once(false); err != nil {
-			failures++
-			w.app.note("pass failed: %v", err)
-			if failures >= WatchGiveUp {
-				return fault.Conflict{Path: "wake --every", Reason: fmt.Sprintf(
-					"%d passes in a row failed; the last was: %v", failures, err)}
-			}
-		} else {
-			failures = 0
-		}
+		guard.pass(func() error { return w.once(false) })
 
 		// Between passes, never during one: a pass that is half-way through poking
 		// a fleet when the process image changes underneath it is worse than a pass

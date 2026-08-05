@@ -26,6 +26,7 @@ Orc exposes the following commands:
 | `budget <role> <load>`†                     | Set the load a role may keep on the work list                              |
 | `attach <identity>`                         | Hand your terminal to the session — **Ctrl-\ then d** leaves it running    |
 | `poke <identity> [message]`                 | Nudge the identity to continue working                                     |
+| `prose <path…>`                             | Measure writing against the house rule; exit 6 when it disagrees           |
 | `wake [<identity>…] [--every <dur>]`†      | Poke whatever has gone quiet; `--every` runs it as a cycle                  |
 | `refresh <identity>`                        | Create a new Code session to replace the old one for the identity          |
 | `move <identity> <boss>`                    | Move the identity to be under the boss; lower authority/perms as needed    |
@@ -463,6 +464,36 @@ A session that has never said anything at all is judged from when it started: up
 an hour with no tool call is as stopped as one that finished and waited, and the more
 worrying of the two.
 
+### The backstops do not stop
+
+Nothing restarts these cycles. There is no service, no supervisor above them, and
+`orc doctor` reports a missing cycle to whoever runs `orc doctor`. So both loops
+used to count failures and return an error at five, which turned a bad half hour —
+a full disk, a sleeping machine, an upgrade replacing binaries — into a fleet with
+no backstop at all. Five passes is also thin evidence: at a one-minute cycle it is
+five minutes.
+
+A pass may now fail as often as it likes and the loop keeps its interval. Only how
+often the failure is **said** changes: the first three in full, then one in ten,
+which leaves a trail without scrolling a terminal. Recovery is always said. A
+panic in a pass is caught, reported as the defect it is, and the cycle carries on
+— a nil map somewhere below must not take a whole fleet down with it.
+
+### Every new session is told to begin
+
+A Claude session with no user turn does nothing. It holds the fleet's, the role's,
+and the identity's instructions in its system prompt and has no occasion to act on
+any of them.
+
+Which message a new session gets used to depend on **who asked** for it: `employ`
+said "opening" and a backstop said nothing. So a session `tend` rebuilt was never
+spoken to, and it sat at its prompt until the wake cycle noticed it a whole
+interval later. `orc refresh` left one that looked started and never moved.
+
+It follows from the session now. A conversation that was **resumed** carries on,
+and is nudged only where it stopped mid-turn. One that is **new** has heard
+nothing and is told to begin, every time, whoever made it.
+
 ### Delivery is confirmed, not assumed
 
 Writing into a pty is not delivery. A write to the master succeeds whether or not
@@ -850,3 +881,40 @@ Colour is a layer and never information: every colour is redundant with a glyph
 or a word, so a pipe through `grep` loses nothing.
 
 The project is stored at `Orc/Orc/go.mod`.
+
+
+## §9 How to write
+
+Every agent is given one instruction nobody sets and nobody can turn off: write in
+Simplified Technical English (ASD-STE100), at 80% or better, and never use six
+spellings — `honest`, `honestly`, `caveat`, `genuine`, `genuinely`,
+`load-bearing`.
+
+It is not a layer. A fleet where half the agents write one way produces documents
+that read as though several people wrote them, which is the thing the rule stops.
+`instruct.House` holds the text and `instruct.Compose` puts it above the fleet's
+own layer, so a fleet that has set no instructions still has this one.
+
+`orc prose <path…>` measures a file, a directory, or standard input against it.
+Every agent may run it: it reads and prints and changes nothing, and the agent
+whose writing is judged is the one that should see the judgement first. A
+directory is walked for `.md`, `.txt`, and `.markdown` and nothing else — an agent
+that had to rewrite every comment in a package to land a change would stop running
+it. Exit 6 means the writing and the rule disagree.
+
+**What the score measures.** Sentence length, passive voice, and stacked
+subordinate clauses. These need no dictionary and no parser, and they carry most of
+what STE is for. The score does **not** cover the approved vocabulary, which is the
+other half of the standard, nor noun clusters, which need to know which words are
+nouns. A score is a measure of the checkable rules and not a certificate of
+conformance.
+
+Inline code spans are quoted rather than written, so they are not measured. A
+document that explains the rule has to show what breaks it, and scoring those
+examples would make the clearest way to state a rule the way that fails it. The
+rule's own text passes its own check, and a test holds it to that.
+
+The two halves are enforced differently. A banned word is exact: one occurrence
+fails the text, whatever the score. The style rules are a proportion, because prose
+has sentences that need the length, and a rule that failed every one of those is a
+rule people write around.

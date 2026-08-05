@@ -399,7 +399,12 @@ func (s *Supervisor) once() error {
 		Started:    clock.Format(s.store.Now()),
 		Restarts:   s.restarts,
 		LastExit:   s.lastExit,
-		Instructed: len(s.prompt),
+		// What the *fleet* set, not what was composed. Every agent now receives the
+		// house writing rule as well, so a composed length is never zero and the
+		// field it feeds — "instructed: nothing was set for it" — could never say so
+		// again. This answers the question somebody asks it: did what I wrote reach
+		// the agent?
+		Instructed: instruct.Beyond(s.prompt),
 	}
 	if s.promptErr != nil {
 		state.InstructError = s.promptErr.Error()

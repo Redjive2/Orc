@@ -158,7 +158,11 @@ type Layers struct {
 // following an instruction should be able to say which of three documents it is in,
 // and so should the operator debugging why.
 func Compose(l Layers) (string, error) {
-	var parts []string
+	// The house rule first, and always. It is not a layer somebody sets: a fleet
+	// where half the agents write one way is a fleet whose documents read as though
+	// several people wrote them, which is the thing the rule exists to stop. Nobody
+	// can turn it off and nobody has to remember to turn it on.
+	parts := []string{"# how to write\n\n" + House}
 
 	for _, layer := range []struct {
 		kind Kind
@@ -179,8 +183,11 @@ func Compose(l Layers) (string, error) {
 		parts = append(parts, "# "+layer.what+"\n\n"+text)
 	}
 
-	if len(parts) == 0 {
-		return "", nil
+	if len(parts) == 1 {
+		// The house rule on its own. A fleet that has set no layer at all still gets
+		// it, because it is about how anything is written rather than about what
+		// this fleet does.
+		return parts[0], nil
 	}
 
 	got := strings.Join(parts, "\n\n")
@@ -236,3 +243,55 @@ func or(s, fallback string) string {
 	}
 	return s
 }
+
+// Beyond is how much of a composed prompt the fleet itself set.
+//
+// The house writing rule is in every composition and nobody set it, so the length of
+// a composition no longer answers "did what I wrote reach the agent?". This
+// subtracts the part that is always there.
+//
+// A composition that does not start with the house rule is one from an older build,
+// and its whole length is the fleet's — which is what it was.
+func Beyond(composed string) int {
+	head := "# how to write\n\n" + House
+	if !strings.HasPrefix(composed, head) {
+		return len(composed)
+	}
+	return len(strings.TrimSpace(composed[len(head):]))
+}
+
+// Empty reports whether a fleet has set any of the three layers.
+//
+// Separate from a composition being empty, which it no longer can be: every agent
+// receives the house writing rule whether or not anybody wrote anything. "Nothing is
+// set" and "there is nothing to say to this agent" used to be the same question and
+// are now two.
+func (l Layers) Empty() bool {
+	return strings.TrimSpace(l.System) == "" &&
+		strings.TrimSpace(l.Role) == "" &&
+		strings.TrimSpace(l.Identity) == ""
+}
+
+// House is the writing rule every agent is given, whatever else it is told.
+//
+// It says the rule and it names the tool, because a rule with no way to check it is
+// one that drifts: an agent can run `orc prose` over what it wrote and see the same
+// judgement anybody reviewing it would see.
+//
+// The banned words share a shape. Each one claims something about the writing rather
+// than saying the thing — "honestly" implies the rest was not, and the others assert
+// that something matters instead of showing that it does.
+const House = "Write in Simplified Technical English (ASD-STE100), at 80% or better.\n" +
+	"\n" +
+	"- Short sentences. 25 words is the limit; most should be well under it.\n" +
+	"- Active voice. Say who does the thing: `orc reads the store`, not\n" +
+	"  `the store is read`.\n" +
+	"- One thought per sentence. Split it rather than chaining clauses with\n" +
+	"  `which`, `although`, `whereas`, `because`.\n" +
+	"- Simple, consistent words. Use the same word for the same thing every time.\n" +
+	"\n" +
+	"Six spellings are never used, in any form: `honest`, `honestly`, `caveat`,\n" +
+	"`genuine`, `genuinely`, `load-bearing`. Say the thing itself instead.\n" +
+	"\n" +
+	"`orc prose <path>` measures a file against this rule and names what it finds.\n" +
+	"Run it on documentation before you call the work done."
