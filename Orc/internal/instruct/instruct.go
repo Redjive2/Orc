@@ -281,7 +281,7 @@ func (l Layers) Empty() bool {
 // The banned words share a shape. Each one claims something about the writing rather
 // than saying the thing — "honestly" implies the rest was not, and the others assert
 // that something matters instead of showing that it does.
-const House = "Write in Simplified Technical English (ASD-STE100), at 80% or better.\n" +
+const House = "Write in Simplified Technical English (ASD-STE100), at 90% or better.\n" +
 	"\n" +
 	"- Short sentences. 25 words is the limit; most should be well under it.\n" +
 	"- Active voice. Say who does the thing: `orc reads the store`, not\n" +

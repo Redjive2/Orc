@@ -248,7 +248,7 @@ func TestTheWritingRuleIsAlwaysComposedIn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"ASD-STE100", "80%", "orc prose", "load-bearing"} {
+		for _, want := range []string{"ASD-STE100", "90%", "orc prose", "load-bearing"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("the composition does not mention %q:\n%s", want, got)
 			}

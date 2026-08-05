@@ -35,11 +35,15 @@ import (
 
 // Threshold is the share of sentences that must break no checkable rule.
 //
-// Eighty per cent, as the house rule states it. It is a proportion rather than a
+// Ninety per cent, as the house rule states it. It is a proportion rather than a
 // requirement on every sentence because prose has sentences that need the length —
 // a definition, a list read as a line — and a rule that failed those would be a rule
 // people write around rather than follow.
-const Threshold = 0.80
+//
+// At nine in ten, one sentence in a paragraph of ten may run long or turn passive.
+// That is enough room for the sentences that need it and little enough that a
+// document written without care will not reach it.
+const Threshold = 0.90
 
 // MaxWords is the longest a sentence may be.
 //

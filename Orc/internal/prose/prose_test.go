@@ -92,15 +92,18 @@ The cycle says what it did.`
 
 // The threshold is a proportion for a reason: prose has sentences that need the
 // length, and a rule that failed every one of them would be a rule nobody keeps.
+//
+// At nine in ten there is room for one such sentence in a paragraph of ten, and no
+// room for a second.
 func TestTheScoreIsAProportionRatherThanAVerdictOnEachSentence(t *testing.T) {
-	good := "Orc reads the store. It starts a session. The agent carries on. The cycle reports."
-	bad := " " + strings.Repeat("word ", 30) + "."
+	good := strings.Repeat("Orc reads the store. ", 9)
+	bad := strings.Repeat("word ", 30) + "."
 
 	if got := prose.Check(good + bad); !got.OK() {
-		t.Errorf("four good sentences and one long one scored %.2f, which should pass", got.Score())
+		t.Errorf("nine good sentences and one long one scored %.2f, which should pass", got.Score())
 	}
-	if got := prose.Check("Orc reads the store." + bad + bad); got.OK() {
-		t.Errorf("one good sentence and two long ones scored %.2f, which should fail", got.Score())
+	if got := prose.Check(good + bad + " " + bad); got.OK() {
+		t.Errorf("nine good sentences and two long ones scored %.2f, which should fail", got.Score())
 	}
 }
 

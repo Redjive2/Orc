@@ -886,7 +886,7 @@ The project is stored at `Orc/Orc/go.mod`.
 ## §9 How to write
 
 Every agent is given one instruction nobody sets and nobody can turn off: write in
-Simplified Technical English (ASD-STE100), at 80% or better, and never use six
+Simplified Technical English (ASD-STE100), at 90% or better, and never use six
 spellings — `honest`, `honestly`, `caveat`, `genuine`, `genuinely`,
 `load-bearing`.
 
@@ -917,4 +917,5 @@ rule's own text passes its own check, and a test holds it to that.
 The two halves are enforced differently. A banned word is exact: one occurrence
 fails the text, whatever the score. The style rules are a proportion, because prose
 has sentences that need the length, and a rule that failed every one of those is a
-rule people write around.
+rule people write around. At nine in ten there is room for one such sentence in a
+paragraph of ten, and no room for a second.

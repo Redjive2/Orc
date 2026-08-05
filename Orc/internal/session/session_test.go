@@ -225,8 +225,14 @@ func TestPokeIsBracketedWhenMultiline(t *testing.T) {
 	if err := sup.Poke("first line\nsecond line"); err != nil {
 		t.Fatalf("poking: %v", err)
 	}
+	// The escape may arrive either way. What an attached reader sees is the
+	// terminal's echo of what was written, and a line discipline with ECHOCTL set
+	// renders a control character in caret notation — so the same ESC reaches this
+	// stream as `\x1b` on one machine and as `^[` on another. Both prove the paste
+	// was written, which is what the test is about, and pinning one of them made
+	// this fail depending on whose terminal ran it.
 	got := readUntil(t, conn, 5*time.Second, "second line")
-	if !strings.Contains(got, "\x1b[200~") {
+	if !strings.Contains(got, "\x1b[200~") && !strings.Contains(got, "^[[200~") {
 		t.Errorf("a multi-line poke was not sent as a bracketed paste: %q", got)
 	}
 }
