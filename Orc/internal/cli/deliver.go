@@ -47,8 +47,8 @@ const (
 	DeliverTries = 6
 	// DeliverBackoff is the first wait; each retry doubles it.
 	DeliverBackoff = 150 * time.Millisecond
-	// OpenTries bounds the opening message a start sends, which is a different
-	// problem and gets a different budget.
+	// OpenTries bounds the *dial* an opening message makes, which is a different
+	// problem from delivering one and gets a different budget.
 	//
 	// Populate has already waited for the session to exist; all that can still be
 	// behind is the listener, which the supervisor opens immediately after writing
@@ -56,9 +56,17 @@ const (
 	// backoff here would be waiting for a session that has not crashed — and it
 	// would put nine seconds on the end of every `orc employ` that could not be
 	// spoken to, which is precisely the case where the operator wants to be told
-	// quickly rather than kept waiting. What is lost is one opening message, and
-	// the wake cycle is behind it: a session nobody has spoken to has said nothing,
-	// which is exactly what that cycle looks for.
+	// quickly rather than kept waiting.
+	//
+	// What this must **not** bound is the message itself. The paragraph above used
+	// to cover both, on the reasoning that a lost opening message costs little
+	// because the wake cycle is behind it — and that was the wrong trade twice
+	// over. A session nobody has spoken to sits at its prompt until the quiet
+	// threshold elapses, which is the gap somebody notices as "it started and never
+	// did anything"; and the supervisor now confirms delivery, so the wait behind
+	// one attempt is the confirmation ladder rather than a socket that is not there
+	// yet. Three attempts at *that* is three chances to walk past a message the
+	// ladder was about to rescue.
 	OpenTries = 3
 )
 

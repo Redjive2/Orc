@@ -608,11 +608,15 @@ func (a App) openWith(s caller, name user.Name) error {
 		message = WakeMessage
 	}
 
+	// The dial is the impatient half; the message is not. See OpenTries: a socket
+	// that is not there yet is worth half a second, and the message behind it is
+	// worth the same patience every other delivery gets — it is the one somebody
+	// notices the absence of hours later.
 	client, _, err := a.reachWithin(s, name, OpenTries)
 	if err != nil {
 		return err
 	}
-	if _, err := keepTryingUpTo(OpenTries, func() error { return client.Poke(message) }); err != nil {
+	if _, err := keepTrying(func() error { return client.Poke(message) }); err != nil {
 		return err
 	}
 	return a.say("  " + a.out.Muted(fmt.Sprintf("and told to begin: %s", quoteShort(message))))

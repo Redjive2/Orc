@@ -95,15 +95,24 @@ func TestAPokeIsNotRepeatedWhereNothingCanReport(t *testing.T) {
 	// No feed at all: this fleet cannot say whether anything arrived.
 	_ = os.Remove(s.EventsPath(who))
 
+	// The first poke waits once for the session to say anything, because a session
+	// that has only just started has not reported *yet* — that wait is the whole fix
+	// for an opening message going into a terminal before it is listening.
+	if err := sup.Poke("only once"); err != nil {
+		t.Fatalf("a poke on a fleet that cannot report was refused: %v", err)
+	}
+
+	// And never again. Paying that wait on every message would put half a minute on
+	// a wake cycle's first pass over a fleet of seven.
 	done := make(chan error, 1)
-	go func() { done <- sup.Poke("only once") }()
+	go func() { done <- sup.Poke("and again") }()
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("a poke on a fleet that cannot report was refused: %v", err)
+			t.Fatalf("the second poke was refused: %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("a poke on a fleet that cannot report waited to be confirmed")
+		t.Fatal("a fleet that cannot report was waited for twice")
 	}
 }
 
@@ -129,5 +138,63 @@ func TestAConfirmedPokeReturnsAtOnce(t *testing.T) {
 	}
 	if took := time.Since(start); took > 2*time.Second {
 		t.Errorf("an acknowledged poke took %s; it should stop as soon as the count moves", took)
+	}
+}
+
+// The asymmetry this was written for: `orc poke` got messages through and the
+// opening message did not.
+//
+// Both go through the same Poke. What differed was *when*. A person runs `poke`
+// against a session that has been up for a while, so its feed has events, so
+// delivery was confirmed and the ladder rescued anything the terminal dropped.
+// The opening message is sent the moment `Populate` returns — which is when the
+// supervisor's *state file* says the session is live, before Claude has done
+// anything at all — so the feed was empty, confirmation switched itself off, and
+// the message went into a terminal that drops input for its first second with
+// nothing left to notice.
+//
+// A session that has not reported yet is waited for now, and the first event is
+// the readiness signal there was no other way to get.
+func TestAPokeWaitsForANewSessionToSayAnything(t *testing.T) {
+	s, who := fleet(t, "ember")
+	sup, id := start(t, s, who, nil)
+
+	// Nothing on the feed when the poke starts, exactly as an opening message finds
+	// it. The session's start arrives while the poke is waiting, and nothing is ever
+	// submitted — so a poke that confirmed refuses, and one that skipped confirming
+	// reports success. That is what tells the two apart: under the old guard this
+	// returned nil, which is the whole failure written down.
+	_ = os.Remove(s.EventsPath(who))
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		feedFor(t, s.EventsPath(who), id, started(id))
+	}()
+
+	err := sup.Poke("begin")
+	if err == nil {
+		t.Fatal("an opening message was reported as delivered without the session ever saying so")
+	}
+	if !strings.Contains(err.Error(), "never reported submitting") {
+		t.Errorf("it refused for the wrong reason: %v", err)
+	}
+}
+
+// And the ordinary end of the same case: the session starts, the message lands, and
+// the poke returns without a word.
+func TestAnOpeningMessageThatLandsIsNotRetried(t *testing.T) {
+	s, who := fleet(t, "ember")
+	sup, id := start(t, s, who, nil)
+
+	_ = os.Remove(s.EventsPath(who))
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		feedFor(t, s.EventsPath(who), id, started(id))
+		time.Sleep(200 * time.Millisecond)
+		feedFor(t, s.EventsPath(who), id, started(id),
+			`{"at":"2026-07-27T10:00:01.000Z","session":"`+id+`","event":"UserPromptSubmit","turn":1}`)
+	}()
+
+	if err := sup.Poke("begin"); err != nil {
+		t.Fatalf("an opening message the session acknowledged was refused: %v", err)
 	}
 }

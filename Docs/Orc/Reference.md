@@ -523,12 +523,27 @@ merely unsent, and an agent acting twice on one instruction is a worse outcome
 than one that missed it. Past both, the poke is **refused** with the reason, so a
 caller reports a fleet that cannot be spoken to rather than logging a success.
 
+A session that has **not reported yet** is waited for, up to five seconds, before
+any of that is decided. This is why `orc poke` worked while the opening message
+did not, and the two differ only in when they run. A person pokes a session that
+has been up for a while, so its feed has events, so delivery was confirmed and
+the ladder rescued whatever the terminal dropped. The opening message goes the
+moment `orc employ` finishes waiting — and what it waits for is the supervisor's
+*state file*, written before Claude has done anything — so the feed was empty,
+confirmation switched itself off, and the message went into a terminal that drops
+input for its first second with nothing left to notice.
+
+The first event is also the readiness signal there was no other way to get: the
+hook fired, so Claude is far enough along to have run one. The wait happens once
+per start. A fleet whose hooks are not installed reports nothing ever, and paying
+it on every message would put half a minute on a wake cycle's first pass over
+seven agents.
+
 Two cases are not retried. A session **mid-turn** has its prompt queued by Claude
 and submitted when the turn ends, so the hook may be minutes away and the message
 is exactly where it belongs. And a session that has **never written an event** —
-a fleet whose hooks are not installed, or the instant before a session records its
-start — cannot report, so absence of a submission means nothing there; those are
-written to once and believed, as before.
+a fleet whose hooks are not installed — cannot report, so absence of a submission
+means nothing there; those are written to once and believed, as before.
 
 ### Usage limits
 

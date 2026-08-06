@@ -109,6 +109,12 @@ type Supervisor struct {
 	// waiting for a submission can skip the parse while nothing has been appended.
 	// Only ever touched from Poke, which is serialised by the caller.
 	feedSize int64
+	// waitedForFirst records that this session has already been given its one wait
+	// for a first event. See reports.
+	waitedForFirst bool
+	// startedAt is when the child was last started, so a poke can tell a session
+	// that has not reported *yet* from one that never will.
+	startedAt time.Time
 
 	// prompt is the composed system prompt: the fleet's layer, the role's, and the
 	// identity's, under headings naming each. Empty where nothing is set, which is
@@ -346,6 +352,16 @@ func (s *Supervisor) Run() error {
 
 // once starts the child and waits for it.
 func (s *Supervisor) once() error {
+	// When this start happened, so a poke can tell a session that has not reported
+	// *yet* from one whose fleet never will. Stamped per start rather than per
+	// supervisor: a restart is a fresh Claude with a fresh startup to wait out, and
+	// its feed carries the old session's events, so a count alone cannot tell them
+	// apart.
+	s.mu.Lock()
+	s.startedAt = time.Now()
+	s.waitedForFirst = false
+	s.mu.Unlock()
+
 	// The standing instructions, composed here so that every start — the first one
 	// and every restart after it — delivers what the fleet says *now*.
 	//
@@ -603,15 +619,25 @@ func (s *Supervisor) confirm(p *pty.Pty, text string, before int) error {
 	//
 	// This is the guard that makes the ladder safe rather than reckless. Its second
 	// rung sends the message again, which is only ever right when the *absence* of a
-	// submission means something — and on a fleet whose hooks are not installed, or
-	// in the moment before a session has recorded its start, absence means nothing
-	// at all. Retrying there would deliver every prompt twice to every agent, which
-	// is worse than the problem.
+	// submission means something — and on a fleet whose hooks are not installed,
+	// absence means nothing at all. Retrying there would deliver every prompt twice
+	// to every agent, which is worse than the problem.
 	//
-	// A session that is running writes SessionStart before anybody can poke it, so
-	// the ordinary case is covered and the exception is a fleet that genuinely
-	// cannot report — where this correctly returns to writing and hoping.
-	if s.events() == 0 {
+	// The guard used to say that a running session writes SessionStart before
+	// anybody can poke it. That is true of `orc poke`, which a person runs against a
+	// session that has been up for a while, and false of the one delivery that
+	// matters most: the opening message. `Populate` returns as soon as the *state
+	// file* says the session is live, which the supervisor writes before Claude has
+	// done anything at all, so the opening poke arrived with the feed still empty —
+	// the ladder switched itself off at the exact moment it was needed, and the
+	// message went into a terminal that drops input for its first second.
+	//
+	// That is why poke worked and employ did not.
+	//
+	// So a session that has not reported yet is *waited for* rather than given up
+	// on. The first event is also the readiness signal there was no other way to
+	// get: the hook fired, so Claude is far enough along to have run one.
+	if !s.reports() {
 		return nil
 	}
 
@@ -737,6 +763,52 @@ func (s *Supervisor) currentPty() *pty.Pty {
 	defer s.mu.Unlock()
 	return s.pty
 }
+
+// reports says whether this session can tell Orc what it did, waiting for the first
+// event where none has arrived yet.
+//
+// The wait happens once. A fleet whose hooks are not installed reports nothing ever,
+// and paying FirstEvent on every poke to rediscover that would put five seconds on
+// every message a wake cycle sends. So the *waiting* is remembered, not the answer:
+// events are still counted on every call, and a session that starts reporting later
+// is confirmed from then on.
+func (s *Supervisor) reports() bool {
+	if s.events() > 0 {
+		return true
+	}
+	s.mu.Lock()
+	waited, since := s.waitedForFirst, s.startedAt
+	s.waitedForFirst = true
+	s.mu.Unlock()
+	if waited {
+		return false
+	}
+	// Only a session that started recently is waited for. A silent feed under a
+	// session that came up an hour ago is a fleet whose hooks are not installed, and
+	// waiting five seconds to rediscover that on the first poke of every agent would
+	// put half a minute on a wake cycle's first pass over a fleet of seven.
+	if !since.IsZero() && time.Since(since) > FirstEvent {
+		return false
+	}
+
+	deadline := time.Now().Add(FirstEvent)
+	for time.Now().Before(deadline) {
+		time.Sleep(ConfirmPoll)
+		if s.events() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// FirstEvent is how long a poke waits for a session to say anything at all.
+//
+// It covers the gap between a supervisor writing its state file — which is what
+// `Populate` waits for, and what lets an opening message be sent — and Claude
+// getting far enough into its own start to run a hook. Measured against the real
+// binary that is a fraction of a second; five seconds is room for a loaded machine
+// without being a wait anybody sits through twice.
+const FirstEvent = 5 * time.Second
 
 // events counts everything this session has reported, which is how Poke tells "the
 // prompt did not arrive" from "this fleet does not report".
