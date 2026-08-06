@@ -168,6 +168,24 @@ button:disabled { color: var(--muted); border-color: var(--frame); cursor: defau
 button:disabled:hover { background: transparent; color: var(--muted); }
 button.quiet { color: var(--muted); border-color: var(--frame); }
 button.quiet:hover { background: var(--frame); color: var(--text); }
+
+/* A control that goes somewhere is an anchor wearing a button, not a button that
+   calls location.hash. Middle-click, open-in-new-tab, copy-link and the address
+   bar are all things a reader expects of a thing that navigates, and a <button>
+   takes every one of them away for nothing. It borrows the button's own metrics
+   rather than restating them so the two cannot drift apart on a row. */
+a.button {
+  display: inline-block;
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--primary);
+  padding: .3rem 2ch;
+  font: inherit;
+  text-decoration: none;
+}
+a.button:hover { background: var(--primary); color: var(--canvas); }
+a.button.quiet { color: var(--muted); border-color: var(--frame); }
+a.button.quiet:hover { background: var(--frame); color: var(--text); }
 /* Quiet to the point of being a word rather than a control: this appears on
    every row, and a column of bordered buttons down the side of a mailbox is
    chrome competing with the mail. The border arrives on hover and on focus, so
@@ -901,7 +919,7 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
      more specific rule further up the file would otherwise win. */
   .fold-row { display: block; }
   .fold-row > .controls { padding: 0; }
-  .controls.row button,
+  .controls.row button, .controls.row a.button,
   .fold-row > .controls.row button { font-size: 1em; padding: .3rem 1ch; }
   .fold-row > .controls.row { gap: 1ch; }
 
@@ -922,7 +940,15 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   .work-row { grid-template-columns: repeat(3, 1fr); row-gap: .1rem; padding-bottom: .35rem; }
   .work-row > .name { grid-column: 1 / -1; }
 
+  /* The link-as-control gets the thumb rule too. It was missed the first time
+     precisely because it is not a <button>, which is the whole reason to name it
+     here rather than trust a tag selector to have covered it. */
   button, button.quiet, button.fold {
+    min-height: 44px;
+  }
+  a.button {
+    display: inline-flex;
+    align-items: center;
     min-height: 44px;
   }
   /* 16px is not a taste: below it, iOS zooms the whole page when the field takes

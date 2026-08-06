@@ -30,6 +30,7 @@
 // thing over time and useless for reading two against each other.
 
 import { h, since } from "./dom.js";
+import { sessionAt } from "./routes.js";
 import { perMachine, agents } from "./fleet.js";
 import { cost, priced, money, PRICED } from "./prices.js";
 
@@ -134,6 +135,10 @@ function row(f, id, actions) {
     // an agent nobody is waking looks fine until somebody says it is not being
     // woken, and that is worth knowing from a phone with no controls on it.
     h("div", { class: "controls" },
+      // The whole session, rather than the last few events this row has room for.
+      // A link and not a button: it goes somewhere, and it is worth having on a
+      // reader with no controls at all.
+      h("a", { class: "quiet button", href: sessionAt(f.machine, id.name) }, "open"),
       actions && id.populated
         ? h("button", { class: "quiet", onclick: () => actions.poke(f, id) }, "poke…")
         : null,

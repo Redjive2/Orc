@@ -83,10 +83,20 @@ export const HOME = "/mail/inbox";
 // Routes that are not tabs: a detail view is reached *from* a list, and the
 // links to them are already out there in bookmarks and in the message rows the
 // mailbox draws. Re-nesting those would break them for nothing.
-const DETAIL = ["/message/", "/tasks/"];
+const DETAIL = ["/message/", "/tasks/", "/session/"];
 
 export function isDetail(route) {
   return DETAIL.some((prefix) => route.startsWith(prefix));
+}
+
+// sessionAt is the address of one agent's session screen.
+//
+// It lives here rather than beside what draws it because two screens link to it
+// and the screen itself has to take it apart again — three places that must agree
+// on one shape. The machine is in the address because an identity is unique within
+// a fleet and not across them.
+export function sessionAt(machine, name) {
+  return `#/session/${encodeURIComponent(machine)}/${encodeURIComponent(name)}`;
 }
 
 // Where the flat routes went.

@@ -13,6 +13,7 @@
 // bug against the wrong thing.
 
 import { h } from "./dom.js";
+import { sessionAt } from "./routes.js";
 import { plural } from "./library.js";
 import * as clause from "./clauses.js";
 
@@ -180,6 +181,7 @@ function work(f, actions) {
       id.employed
         ? h("button", { class: "quiet", onclick: () => actions.fire(f, id) }, "fire")
         : h("button", { class: "quiet", onclick: () => actions.employ(f, id) }, "employ…"),
+      h("a", { class: "quiet button", href: sessionAt(f.machine, id.name) }, "open"),
       id.populated ? h("button", { class: "quiet", onclick: () => actions.poke(f, id) }, "poke…") : null,
       id.populated ? h("button", { class: "quiet", onclick: () => actions.refreshAgent(f, id) }, "refresh") : null,
     ) : null,
@@ -446,18 +448,24 @@ export function session(f, id, state, actions) {
     h("span", { class: "sect" }, "session"),
     h("span", { class: "muted note" }, sessionSummary(got)));
 
+  // The fold stays: it is the glance, and most of the time a glance is what a
+  // list is for. The link is what it grew a floor under — somewhere to read the
+  // whole thing and answer it without losing the words to a dialog.
+  const whole = h("p", { class: "muted" },
+    h("a", { href: sessionAt(f.machine || "", id.name) }, "open this session"));
+
   if (!open) return summary;
   // `session` as well as `inner`, because this fold holds prose and rows rather
   // than more tree. A library fold's inner is a container for deeper folds, which
   // carry their own indent and must not be pushed twice; this one is the bottom of
   // its tree and its contents were sitting flat against the rule that marks it.
   return h("div", { class: "folded" }, summary,
-    h("div", { class: "inner session" }, ...sessionBody(got)));
+    h("div", { class: "inner session" }, ...sessionBody(got), whole));
 }
 
 // sessionSummary is the one line worth reading without opening anything: what it
 // is doing, and how much there is to look at.
-function sessionSummary(s) {
+export function sessionSummary(s) {
   const bits = [];
   if (!s.live) bits.push("no session");
   else bits.push(s.waiting ? "waiting" : "working");
@@ -470,7 +478,7 @@ function sessionSummary(s) {
   return bits.join(" · ");
 }
 
-function sessionBody(s) {
+export function sessionBody(s) {
   const out = [];
   if (s.note) out.push(h("p", { class: "warn" }, s.note));
 

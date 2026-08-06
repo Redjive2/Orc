@@ -18,6 +18,7 @@ import * as dialog from "./dialog.js";
 import * as fleetView from "./fleet.js";
 import * as clauses from "./clauses.js";
 import * as check from "./check.js";
+import * as session from "./session.js";
 
 // The rows a picker draws for each kind of thing the mirror holds.
 //
@@ -218,6 +219,8 @@ function draw() {
     mount(view, views.message(state, state.detail, actions));
   } else if (route.startsWith("/tasks/")) {
     mount(view, views.task(state, decodeURIComponent(route.slice("/tasks/".length)), actions));
+  } else if (route.startsWith("/session/")) {
+    mount(view, session.screen(state, route.slice("/session/".length), actions));
   } else {
     const here = routes.resolve(route);
     const drawn = here && screens.render(here.major, here.sub, state, actions);
@@ -775,6 +778,13 @@ const actions = {
     });
     if (message === null) return;
     await run(() => api.poke(f.machine, id.name, message));
+  },
+  // sendPoke is `poke` from the session screen, where the message is already
+  // written and there is nothing left to ask. It reports whether the action
+  // queued, because the box that holds the words has to know whether losing them
+  // is safe — see `send`.
+  async sendPoke(machine, name, message) {
+    return run(() => api.poke(machine, name, message));
   },
   async refreshAgent(f, id) {
     if (!await dialog.confirm({
@@ -1389,6 +1399,24 @@ async function run(fn) {
 
 async function refresh() {
   const route = location.hash.slice(1) || "/inbox";
+
+  // How the server's own last build went, asked for **before** everything else and
+  // outside the try.
+  //
+  // It used to be the last thing in the round, after six calls that reject the
+  // moment the server goes down. A rebuild takes the server down — that is the
+  // restart — so the one panel somebody is watching for a result stopped updating
+  // at exactly the moment there was a result to show. Asked first, and failing to
+  // whatever was already known, it survives the window it is reporting on.
+  let built = state.built;
+  if (route.startsWith("/tooling/rebuild")) {
+    built = await api.built().then((got) => got.last || null).catch(() => state.built);
+    // Drawn straight away rather than at the end of the round. The rest of this
+    // function is about to fail while the server is away, and the panel should not
+    // wait for it.
+    if (built !== state.built) set({ built });
+  }
+
   try {
     const [session, inbox, archive, sent, queue, tasks, lib, fleet] = await Promise.all([
       api.session(), api.inbox(), api.archive(), api.sent(), api.queue(), api.tasks(),
@@ -1434,16 +1462,6 @@ async function refresh() {
       // interval that will not read is one line missing from a row, not a reason
       // to lose the tab that draws the charts.
       syncPace = await api.syncPace().catch(() => state.syncPace);
-    }
-
-    // How the server's own last build went. Only while the tab that draws it is
-    // open, and it fails to whatever was already known: the interesting case is a
-    // server that is up and did not rebuild, and a request that cannot be answered
-    // means it is down — which the page finds out anyway when everything else on it
-    // stops loading.
-    let built = state.built;
-    if (route.startsWith("/tooling/rebuild")) {
-      built = await api.built().then((got) => got.last || null).catch(() => state.built);
     }
 
     let detail = state.detail;
