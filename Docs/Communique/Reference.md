@@ -154,6 +154,7 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `DELETE` on any of the five above      | `orc instruct … --clear`                 |
 | `POST upgrade`                         | pull, rebuild, restart — here and queued out |
 | `GET upgrade`                          | how this server's own last build went        |
+| `GET upgrade/checkout`                 | whether a rebuild would work at all          |
 | `GET admin/state`                      | `admin mail` — the whole store           |
 | `GET library`                          | the repository's structure, no text      |
 | `GET library/file?path=`               | one file, with its text                  |
@@ -479,6 +480,27 @@ to run*, and this reads it as *the directory to install into*. Both spellings ar
 accepted here — a path that is an existing file is taken as the binary and the tools
 go beside it — because both are already written into shell profiles and neither is
 wrong. A path that exists and is neither a directory nor a file is refused.
+
+Whether the button *can* be pressed is answered before pressing it. `tooling ›
+rebuild` draws a red, amber or green light over the control, with a reason and a fix
+for each thing in the way: a detached head, a branch with no upstream, a checkout
+that has diverged from the remote, uncommitted work, no toolchain on the
+supervisor's PATH, a build already running. Every one of those was knowable in
+advance and none of it was reachable from a browser — the only way to find out was to
+press the one control that takes the site down and read the wreckage ten minutes
+later.
+
+The verdict is the server's and the browser never re-derives it, so a light saying
+"probably not" over a build that will certainly be refused is impossible by
+construction. It is read-only and it does not fetch: a GET a page polls must not
+write to the local refs, so `behind` is as fresh as the last fetch and the panel says
+so. Being behind is the reason to rebuild rather than a reason not to, and every
+condition that actually blocks a build is answerable from local refs. One inspection
+answers for five seconds, because the alternative is a git invocation a second for
+every tab left open.
+
+It reports **this machine only**. The button also queues every agent machine and the
+server cannot reach one to ask; each checks its own when the queued rebuild arrives.
 
 The build itself is a promise. The response to the button is sent first and the work
 runs after it, because the work ends with the process going away — so

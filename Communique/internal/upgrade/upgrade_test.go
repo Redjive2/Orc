@@ -450,3 +450,163 @@ func TestBuiltReadsWhatTheScriptPrints(t *testing.T) {
 		t.Error("the real output produced no tools at all, which is what the bug was")
 	}
 }
+
+// --- what a checkout is, before anybody presses the button ------------------
+//
+// Every way a rebuild fails is knowable in advance, and none of it was reachable
+// from a browser: the only way to find out was to press the one control that takes
+// the site down and read the wreckage ten minutes later.
+
+func checkWith(t *testing.T, r *recorder, o upgrade.Options) upgrade.Status {
+	t.Helper()
+	o.Run = r.run
+	return o.Check(t.Context())
+}
+
+// levels reports what the reasons said, so a test can assert on the judgement
+// rather than on the wording of it.
+func levels(got upgrade.Status) map[string]int {
+	out := map[string]int{}
+	for _, r := range got.Reasons {
+		out[r.Level]++
+	}
+	return out
+}
+
+func TestACleanCheckoutIsClearToRebuild(t *testing.T) {
+	dir := checkout(t)
+	r := &recorder{out: map[string]string{
+		"rev-list": "2\t0\n", // two commits to pull, none of ours
+		"--short":  "abc1234\n",
+	}}
+
+	got := checkWith(t, r, upgrade.Options{Source: dir, Target: t.TempDir()})
+	if got.Verdict != upgrade.Go {
+		t.Fatalf("a clean checkout says %q: %+v", got.Verdict, got.Reasons)
+	}
+	if got.Behind != 2 || got.Ahead != 0 || got.Dirty != 0 {
+		t.Errorf("counts are behind=%d ahead=%d dirty=%d", got.Behind, got.Ahead, got.Dirty)
+	}
+	if levels(got)[upgrade.Stop] != 0 || levels(got)[upgrade.Caution] != 0 {
+		t.Errorf("a clean checkout raised something: %+v", got.Reasons)
+	}
+}
+
+// A checkout that has both is what `--ff-only` refuses, and it refuses for a good
+// reason: a merge made by a server nobody is watching is a repository somebody has
+// to come and untangle by hand.
+func TestADivergedCheckoutCannotRebuild(t *testing.T) {
+	dir := checkout(t)
+	r := &recorder{out: map[string]string{"rev-list": "3\t2\n"}}
+
+	got := checkWith(t, r, upgrade.Options{Source: dir, Target: t.TempDir()})
+	if got.Verdict != upgrade.Stop {
+		t.Fatalf("a diverged checkout says %q: %+v", got.Verdict, got.Reasons)
+	}
+	var said string
+	for _, reason := range got.Reasons {
+		if reason.Level == upgrade.Stop {
+			said = reason.Text + " " + reason.Fix
+		}
+	}
+	if !strings.Contains(said, "fast-forward") {
+		t.Errorf("the refusal does not name what git will refuse: %q", said)
+	}
+	if said == "" || !strings.Contains(said, dir) {
+		t.Errorf("the fix does not say where to do it: %q", said)
+	}
+}
+
+// Ahead alone is not a blocker — the pull is a no-op and the build succeeds — and
+// it is worth saying, because what gets built is not what the remote has.
+func TestUnpushedCommitsAreACautionRatherThanARefusal(t *testing.T) {
+	dir := checkout(t)
+	r := &recorder{out: map[string]string{"rev-list": "0\t4\n"}}
+
+	got := checkWith(t, r, upgrade.Options{Source: dir, Target: t.TempDir()})
+	if got.Verdict != upgrade.Caution {
+		t.Fatalf("unpushed commits say %q: %+v", got.Verdict, got.Reasons)
+	}
+	if got.Ahead != 4 {
+		t.Errorf("ahead is %d, want 4", got.Ahead)
+	}
+}
+
+// The light has to follow the same rule the build does. `Upgrade` refuses a dirty
+// checkout outright — an upgrade installs what it builds on every machine — so a
+// panel saying "you probably should not" over a build that will certainly be refused
+// is exactly the disagreement this screen exists to prevent.
+//
+// With `--dirty` it is the caution it reads as: the build runs, and what comes out is
+// not what the remote has.
+func TestUncommittedWorkFollowsWhatTheBuildWillActuallyDo(t *testing.T) {
+	dir := checkout(t)
+	dirty := func() *recorder {
+		return &recorder{out: map[string]string{
+			"status --porcelain": " M internal/cli/cli.go\n?? notes.txt\n",
+			"rev-list":           "1\t0\n",
+		}}
+	}
+
+	got := checkWith(t, dirty(), upgrade.Options{Source: dir, Target: t.TempDir()})
+	if got.Verdict != upgrade.Stop {
+		t.Fatalf("a dirty checkout says %q, but the build refuses it: %+v", got.Verdict, got.Reasons)
+	}
+	if got.Dirty != 2 {
+		t.Errorf("dirty is %d, want 2", got.Dirty)
+	}
+
+	allowed := checkWith(t, dirty(), upgrade.Options{Source: dir, Target: t.TempDir(), Dirty: true})
+	if allowed.Verdict != upgrade.Caution {
+		t.Errorf("with --dirty the same checkout says %q: %+v", allowed.Verdict, allowed.Reasons)
+	}
+}
+
+// The two conditions that have nothing to do with git and fail in ways that read as
+// something else: a missing toolchain arrives as nine identical module failures, and
+// a missing script as a build that did nothing.
+func TestTheThingsThatAreNotGitAreCheckedToo(t *testing.T) {
+	dir := checkout(t)
+	if got := checkWith(t, &recorder{failAt: "go version"},
+		upgrade.Options{Source: dir, Target: t.TempDir()}); got.Verdict != upgrade.Stop || got.Toolchain {
+		t.Errorf("a machine with no toolchain says %q", got.Verdict)
+	}
+
+	bare := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bare, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkWith(t, &recorder{}, upgrade.Options{Source: bare}); got.Verdict != upgrade.Stop || got.Script {
+		t.Errorf("a checkout with no build script says %q", got.Verdict)
+	}
+}
+
+// The two shapes of "there is nothing to build from". Neither is an error: a machine
+// that installs binaries rather than building is a machine, not a fault.
+func TestNoCheckoutIsAVerdictRatherThanAFailure(t *testing.T) {
+	if got := (upgrade.Options{}).Check(t.Context()); got.Verdict != upgrade.Stop ||
+		len(got.Reasons) == 0 || !strings.Contains(got.Reasons[0].Fix, "CQ_SOURCE") {
+		t.Errorf("a server with no source says %+v", got)
+	}
+	if got := (upgrade.Options{Source: t.TempDir()}).Check(t.Context()); got.Verdict != upgrade.Stop {
+		t.Errorf("a source that is not a checkout says %q", got.Verdict)
+	}
+}
+
+// It is a GET a page polls, so it must not fetch: `git fetch` is a network call and
+// a write to the local refs, and doing either on a poll would make looking at a
+// screen change the thing being looked at.
+func TestCheckingNeverWritesToTheCheckout(t *testing.T) {
+	dir := checkout(t)
+	r := &recorder{}
+	checkWith(t, r, upgrade.Options{Source: dir, Target: t.TempDir()})
+
+	for _, call := range r.calls {
+		joined := strings.Join(call, " ")
+		for _, forbidden := range []string{"fetch", "pull", "merge", "checkout", "reset", "sh/build"} {
+			if strings.Contains(joined, forbidden) {
+				t.Errorf("checking ran %q, which is not a question", joined)
+			}
+		}
+	}
+}

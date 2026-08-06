@@ -7,6 +7,7 @@ import { render } from "./markdown.js";
 import { survey } from "./survey.js";
 import * as routes from "./routes.js";
 import * as check from "./check.js";
+import { checkout } from "./checkout.js";
 
 // worst picks the entry a reader should be told about when several concern the
 // same thing, in the order the queue tab uses: a refusal outranks anything still
@@ -1243,6 +1244,10 @@ export function rebuild(state, actions) {
     h("div", { class: "meta" },
       "pull the tree, rebuild every orc tool, and restart — here and on every agent machine"),
     h("div", { class: "body" },
+      // Above the button, because it is what somebody needs before pressing it
+      // rather than after. Every way this fails is knowable in advance and none of
+      // it was reachable from a browser.
+      ...checkout(state.checkout),
       h("div", { class: "controls" },
         actions
           ? h("button", { class: "danger", onclick: () => actions.upgradeEverything(state) },

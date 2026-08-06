@@ -1430,12 +1430,21 @@ async function refresh() {
   // at exactly the moment there was a result to show. Asked first, and failing to
   // whatever was already known, it survives the window it is reporting on.
   let built = state.built;
+  // And whether a build could run at all, which is the same panel's other half and
+  // is asked here for the same reason: it is the thing on screen while the server is
+  // going away, so it must not be behind six calls that are about to reject.
+  let checkout = state.checkout;
   if (route.startsWith("/tooling/rebuild")) {
     built = await api.built().then((got) => got.last || null).catch(() => state.built);
+    // Its own failure, kept apart from the build report's, and *said* rather than
+    // left blank: an absent light over a control that takes the site down reads as
+    // "nothing to report", which is the one thing it does not mean.
+    checkout = await api.checkout()
+      .catch((err) => ({ unreachable: String((err && err.message) || err) }));
     // Drawn straight away rather than at the end of the round. The rest of this
     // function is about to fail while the server is away, and the panel should not
     // wait for it.
-    if (built !== state.built) set({ built });
+    if (built !== state.built || checkout !== state.checkout) set({ built, checkout });
   }
 
   try {

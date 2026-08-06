@@ -435,9 +435,15 @@ func (o Options) run(ctx context.Context, dir, name string, args ...string) ([]b
 	// terminal here, and a prompt nobody can answer is a hang that looks like a
 	// slow network.
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	// Bounded, because none of this output is trusted to be small. `git status
+	// --porcelain` is one line per changed path and a checkout can hold a stray
+	// `node_modules`; a build that loops prints until it is stopped. Everything read
+	// here is either counted or trimmed to two thousand characters, so nothing is
+	// lost that anybody would have seen — and without the cap a poll could put a
+	// gigabyte in this process's heap for a number.
+	out := &capped{most: MaxOutput}
+	cmd.Stdout = out
+	cmd.Stderr = out
 	err := cmd.Run()
 	if ctx.Err() != nil {
 		return out.Bytes(), fmt.Errorf("timed out after %s", Timeout)
@@ -447,6 +453,43 @@ func (o Options) run(ctx context.Context, dir, name string, args ...string) ([]b
 	}
 	return out.Bytes(), nil
 }
+
+// MaxOutput is how much of a command's output is kept.
+//
+// A megabyte, which is far more than any of these produce and far less than the
+// worst of them could. Everything read is counted or trimmed to two thousand
+// characters before anybody sees it, so the cap costs nothing real.
+const MaxOutput = 1 << 20
+
+// capped is a writer that stops at a limit rather than growing without one.
+//
+// A subprocess writing into a bytes.Buffer is that process choosing how much memory
+// this one uses, which is only ever acceptable when the amount is known. It is not
+// known here: this reads the output of `git status` in somebody else's checkout.
+type capped struct {
+	buf  bytes.Buffer
+	most int
+	over bool
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.most - c.buf.Len(); room > 0 {
+		if len(p) > room {
+			p, c.over = p[:room], true
+		}
+		c.buf.Write(p)
+	} else if len(p) > 0 {
+		c.over = true
+	}
+	// The full length, always: a short write is an error to the process writing it,
+	// and killing a build because its output was long would be the cap deciding
+	// something it has no business deciding.
+	return len(p), nil
+}
+
+func (c *capped) Bytes() []byte { return c.buf.Bytes() }
+
+func (c *capped) String() string { return c.buf.String() }
 
 // trim keeps a step's output to something a queue entry can carry.
 func trim(s string) string {
