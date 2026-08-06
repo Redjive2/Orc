@@ -339,3 +339,19 @@ test("names returns what the tools accept, deduplicated and without the held one
   assert.deepEqual(check.names("edit upgrade", { without: ["EDIT"] }), ["upgrade"]);
   assert.deepEqual(check.names("   "), []);
 });
+
+// oneOf is for a field that takes one thing, and says so rather than mangling.
+// `tidy` turns a space into a dash, so a multi-value field wired to this check
+// silently asked for a thing called `edit-upgrade` and reported that nothing was
+// called that — a mistake with no trace of itself.
+test("a single-value check refuses several names outright", () => {
+  const at = check.oneOf(["edit", "upgrade"], { what: "permission" });
+  ok(at("edit"), "one name");
+  assert.match(at("edit upgrade"), /takes one name/);
+});
+
+// The rows a picker draws are just names to it, so the check accepts either shape.
+test("oneOf takes plain names or rows with names", () => {
+  ok(check.oneOf(["engineer"], { what: "role" })("engineer"), "plain strings");
+  ok(check.oneOf([{ name: "engineer" }], { what: "role" })("ENGINEER"), "rows, and capitals");
+});

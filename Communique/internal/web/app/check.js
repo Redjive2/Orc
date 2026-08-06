@@ -367,6 +367,42 @@ export function permissions(known, { held = [], authority = null } = {}) {
   };
 }
 
+// oneOf checks a single name against the ones that exist — a role, an agent, a
+// machine. The list half of `permissions`, for the fields that take one thing.
+//
+// The same three refusals, and the same reason for each: a name that is not a name,
+// a name nothing is called with the nearest offered, and — where the caller passes
+// one — a rule about the thing itself. What it saves is a queued action that fails
+// on a machine nobody is watching, minutes later, over a typo.
+export function oneOf(known, { what = "it", barred = null } = {}) {
+  const names = (known || []).map((k) => (typeof k === "string" ? k : k.name));
+  const byName = new Set(names.map(tidy));
+
+  return (raw, label = what) => {
+    const got = String(raw ?? "").trim();
+    if (got === "") return `${label} cannot be empty`;
+    // One name, said so rather than mangled. `tidy` turns a space into a dash, so a
+    // field that took several names and was wired to this check silently asked for
+    // a thing called `edit-upgrade` and reported that nothing was called that. The
+    // list checks — `permissions` — are what a field taking several wants.
+    if (/\s/.test(got)) {
+      return `${label} takes one name; “${got}” is several`;
+    }
+
+    const shape = name(got, label, RESERVED_MAILBOX);
+    if (shape && !byName.has(tidy(got))) return shape;
+
+    const key = tidy(got);
+    if (!byName.has(key)) {
+      const near = nearest(key, [...byName]);
+      return near
+        ? `there is no ${label} called “${key}” — did you mean “${near}”?`
+        : `there is no ${label} called “${key}”`;
+    }
+    return barred ? barred(key) || "" : "";
+  };
+}
+
 // Names is the list a permissions field holds, as the tools spell them and with the
 // repeats gone.
 //

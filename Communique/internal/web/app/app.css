@@ -723,11 +723,12 @@ button.fold.picked .twist { color: var(--primary); }
   border-color: var(--danger);
 }
 
-/* Picking a permission rather than remembering its name.
-   The mirror carries every permission and every clause in it, so a form that asked
-   somebody to type one from memory was asking for the one thing it could show them.
-   Each row is the name, the floor it needs, and what it actually allows. */
-.permission-picker {
+/* Picking a name rather than remembering it.
+   Half the forms in cq name something the mirror is already holding — a role, an
+   agent, a permission — so one list serves all three. A row is the name, one short
+   column of number or word, and what the thing is: a role's description, an agent's
+   job, or a permission's clauses in the colouring the permissions tab uses. */
+.pick-list {
   display: grid;
   gap: .15rem;
   max-height: 15rem;
@@ -735,8 +736,8 @@ button.fold.picked .twist { color: var(--primary); }
   border: 1px solid var(--frame);
   padding: .3rem 1ch;
 }
-.permission-picker .hint { margin: 0 0 .2rem; }
-.permission-row {
+.pick-list .hint { margin: 0 0 .2rem; }
+.pick-row {
   display: grid;
   /* The clause column is `minmax(0, 1fr)` rather than `1fr`. A grid track's
      default minimum is its content, and a clause is one unbreakable string — so
@@ -754,18 +755,19 @@ button.fold.picked .twist { color: var(--primary); }
   font: inherit;
   color: var(--text);
 }
-.permission-row:hover { border-color: var(--primary); background: var(--inset); }
-.permission-name { color: var(--primary); white-space: pre; }
-.permission-floor { text-align: right; }
-.permission-note { white-space: pre; }
-.permission-note.warn { color: var(--warning); }
+.pick-row:hover { border-color: var(--primary); background: var(--inset); }
+.pick-name { color: var(--primary); white-space: pre; }
+.pick-badge { text-align: right; }
+.pick-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-note { white-space: pre; }
+.pick-note.warn { color: var(--warning); }
 
 /* A row this role already has, and one its authority cannot reach. Dimmed rather
    than removed: "it is not in the list" and "it is there and you cannot have it"
    are different answers, and only one of them tells somebody what to fix. */
-.permission-row.held .permission-name { color: var(--secondary); }
-.permission-row.barred { opacity: .6; }
-.permission-row.barred .permission-name { color: var(--muted); }
+.pick-row.held .pick-name { color: var(--secondary); }
+.pick-row.barred { opacity: .6; }
+.pick-row.barred .pick-name { color: var(--muted); }
 
 /* What a value will become, when it is not what was typed. Quiet, and beneath
    the box rather than beside it: it is not a problem, it is the answer to a

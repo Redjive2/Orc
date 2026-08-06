@@ -121,24 +121,24 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
         // this is a paragraph and a paragraph has no columns to keep.
         input = h("textarea", { rows: String(f.rows || 5), placeholder: f.placeholder });
         input.value = String(f.value ?? "");
-      } else if (f.kind === "permissions") {
-        // A name, or several, with the fleet's whole list under it.
+      } else if (f.kind === "pick") {
+        // A name, with the list it has to come from under it.
         //
-        // Typing a permission's name from memory is the one thing this form asked
-        // for and the one thing a browser is placed to make unnecessary: the mirror
-        // already carries every permission and every clause in it. So the list is
-        // shown, each row says what the permission actually allows, and a click puts
-        // its name in the box.
+        // Half the forms in cq ask for something the mirror is already holding: a
+        // role, an agent, a permission. Asking somebody to type its name from
+        // memory is asking for the one thing a browser is placed to make
+        // unnecessary — and it is where the typos come from, which then travel to
+        // a machine nobody is watching and fail there.
         //
-        // The box stays a text box rather than becoming a set of checkboxes. Several
-        // names are one line to type and one line to read back, and somebody who
-        // knows what they want should not have to hunt for it in a list of thirty.
+        // The box stays a text box rather than becoming a menu. Somebody who knows
+        // the name types it and is done, and a `multiple` field takes several on
+        // one line, which reads back as one line.
         input = h("input", {
           type: "text", spellcheck: "false", autocapitalize: "off",
           autocorrect: "off", placeholder: f.placeholder,
         });
         input.value = String(f.value ?? "");
-        extras = [permissionPicker(f, input)];
+        extras = [picker(f, input)];
       } else if (f.kind === "clauses") {
         // A line of permission clauses, drawn coloured underneath as it is typed.
         //
@@ -452,61 +452,63 @@ function value(field, input) {
   return tidier ? tidier(raw) : raw;
 }
 
-// permissionPicker draws every permission the fleet has, and what each allows.
+// picker draws everything a field may name, and what each one is.
 //
-// Three things a row has to carry, because each answers a question somebody has
-// while the box is open: the name, what it lets an agent do, and whether this role
-// can have it. A list of bare names would answer only the first, and the first is
-// the one they could already guess.
+// One picker for roles, agents, and permissions, because they are the same problem:
+// a name the mirror is already holding, and a box that used to ask for it from
+// memory. What differs between them is what a row *says* — a permission's clauses, a
+// role's description, an agent's job — so the caller builds the rows and this draws
+// them.
 //
-// Clauses are drawn with the same colouring the permissions tab uses. Two renderings
-// of one thing is two things to learn, and the point of the colour is that a reader
-// who has seen `read(Docs/*)` on one screen recognises it on the next.
-function permissionPicker(field, input) {
-  const known = [...(field.known || [])].sort((a, b) => a.name.localeCompare(b.name));
+// A row carries: `name`, the value itself; `badge`, one short column of number or
+// word; `detail`, a line of prose; `chips`, clauses drawn with the colouring the
+// permissions tab uses; `held`, already true of the thing being edited; and
+// `barred` with a `note`, for a row that cannot be used and the reason.
+function picker(field, input) {
+  const known = [...(field.known || [])];
   if (known.length === 0) {
-    return h("p", { class: "muted hint" }, "this fleet has no permissions yet");
+    return h("p", { class: "muted hint" },
+      field.empty || "there is nothing to choose from yet");
   }
-  const already = new Set(field.held || []);
 
-  // Toggling rather than appending, so a click that was a mistake is undone by the
-  // same click. The box is still the truth — this only edits it.
+  // Toggling for a field that takes several, replacing for one that takes one. A
+  // click that was a mistake is undone by the same click either way.
   const toggle = (name) => {
-    // Compared as the tools spell them, so clicking `edit` after typing `EDIT`
-    // removes it rather than adding a second copy of the same permission.
-    const names = check.names(input.value);
-    const at = names.indexOf(check.tidy(name));
-    if (at >= 0) names.splice(at, 1);
-    else names.push(check.tidy(name));
-    input.value = names.join(" ");
+    const want = check.tidy(name);
+    if (!field.multiple) {
+      input.value = input.value.trim() === want ? "" : want;
+    } else {
+      // Compared as the tools spell them, so clicking `edit` after typing `EDIT`
+      // removes it rather than adding a second copy of the same thing.
+      const names = check.names(input.value);
+      const at = names.indexOf(want);
+      if (at >= 0) names.splice(at, 1);
+      else names.push(want);
+      input.value = names.join(" ");
+    }
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.focus();
   };
 
-  const rows = known.map((p) => {
-    const tooHigh = field.authority != null && p.floor > field.authority;
-    const has = already.has(p.name);
-    return h("button", {
-      type: "button",
-      class: "permission-row" + (has ? " held" : "") + (tooHigh ? " barred" : ""),
-      // Said on the row rather than only on refusal: the reason a permission
-      // cannot go on this role is a fact about the role, and hiding it until
-      // somebody tries makes them try.
-      title: tooHigh
-        ? `${p.name} needs authority ${p.floor}; this role has ${field.authority}`
-        : has ? `${field.roleName || "the role"} already has ${p.name}` : `add ${p.name}`,
-      onclick: () => toggle(p.name),
-    },
-      h("span", { class: "permission-name" }, p.name),
-      h("span", { class: "permission-floor muted" }, String(p.floor)),
-      h("span", { class: "clauses" },
-        ...(p.patterns || []).map((c) => clauses.chip(c, field.words))),
-      has ? h("span", { class: "permission-note muted" }, "held") : null,
-      tooHigh ? h("span", { class: "permission-note warn" }, "over the role's authority") : null);
-  });
+  const rows = known.map((row) => h("button", {
+    type: "button",
+    class: "pick-row" + (row.held ? " held" : "") + (row.barred ? " barred" : ""),
+    // Said on the row rather than only on refusal: the reason something cannot be
+    // used is a fact about it, and hiding that until somebody tries makes them try.
+    title: row.note || (row.held ? `${row.name} — ${row.mark || "held"}` : `choose ${row.name}`),
+    onclick: () => toggle(row.name),
+  },
+    h("span", { class: "pick-name" }, row.name),
+    h("span", { class: "pick-badge muted" }, row.badge == null ? "" : String(row.badge)),
+    row.chips
+      ? h("span", { class: "clauses" }, ...row.chips.map((c) => clauses.chip(c, field.words)))
+      : h("span", { class: "pick-detail muted" }, row.detail || ""),
+    row.held ? h("span", { class: "pick-note muted" }, row.mark || "held") : null,
+    row.barred ? h("span", { class: "pick-note warn" }, row.note || "not available") : null));
 
-  return h("div", { class: "permission-picker" },
-    h("p", { class: "muted hint" },
-      "click to add or remove; several may be queued at once, separated by spaces"),
+  return h("div", { class: "pick-list" },
+    h("p", { class: "muted hint" }, field.multiple
+      ? "click to add or remove; several may be queued at once, separated by spaces"
+      : "click to choose"),
     ...rows);
 }

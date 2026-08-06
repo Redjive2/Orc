@@ -530,47 +530,46 @@ test("a name that needs no tidying says nothing about it", async () => {
   press("Escape");
 });
 
-// --- picking a permission rather than remembering its name -------------------
+// --- picking a name rather than remembering it ------------------------------
 
-// The mirror already carries every permission and every clause in it, so a form
-// that asked somebody to type one from memory was asking for the one thing it
-// could have shown them.
+// Half the forms in cq ask for something the mirror is already holding — a role, an
+// agent, a permission. Asking somebody to type its name from memory is asking for
+// the one thing a browser is placed to make unnecessary, and it is where the typos
+// come from that then fail on a machine nobody is watching.
 const somePerms = [
-  { name: "upgrade", floor: 60, patterns: ["orc(upgrade)"] },
-  { name: "edit", floor: 20, patterns: ["edit(**)"] },
+  { name: "upgrade", badge: 60, chips: ["orc(upgrade)"] },
+  { name: "edit", badge: 20, chips: ["edit(**)"] },
 ];
 
-function permissionSheet(extra = {}) {
+function pickSheet(extra = {}) {
   return dialog.ask({
     title: "give engineer permissions",
     fields: [{
-      name: "permissions", label: "permissions", kind: "permissions",
+      name: "permissions", label: "permissions", kind: "pick", multiple: true,
       known: somePerms, words: [], ...extra,
     }],
   });
 }
 
 function rows() {
-  return all(document.body, (n) => n.className && String(n.className).startsWith("permission-row"));
+  return all(document.body, (n) => n.className && String(n.className).startsWith("pick-row"));
 }
 
-test("every permission the fleet has is shown, with what it allows", () => {
-  permissionSheet();
+test("everything the field may name is shown, with what each one is", () => {
+  pickSheet();
   const got = rows();
   assert.equal(got.length, 2, `${got.length} rows drawn`);
   const text = got.map((r) => r.textContent).join(" ");
   for (const want of ["edit", "upgrade", "orc(upgrade)", "edit(**)", "60", "20"]) {
     assert.ok(text.includes(want), `the list does not show ${want}: ${text}`);
   }
-  // Sorted, so the same fleet draws the same list twice.
-  assert.ok(got[0].textContent.startsWith("edit"), `unsorted: ${got[0].textContent}`);
   press("Escape");
 });
 
 test("clicking a row puts the name in the box, and clicking it again takes it out", () => {
-  permissionSheet();
+  pickSheet();
   const box = inputs()[0];
-  const [edit, upgrade] = rows();
+  const [upgrade, edit] = rows();
 
   click(edit);
   assert.equal(box.value, "edit");
@@ -581,10 +580,36 @@ test("clicking a row puts the name in the box, and clicking it again takes it ou
   press("Escape");
 });
 
+// A field that takes one thing replaces rather than appends, or the box would
+// collect every row somebody looked at.
+test("a single-value picker replaces what is in the box", () => {
+  dialog.ask({
+    title: "the job for ember",
+    fields: [{
+      name: "role", label: "role", kind: "pick",
+      known: [{ name: "engineer", badge: 60 }, { name: "reviewer", badge: 40 }],
+    }],
+  });
+  const box = inputs()[0];
+  const [engineer, reviewer] = rows();
+  click(engineer);
+  assert.equal(box.value, "engineer");
+  click(reviewer);
+  assert.equal(box.value, "reviewer", "a single-value picker appended");
+  click(reviewer);
+  assert.equal(box.value, "", "clicking the chosen one did not clear it");
+  press("Escape");
+});
+
 // The two reasons a row cannot be used are different, and only one of them tells
 // somebody what to change.
-test("a row says when the role has it already, and when its authority is too low", () => {
-  permissionSheet({ held: ["edit"], authority: 30, roleName: "engineer" });
+test("a row says when the thing is held already, and when it is barred", () => {
+  pickSheet({
+    known: [
+      { name: "edit", badge: 20, chips: ["edit(**)"], held: true },
+      { name: "upgrade", badge: 60, chips: [], barred: true, note: "needs authority 60" },
+    ],
+  });
   const got = rows();
   const held = got.find((r) => r.textContent.startsWith("edit"));
   const barred = got.find((r) => r.textContent.startsWith("upgrade"));
@@ -596,21 +621,28 @@ test("a row says when the role has it already, and when its authority is too low
   press("Escape");
 });
 
-// Several at once is the whole point of the box staying a box.
+// A field whose list is empty still takes a typed name. A picker that could not
+// find its list must not stop somebody working.
+test("an empty list says so and leaves the box usable", () => {
+  pickSheet({ known: [], empty: "this fleet has no permissions yet" });
+  assert.equal(rows().length, 0);
+  assert.match(said() + document.body.textContent, /no permissions yet/);
+  assert.equal(inputs().length, 1, "the box went away with the list");
+  press("Escape");
+});
+
 test("several names are accepted and come back as typed", async () => {
-  const done = permissionSheet({
-    check: (raw) => (String(raw).trim() === "" ? "empty" : ""),
-  });
+  const done = pickSheet({ check: (raw) => (String(raw).trim() === "" ? "empty" : "") });
   type(inputs()[0], "edit upgrade");
   submit();
   assert.deepEqual(await done, { permissions: "edit upgrade" });
 });
 
 // And the check runs against the list, live, like every other field.
-test("a name the fleet does not have is marked as it is typed", () => {
-  permissionSheet({ check: check.permissions(somePerms, { authority: 99 }) });
+test("a name that is not in the list is marked as it is typed", () => {
+  pickSheet({ check: check.oneOf(["edit", "upgrade"], { what: "permission" }) });
   type(inputs()[0], "editt");
-  assert.equal(marked().length, 1, "an unknown permission was not marked");
+  assert.equal(marked().length, 1, "an unknown name was not marked");
   assert.match(said(), /did you mean “edit”/, said());
   press("Escape");
 });

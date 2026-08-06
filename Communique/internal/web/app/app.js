@@ -19,6 +19,77 @@ import * as fleetView from "./fleet.js";
 import * as clauses from "./clauses.js";
 import * as check from "./check.js";
 
+// The rows a picker draws for each kind of thing the mirror holds.
+//
+// Here rather than in the dialog because what a row *says* is what differs between
+// them: a permission's clauses, a role's description and who holds it, an agent's
+// job. The dialog draws; this decides what is worth drawing.
+
+// permissionRows lists every permission, marked against a role or an identity.
+function permissionRows(f, { held = [], authority = null } = {}) {
+  const has = new Set(held);
+  return [...(f.permissions || [])]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((p) => ({
+      name: p.name,
+      badge: p.floor,
+      chips: p.patterns || [],
+      held: has.has(p.name),
+      barred: authority != null && p.floor > authority,
+      note: authority != null && p.floor > authority
+        ? `needs authority ${p.floor}` : "",
+    }));
+}
+
+// roleRows lists the fleet's roles, with what each one is and what it asks for.
+function roleRows(f, current) {
+  return [...(f.roles || [])]
+    .sort((a, b) => b.authority - a.authority || a.name.localeCompare(b.name))
+    .map((r) => ({
+      name: r.name,
+      badge: r.authority,
+      detail: r.description || "",
+      held: r.name === current, mark: "current",
+    }));
+}
+
+// agentRows lists the agents on a machine, with the job each one holds.
+//
+// The operator is left out where the field is about an agent doing work, and the
+// one being edited is marked rather than removed: "it is not in the list" and "that
+// is the one you are changing" are different answers.
+function agentRows(f, { except = "", held = [] } = {}) {
+  const has = new Set(held);
+  return fleetView.agents(f)
+    .filter((id) => id.name !== except)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((id) => ({
+      name: id.name,
+      badge: id.authority ?? "",
+      detail: id.role || "no role",
+      held: has.has(id.name), mark: "on it",
+    }));
+}
+
+// pickAgent is the field a task's dialogs use to name an agent.
+//
+// A task carries a machine rather than a fleet, so the fleet is found by machine —
+// and where the mirror has not synced one, the field falls back to a plain checked
+// name. A picker that could not find its list must not stop somebody typing one.
+function pickAgent(t, { name, label, value = "", held = [] }) {
+  const f = (state.fleet || []).find((got) => got.machine === t.machine);
+  if (!f) {
+    return { name, label, value, check: "mailbox", hint: "an agent you control" };
+  }
+  const known = fleetView.agents(f);
+  return {
+    name, label, value, kind: "pick",
+    known: agentRows(f, { held }),
+    empty: "no agents on this machine yet",
+    check: check.oneOf(known, { what: "agent" }),
+  };
+}
+
 // What a name may be, said once, because every box that asks for one was saying
 // something slightly different and all of them were saying less than the truth.
 //
@@ -477,20 +548,42 @@ const actions = {
   },
 
   async assignRole(f, id) {
-    const role = await dialog.one({
-      title: `the job for ${id.name}`, label: "role", check: "label", value: id.role || "",
+    const got = await dialog.ask({
+      title: `the job for ${id.name}`,
       note: "an identity holds exactly one role; this replaces whatever it had",
+      submit: "queue it",
+      fields: [{
+        name: "role", label: "role", kind: "pick", value: id.role || "",
+        known: roleRows(f, id.role), empty: "this fleet has no roles yet",
+        check: check.oneOf(f.roles || [], { what: "role" }),
+      }],
     });
-    if (!role) return;
-    await run(() => api.assignRole(f.machine, id.name, role));
+    if (!got || got.role === id.role) return;
+    await run(() => api.assignRole(f.machine, id.name, got.role));
   },
   async moveIdentity(f, id) {
-    const boss = await dialog.one({
-      title: `who ${id.name} works for`, label: "boss", check: "mailbox", value: id.boss || "",
+    // Itself excluded from the list, and refused if typed: an identity cannot work
+    // for itself, and orc says so after the next sync. The list is every identity
+    // including the operator, because the operator is who most agents work for.
+    const known = (f.identities || []).filter((who) => who.name !== id.name);
+    const got = await dialog.ask({
+      title: `who ${id.name} works for`,
       note: "the whole subtree is re-capped: nobody under it can exceed the new boss",
+      submit: "queue it",
+      fields: [{
+        name: "boss", label: "boss", kind: "pick", value: id.boss || "",
+        known: known
+          .sort((a, b) => (b.authority ?? 0) - (a.authority ?? 0) || a.name.localeCompare(b.name))
+          .map((who) => ({
+            name: who.name, badge: who.authority ?? "",
+            detail: who.operator ? "the operator" : (who.role || "no role"),
+            held: who.name === id.boss, mark: "current",
+          })),
+        check: check.oneOf(known, { what: "agent" }),
+      }],
     });
-    if (!boss) return;
-    await run(() => api.moveIdentity(f.machine, id.name, boss));
+    if (!got || got.boss === id.boss) return;
+    await run(() => api.moveIdentity(f.machine, id.name, got.boss));
   },
   async employ(f, id) {
     const got = await dialog.ask({
@@ -844,7 +937,12 @@ const actions = {
       note: "every grant lapses. without an expiry it lasts the current session.",
       submit: "grant it",
       fields: [
-        { name: "permission", label: "permission", check: "label" },
+        {
+          name: "permission", label: "permission", kind: "pick",
+          known: permissionRows(f, { held: id.permissions || [], authority: id.authority }),
+          words: f.vocabulary, empty: "this fleet has no permissions yet",
+          check: check.oneOf(f.permissions || [], { what: "permission" }),
+        },
         { name: "until", label: "until", required: false, check: "span",
           hint: "a duration like 2h or 30m — blank ties it to the session" },
       ],
@@ -891,12 +989,11 @@ const actions = {
       note: "orc refuses a permission whose floor is above the role's authority",
       submit: "queue them",
       fields: [{
-        name: "permissions", label: "permissions", kind: "permissions",
-        known: f.permissions || [],
-        held: role.permissions || [],
-        authority: role.authority,
-        roleName: role.name,
+        name: "permissions", label: "permissions", kind: "pick",
+        multiple: true,
+        known: permissionRows(f, { held: role.permissions || [], authority: role.authority }),
         words: f.vocabulary,
+        empty: "this fleet has no permissions yet",
         placeholder: "one or more names, separated by spaces",
         check: check.permissions(f.permissions || [], {
           held: role.permissions || [], authority: role.authority,
@@ -1033,21 +1130,29 @@ const actions = {
     await run(() => api.leaveTask(t.machine, t.name));
   },
   async assignTask(t) {
-    const user = await dialog.one({
-      title: `assign ${t.name}`, label: "to", check: "mailbox",
-      value: t.owner || "", hint: "an agent you control",
+    const got = await dialog.ask({
+      title: `assign ${t.name}`,
       note: "macmuffin tells them, and refuses if you do not control them",
+      submit: "queue it",
+      fields: [pickAgent(t, {
+        name: "to", label: "to", value: t.owner || "", held: t.owner ? [t.owner] : [],
+      })],
     });
-    if (!user) return;
-    await run(() => api.assignTask(t.machine, t.name, user));
+    if (!got || got.to === t.owner) return;
+    await run(() => api.assignTask(t.machine, t.name, got.to));
   },
   async inviteToTask(t) {
-    const user = await dialog.one({
-      title: `invite to ${t.name}`, label: "agent", check: "mailbox",
+    const got = await dialog.ask({
+      title: `invite to ${t.name}`,
       note: "a collaborator can work on it; the owner is unchanged",
+      submit: "queue it",
+      fields: [pickAgent(t, {
+        name: "agent", label: "agent",
+        held: [t.owner, ...(t.collaborators || [])].filter(Boolean),
+      })],
     });
-    if (!user) return;
-    await run(() => api.inviteToTask(t.machine, t.name, user));
+    if (!got) return;
+    await run(() => api.inviteToTask(t.machine, t.name, got.agent));
   },
   async kickFromTask(t, user) {
     if (!await dialog.confirm({

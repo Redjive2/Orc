@@ -528,6 +528,25 @@ learning it there reads as cq having renamed the thing. Every other character is
 still refused, and named with its position: turning `%` into something would be
 guessing at what was meant.
 
+**Names are picked, not remembered.** Half the forms in cq ask for something the
+mirror is already holding — a role, an agent, a permission — and asking somebody
+to type its name from memory is asking for the one thing a browser can spare them.
+It is also where the typos come from, and a typo travels to a machine nobody is
+watching and fails there.
+
+Six sheets list what they will accept: the job an identity holds, who it works
+for, a grant, a role's permissions, and the two that name an agent for a task. A
+row is the name, one short column of number or word, and what the thing *is* — a
+role's description, an agent's job, a permission's clauses in the colouring the
+permissions tab uses. Clicking chooses; clicking the chosen one clears it. A field
+that takes several toggles instead, and a field whose list is empty says so and
+still takes a typed name, because a picker that cannot find its list must not stop
+somebody working.
+
+Every one of them is checked against the list as it is typed, and the submit will
+not fire until it passes. An unknown name offers the nearest, where one is close
+enough to be worth offering.
+
 **Permissions are picked, not remembered.** Giving a role a permission asked
 somebody to type a name from memory, which is the one thing the mirror could have
 shown them: it already carries every permission and every clause in it. The sheet
