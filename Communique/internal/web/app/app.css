@@ -1067,6 +1067,16 @@ html, body { max-width: 100%; overflow-x: hidden; }
 
 /* --- an agent's session ------------------------------------------------- */
 
+/* Set in from the rule that marks the fold, rather than against it.
+
+   `.inner` carries no padding of its own because in the library it is a container
+   for deeper folds — each of which brings its own indent, so padding there would
+   compound once per level. This fold is the bottom of its tree: what is inside is
+   prose and rows, and it was drawn hard against the border, with a blocked row's
+   red edge touching the grey one. Two characters, so the text lands under the
+   fold's own label rather than at an indent of its own invention. */
+.inner.session { padding-left: 2ch; }
+
 /* What `orc view` reported, under the identity it belongs to. The columns line
    up with the rest of the site's tables rather than being their own shape: this
    is a terminal, and a terminal has columns. */

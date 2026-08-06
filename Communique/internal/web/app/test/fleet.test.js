@@ -246,6 +246,20 @@ test("an opened session shows what was said and what was done", () => {
   assert.match(text, /Docs\/Orc\/Reference\.md/, "what the agent did is missing");
 });
 
+// The pane holds prose and rows rather than deeper folds, so it takes an indent of
+// its own — a library fold's inner must not, since every fold inside one brings its
+// own and padding there would compound once per level. Which of the two this is has
+// to be said in the markup, because the stylesheet cannot tell them apart.
+test("an opened session is marked as a pane rather than as more tree", () => {
+  const nodes = fleetView.tree({ fleet: [withSession], open: { "session:studio:ember": true } }, null);
+  const inners = nodes.flatMap((n) => all(n, (x) => String(x.className).split(/\s+/).includes("inner")));
+  assert.ok(inners.length > 0, "the fold drew no body at all");
+  for (const el of inners) {
+    assert.ok(String(el.className).split(/\s+/).includes("session"),
+      `a session body was drawn as plain tree: ${el.className}`);
+  }
+});
+
 // A refusal without its reason sends the reader to the permissions table to find
 // out what they already needed to know.
 test("a refused tool call carries its reason", () => {

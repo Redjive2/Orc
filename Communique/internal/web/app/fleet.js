@@ -447,8 +447,12 @@ export function session(f, id, state, actions) {
     h("span", { class: "muted note" }, sessionSummary(got)));
 
   if (!open) return summary;
+  // `session` as well as `inner`, because this fold holds prose and rows rather
+  // than more tree. A library fold's inner is a container for deeper folds, which
+  // carry their own indent and must not be pushed twice; this one is the bottom of
+  // its tree and its contents were sitting flat against the rule that marks it.
   return h("div", { class: "folded" }, summary,
-    h("div", { class: "inner" }, ...sessionBody(got)));
+    h("div", { class: "inner session" }, ...sessionBody(got)));
 }
 
 // sessionSummary is the one line worth reading without opening anything: what it
