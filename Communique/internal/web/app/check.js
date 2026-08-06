@@ -325,34 +325,71 @@ export function permissions(known, { held = [], authority = null } = {}) {
   const already = new Set(held || []);
 
   return (raw, what = "the permissions") => {
-    const names = String(raw ?? "").trim().split(/\s+/).filter(Boolean);
+    const names = split(raw);
     if (names.length === 0) return `${what} cannot be empty`;
 
+    // Every name, not up to the first bad one. The sheet already holds this rule
+    // across fields — a form with three problems submitted three times, each
+    // attempt revealing one more, reads as broken rather than as helpful — and a
+    // field carrying a list of things has the same shape inside it.
     const seen = new Set();
+    const wrong = [];
     for (const name of names) {
       const shape = label(name, `“${name}”`);
-      if (shape) return shape;
-      if (seen.has(name)) return `${what} names “${name}” twice`;
-      seen.add(name);
-
-      const got = byName.get(name);
-      if (!got) {
-        const near = nearest(name, [...byName.keys()]);
-        return near
-          ? `there is no permission called “${name}” — did you mean “${near}”?`
-          : `there is no permission called “${name}” on this fleet`;
-      }
-      if (authority != null && got.floor > authority) {
-        return `“${name}” needs authority ${got.floor}, and the role has ${authority}`;
-      }
-      if (already.has(name)) {
-        // Not an error. Said anyway, through the same channel, because a person
-        // who queues something that will do nothing should know before the sync.
+      if (shape) {
+        wrong.push(shape);
         continue;
       }
+      // Compared as the tools spell it. `EDIT` and `edit` are one permission —
+      // orc lower-cases a name on the way in — so looking the typed spelling up
+      // refused something that would have worked, and counted the two as
+      // different when checking for a repeat.
+      const key = tidy(name);
+      if (seen.has(key)) {
+        wrong.push(`“${key}” is named twice`);
+        continue;
+      }
+      seen.add(key);
+
+      const got = byName.get(key);
+      if (!got) {
+        const near = nearest(key, [...byName.keys()]);
+        wrong.push(near
+          ? `there is no permission called “${key}” — did you mean “${near}”?`
+          : `there is no permission called “${key}” on this fleet`);
+        continue;
+      }
+      if (authority != null && got.floor > authority) {
+        wrong.push(`“${key}” needs authority ${got.floor}, and the role has ${authority}`);
+      }
     }
-    return "";
+    return wrong.join("; ");
   };
+}
+
+// Names is the list a permissions field holds, as the tools spell them and with the
+// repeats gone.
+//
+// Exported because the caller has to send exactly what was checked. A form that
+// validated one spelling and queued another would be a form whose checks mean
+// nothing, and the two are written apart here — the box holds what somebody typed
+// and the queue takes what orc accepts.
+export function names(raw, { without = [] } = {}) {
+  const drop = new Set((without || []).map(tidy));
+  const seen = new Set();
+  const out = [];
+  for (const name of split(raw)) {
+    const key = tidy(name);
+    if (key === "" || seen.has(key) || drop.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+// split is the one definition of how a list field is broken into words.
+function split(raw) {
+  return String(raw ?? "").trim().split(/\s+/).filter(Boolean);
 }
 
 // nearest is the closest of a set of words, or "" when none is close.

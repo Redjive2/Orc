@@ -880,17 +880,28 @@ const actions = {
     });
     if (!got) return;
 
-    const names = got.permissions.trim().split(/\s+/).filter(Boolean);
-    // The ones it already has are dropped rather than queued. Asking again changes
-    // nothing on the machine, and an action that is certain to do nothing is one
-    // more line in the queue for somebody to read and dismiss.
-    const held = new Set(role.permissions || []);
-    const wanted = names.filter((n) => !held.has(n));
+    // As the tools spell them, and as the check read them. A form that validated
+    // one spelling and queued another would be a form whose checks mean nothing.
+    // The ones the role already has are dropped: asking again changes nothing on
+    // the machine, and an action certain to do nothing is one more line for
+    // somebody to read and dismiss.
+    const wanted = check.names(got.permissions, { without: role.permissions || [] });
     if (wanted.length === 0) return;
 
     await run(async () => {
+      // One at a time, and the failure names what did and did not go. Stopping at
+      // the first refusal would leave some queued and some not with nothing saying
+      // which — and the queue is the only place an operator could then find out.
+      const queued = [];
       for (const name of wanted) {
-        await api.addPermission(f.machine, role.name, name);
+        try {
+          await api.addPermission(f.machine, role.name, name);
+          queued.push(name);
+        } catch (err) {
+          if (queued.length === 0) throw err;
+          throw new Error(
+            `queued ${queued.join(", ")}; ${name} was refused: ${err.message || err}`);
+        }
       }
     });
   },

@@ -472,10 +472,12 @@ function permissionPicker(field, input) {
   // Toggling rather than appending, so a click that was a mistake is undone by the
   // same click. The box is still the truth — this only edits it.
   const toggle = (name) => {
-    const names = input.value.trim().split(/\s+/).filter(Boolean);
-    const at = names.indexOf(name);
+    // Compared as the tools spell them, so clicking `edit` after typing `EDIT`
+    // removes it rather than adding a second copy of the same permission.
+    const names = check.names(input.value);
+    const at = names.indexOf(check.tidy(name));
     if (at >= 0) names.splice(at, 1);
-    else names.push(name);
+    else names.push(check.tidy(name));
     input.value = names.join(" ");
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.focus();

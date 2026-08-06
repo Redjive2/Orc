@@ -311,3 +311,31 @@ test("a permission the role already holds is not an error", () => {
 test("an empty list is refused like every other empty field", () => {
   bad(check.permissions(fleetPerms, {})(""), "nothing typed");
 });
+
+// Capitals work everywhere else a name is typed, and orc lower-cases one on the way
+// in, so `EDIT` and `edit` are one permission. Looking the typed spelling up refused
+// something that would have worked, and counted the two as different when checking
+// for a repeat.
+test("a permission may be typed with capitals", () => {
+  const at = check.permissions(fleetPerms, { authority: 99 });
+  ok(at("EDIT"), "EDIT");
+  ok(at("Edit Upgrade"), "mixed case");
+  assert.match(at("edit EDIT"), /twice/);
+});
+
+// Every bad name, not up to the first. A field submitted three times, each attempt
+// revealing one more problem, reads as broken rather than as helpful.
+test("every bad name is reported at once", () => {
+  const got = check.permissions(fleetPerms, { authority: 30 })("nope upgrade alsonope");
+  for (const want of ["nope", "upgrade", "alsonope"]) {
+    assert.ok(got.includes(want), `${want} is missing from: ${got}`);
+  }
+});
+
+// What is queued has to be what was checked. A form that validated one spelling and
+// sent another is a form whose checks mean nothing.
+test("names returns what the tools accept, deduplicated and without the held ones", () => {
+  assert.deepEqual(check.names("EDIT  Upgrade edit"), ["edit", "upgrade"]);
+  assert.deepEqual(check.names("edit upgrade", { without: ["EDIT"] }), ["upgrade"]);
+  assert.deepEqual(check.names("   "), []);
+});
