@@ -115,6 +115,9 @@ let state = {
   // what it said it was *going* to do: the build happens after that answer, and
   // until this existed a failure reached a log file and nowhere else.
   built: null,
+  // Whether this machine could rebuild itself: the checkout's state and a verdict
+  // on it. Fetched only while `tooling › rebuild` is open.
+  checkout: null,
   inbox: [], archive: [], sent: [], queue: [], tasks: [],
   // The library's structure, the file texts read so far, and which folds are
   // open. Openness is state rather than DOM, so a redraw on sync does not
@@ -1482,6 +1485,26 @@ async function refresh() {
       syncPace = await api.syncPace().catch(() => state.syncPace);
     }
 
+    // The logs, on the same terms as the two above: only while the tab that draws
+    // them is on screen. Four tails from every machine plus the server's own ring
+    // is a fetch worth making on demand and not one to keep current for a page
+    // nobody has open.
+    //
+    // The error is kept rather than swallowed, for the reason the library's is: an
+    // older server with no such route, and a server that is simply down, would
+    // otherwise both render as "nothing has been logged" — a claim about the fleet
+    // made from a fact about the request.
+    let logs = state.logs;
+    let logsError = state.logsError;
+    if (route.startsWith("/tooling/logs")) {
+      try {
+        logs = await api.logs();
+        logsError = null;
+      } catch (err) {
+        logsError = String(err.message || err);
+      }
+    }
+
     let detail = state.detail;
     const match = /^\/message\/([^?]+)(?:\?machine=(.*))?$/.exec(route);
     if (match) {
@@ -1492,7 +1515,7 @@ async function refresh() {
     }
 
     set({
-      activity, syncPace, built,
+      activity, syncPace, built, checkout, logs, logsError,
       session, adminEnabled: session.admin, machines: session.machines || [],
       inbox: inbox.messages || [], archive: archive.messages || [],
       sent: sent.messages || [],

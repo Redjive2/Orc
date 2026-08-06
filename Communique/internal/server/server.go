@@ -120,6 +120,7 @@ type Server struct {
 	state    *store.Store
 	creds    *auth.Store
 	log      *slog.Logger
+	ring     *logRing
 	admin    bool
 	now      func() time.Time
 	lifetime time.Duration
@@ -138,6 +139,12 @@ type Server struct {
 	// one checkout is a build reading a tree another build is rewriting.
 	building    bool
 	selfUpgrade *selfUpgrade
+	// The last inspection of the checkout, and when it was taken. Its own lock
+	// rather than `built`: this is read on a poll and that one is held across a
+	// ten-minute build. See checkout.go.
+	checked   sync.Mutex
+	checkedAt time.Time
+	checkout  upgrade.Status
 
 	assets  http.Handler
 	index   []byte
@@ -163,10 +170,16 @@ func New(opts Options) (*Server, error) {
 		return nil, err
 	}
 
+	// Everything the server logs is also kept, so `tooling › logs` can show it
+	// without the operator reaching the machine it runs on. The handler is wrapped
+	// rather than a second logger offered, because a call site can be forgotten and
+	// a handler cannot — see logring.go.
+	ring := &logRing{}
 	s := &Server{
 		state:    opts.State,
 		creds:    opts.Creds,
-		log:      opts.Logger,
+		ring:     ring,
+		log:      slog.New(keepingLog{Handler: opts.Logger.Handler(), ring: ring}),
 		admin:    opts.Admin,
 		now:      opts.Now,
 		lifetime: opts.SessionLifetime,
@@ -253,6 +266,7 @@ func (s *Server) routes() {
 	s.route("POST /api/v1/logout", needSession, s.logout)
 	s.route("GET /api/v1/session", needSession, s.session)
 	s.route("GET /api/v1/machines", needSession, s.machines)
+	s.route("GET /api/v1/logs", needSession, s.logs)
 	s.route("GET /api/v1/inbox", needSession, s.inbox)
 	s.route("GET /api/v1/archive", needSession, s.archive)
 	s.route("GET /api/v1/sent", needSession, s.sent)
@@ -342,6 +356,9 @@ func (s *Server) routes() {
 	// "upgrading" and returned, and a build that failed four minutes later reached
 	// the log and nowhere else.
 	s.route("GET /api/v1/upgrade", needEither, s.upgradeStatus)
+	// And whether one would work at all, asked before anybody presses the button
+	// that takes the site down. See checkout.go.
+	s.route("GET /api/v1/upgrade/checkout", needSession, s.checkoutStatus)
 
 	// The task verbs, one route per Macmuffin command that changes something.
 	// See tasks.go for why this is a route each rather than one pass-through.

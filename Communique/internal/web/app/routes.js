@@ -57,7 +57,7 @@ export const AREAS = [
   },
   {
     major: "tooling",
-    subs: [{ sub: "queue", count: stuck }, { sub: "rebuild" }],
+    subs: [{ sub: "queue", count: stuck }, { sub: "logs" }, { sub: "rebuild" }],
   },
 ];
 

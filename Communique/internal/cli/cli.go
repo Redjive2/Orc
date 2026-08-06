@@ -25,6 +25,7 @@ import (
 	"orc/cq/internal/agent"
 	"orc/cq/internal/auth"
 	"orc/cq/internal/fault"
+	"orc/cq/internal/logbook"
 	"orc/cq/internal/protocol"
 	"orc/cq/internal/server"
 	stored "orc/cq/internal/settings"
@@ -187,8 +188,14 @@ func (a App) flavour() (theme.Flavour, error) {
 	return f, nil
 }
 
-func (a App) logger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(a.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+func (a App) logger() *slog.Logger { return a.loggerTo(a.Stderr) }
+
+// loggerTo is the same logger pointed somewhere else, which for a watcher is the
+// terminal *and* the machine's logbook. Text rather than JSON, and unpainted:
+// what reads these is a browser that colours by level itself, and escapes in a
+// file would be something it had to strip before it could.
+func (a App) loggerTo(w io.Writer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelInfo}))
 }
 
 // --- serve ---------------------------------------------------------------
@@ -495,10 +502,29 @@ func (a App) sync(args []string) error {
 		Library: libraryRoot,
 	})
 
+	// A watcher keeps a log; a one-shot does not.
+	//
+	// The difference is who is there to read it. Somebody running `cq sync` by hand
+	// is watching the terminal it prints to, and a file would be a second copy of
+	// what they are already looking at. A watcher runs detached, for days, with its
+	// streams pointed at the null device — so a file is the only record that it ran
+	// at all, let alone how it went.
+	out := io.Writer(a.Stderr)
+	if *interval > 0 {
+		if w, err := logbook.Open(*home, logbook.Sync); err != nil {
+			// A log that will not open costs the log. Refusing to mirror a machine
+			// because a directory would not create is the wrong way round.
+			a.complain(err)
+		} else {
+			defer func() { _ = w.Close() }()
+			out = io.MultiWriter(a.Stderr, w)
+		}
+	}
+
 	ag, err := agent.New(agent.Options{
 		Source: src, Server: *serverURL, Token: a.look("CQ_TOKEN", ""),
 		Machine: protocol.MachineID(*machine), State: *home,
-		Admin: *admin, AdminBodies: *bodies, Library: libraryRoot, Logger: a.logger(),
+		Admin: *admin, AdminBodies: *bodies, Library: libraryRoot, Logger: a.loggerTo(out),
 	})
 	if err != nil {
 		return err

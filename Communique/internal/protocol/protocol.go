@@ -641,6 +641,48 @@ type Snapshot struct {
 	// Fleet is the machine's Orc store. Absent when the machine runs no agents,
 	// which is most machines that mirror a mailbox.
 	Fleet *Fleet `json:"fleet,omitempty"`
+	// Logs is the tail of what each of the machine's cycles has been saying.
+	//
+	// It travels because there is no other way for it to arrive. The three loops
+	// that keep a fleet alive run detached on a machine the server can never reach,
+	// and until this existed their output went to the null device — so a sync that
+	// had been failing for a day looked exactly like one that had never started.
+	//
+	// Tails, not files. The whole log stays on the machine that wrote it; what
+	// rides here is the last few dozen lines, on every sync, which is a size worth
+	// paying on a cadence.
+	Logs []LogTail `json:"logs,omitempty"`
+}
+
+// LogTail is one cycle's recent output.
+type LogTail struct {
+	// Kind is "sync", "wake" or "tend".
+	Kind  string    `json:"kind"`
+	Lines []LogLine `json:"lines,omitempty"`
+	// Note is why this is empty when it is — a log that could not be read is not
+	// the same as a cycle that has said nothing, and an empty panel says neither.
+	Note string `json:"note,omitempty"`
+}
+
+// LogLine is one entry, with the level pulled out so the browser can colour by it
+// without parsing the text a second time.
+type LogLine struct {
+	Level string `json:"level,omitempty"`
+	Text  string `json:"text"`
+}
+
+// Validate keeps a tail to a name this build knows and a size it can draw.
+func (t LogTail) Validate() error {
+	switch t.Kind {
+	case "sync", "wake", "tend":
+	default:
+		return fault.Field("LogTail", "kind", "%q is not a cycle", t.Kind)
+	}
+	if len(t.Lines) > MaxListItems {
+		return fault.Field("LogTail", "lines", "%d lines exceeds the limit of %d",
+			len(t.Lines), MaxListItems)
+	}
+	return checkText("LogTail", "note", t.Note, MaxNoteRunes, true)
 }
 
 // Validate checks the snapshot names its machine and owner and that every
@@ -674,6 +716,9 @@ func (s Snapshot) Validate() error {
 		if err := s.Fleet.Validate(); err != nil {
 			return err
 		}
+	}
+	if err := validateEach("Snapshot", "logs", s.Logs); err != nil {
+		return err
 	}
 	if s.Library != nil {
 		if err := s.Library.Validate(); err != nil {

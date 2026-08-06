@@ -15,6 +15,7 @@ import (
 	"orc/common/nudge"
 
 	"orc/cq/internal/fault"
+	"orc/cq/internal/logbook"
 	"orc/cq/internal/protocol"
 	"orc/cq/internal/upgrade"
 )
@@ -129,6 +130,32 @@ func (c *CLI) watched(ctx context.Context, opts Options) protocol.Snapshot {
 	return snap
 }
 
+// logs reads the tail of each cycle's logbook.
+//
+// A cycle that has never run has no file and no lines, which is a state the screen
+// draws rather than a failure to report — most machines run one of these three and
+// not the other two. A file that exists and will not read is different, and says
+// so, because "nothing has happened" and "I could not look" send somebody to
+// different places.
+func (c *CLI) logs() []protocol.LogTail {
+	if c.Home == "" {
+		return nil
+	}
+	var out []protocol.LogTail
+	for _, kind := range logbook.Kinds {
+		tail := protocol.LogTail{Kind: string(kind)}
+		lines, err := logbook.Tail(c.Home, kind, logbook.MaxTail)
+		if err != nil {
+			tail.Note = oneLine(err)
+		}
+		for _, line := range lines {
+			tail.Lines = append(tail.Lines, protocol.LogLine{Level: line.Level, Text: line.Text})
+		}
+		out = append(out, tail)
+	}
+	return out
+}
+
 func (c *CLI) Snapshot(ctx context.Context, opts Options) (protocol.Snapshot, error) {
 	if err := opts.Validate(); err != nil {
 		return protocol.Snapshot{}, err
@@ -170,6 +197,11 @@ func (c *CLI) Snapshot(ctx context.Context, opts Options) (protocol.Snapshot, er
 		Convos:  c.convos(ctx, inboxWire, archiveWire, sentWire),
 		Tasks:   tasks,
 	}
+
+	// What this machine's own cycles have been saying. Collected here rather than
+	// by the server for the reason everything else is: the server cannot reach the
+	// machine, so if it does not ride the snapshot it does not arrive.
+	snap.Logs = c.logs()
 
 	// The fleet, when this machine has one. A machine that runs no agents has no
 	// orc and says so in a line, which is not a failed sync — most machines that

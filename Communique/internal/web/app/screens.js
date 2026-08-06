@@ -6,6 +6,7 @@
 // nothing is a tab somebody clicks once and never again.
 
 import * as views from "./views.js";
+import * as logs from "./logs.js";
 import * as library from "./library.js";
 import * as location from "./location.js";
 import * as fleet from "./fleet.js";
@@ -43,6 +44,7 @@ export const SCREENS = {
   "admin/instruct": (s, a) => instruct.instruct(s, a),
 
   "tooling/queue": (s, a) => views.queue(s, a),
+  "tooling/logs": (s, a) => logs.screen(s, a),
   "tooling/rebuild": (s, a) => views.rebuild(s, a),
 };
 

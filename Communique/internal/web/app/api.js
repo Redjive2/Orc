@@ -154,6 +154,9 @@ export const api = {
   employ: (machine, name, model, effort) =>
     fleetCall("identities", name, "employ", machine, { model: model || undefined, effort: effort || undefined }),
   fire: (machine, name) => fleetCall("identities", name, "fire", machine, {}),
+  // Everything there is to read, in one call: the server's own lines and every
+  // machine's cycles. Four folds that arrived one at a time would draw four times.
+  logs: () => request("GET", "/api/v1/logs"),
   poke: (machine, name, message) =>
     fleetCall("identities", name, "poke", machine, { message: message || undefined }),
   refreshAgent: (machine, name) => fleetCall("identities", name, "refresh", machine, {}),
@@ -225,6 +228,9 @@ export const api = {
   // build happens after it, on a goroutine that ends with the process going away —
   // so this is the only way to learn that it failed.
   built: () => request("GET", "/api/v1/upgrade"),
+  // And whether one would work at all, before the button that takes the site down
+  // is pressed. Read-only and cheap enough to poll — no fetch, nothing written.
+  checkout: () => request("GET", "/api/v1/upgrade/checkout"),
 
   deleteTask: (machine, name, sub) =>
     request("DELETE", `/api/v1/tasks/${encodeURIComponent(name)}`,

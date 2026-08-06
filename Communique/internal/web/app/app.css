@@ -1244,3 +1244,104 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .event { grid-template-columns: 9ch minmax(0, 1fr); }
   .event .tool, .event .detail, .event .why { grid-column: 2 / -1; }
 }
+
+/* --- can this machine rebuild? ------------------------------------------ */
+
+/* The light above the button that takes the site down.
+
+   A word beside the dot, always. This panel is a colour telling somebody whether
+   to press a destructive control, and a reader who cannot tell red from green
+   needs the same answer — the shape of the dot differs too, so it survives a
+   monochrome screen as well as a colour-blind one.
+
+   Wrapping rather than gridded: this is a line of three uneven parts and the
+   third is a git branch, which on a phone is longer than the screen. A grid would
+   need a narrow-screen rule; wrapping needs none and cannot be overridden by one. */
+.tree-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 1ch;
+  padding: .2rem 0 .3rem;
+}
+.tree-state .dot { font-size: 1.1em; }
+.tree-state .word { font-weight: 600; }
+/* The branch and its counts. `min-width: 0` and a break: a remote branch name has
+   no spaces in it, and without both it is one word that pushes the card wider than
+   the phone — which `body { overflow-x: hidden }` then clips away in silence. */
+.tree-state .where { min-width: 0; overflow-wrap: anywhere; }
+.tree-state.go .dot, .tree-state.go .word { color: var(--success); }
+.tree-state.caution .dot, .tree-state.caution .word { color: var(--warning); }
+.tree-state.stop .dot, .tree-state.stop .word { color: var(--danger); }
+
+/* One reason, and what to do about it. The fix is under the reason rather than
+   beside it: it is a sentence with a command in it, and a second column on a
+   phone would give each of them half a screen. */
+.tree-why {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: .1rem 0 .1rem 2ch;
+  border-left: 2px solid var(--frame);
+  margin: .15rem 0;
+}
+.tree-why .text { overflow-wrap: anywhere; }
+.tree-why .fix { font-size: .9em; overflow-wrap: anywhere; }
+.tree-why.stop { border-left-color: var(--danger); }
+.tree-why.caution { border-left-color: var(--warning); }
+.tree-why.go { border-left-color: var(--frame); }
+
+/* --- logs -------------------------------------------------------------- */
+
+/* A log is the one kind of content that must not wrap: a wrapped `key=value`
+   line reads as two entries, and a reader counting rounds counts wrong. It also
+   must not push the page sideways. Those two together put the overflow here and
+   nowhere else — the block scrolls, the document never does.
+
+   `min-width: 0` is what makes that true rather than merely intended. A grid or
+   flex child defaults to `min-width: auto`, which is its *content* width, so an
+   overflow-x on the child is quietly overruled by a parent that has already been
+   stretched to fit the longest line. */
+.log {
+  min-width: 0;
+  overflow-x: auto;
+  background: var(--panel);
+  padding: .4rem 1ch;
+  line-height: 1.4;
+}
+
+/* The level is a column so the words line up down the left and the eye can run
+   past them; the text is what scrolls. */
+.log-line {
+  display: grid;
+  grid-template-columns: 6ch minmax(0, 1fr);
+  gap: 0 1ch;
+  /* No font-family: the whole page is already monospace, and restating it here
+     would be a second place for the choice to live. */
+  font-size: .85em;
+}
+.log-level { color: var(--muted); }
+.log-text { white-space: pre; }
+
+/* Colour by level, and never colour alone: the word is in `.log-level` on every
+   line that has one, so a reader who cannot tell red from amber is reading the
+   same thing everybody else is. A level this build has never heard of gets no
+   class at all rather than an invented severity. */
+.log-line.bad .log-level { color: var(--danger); }
+.log-line.bad .log-text { color: var(--danger); }
+.log-line.warn .log-level { color: var(--warning); }
+.log-line.ok .log-level { color: var(--success); }
+.log-line.faint { color: var(--subtle); }
+
+/* The same on a closed fold, so the one log with trouble in it can be found
+   without opening the other three. `note` already carries the count. */
+button.fold .note.bad { color: var(--danger); }
+button.fold .note.warn { color: var(--warning); }
+
+@media (max-width: 600px) {
+  /* Narrower level column and a smaller line, because the text beside it is the
+     part worth the width. It still scrolls rather than wrapping — a phone is
+     exactly where a wrapped log line is least readable. */
+  .log-line { grid-template-columns: 5ch minmax(0, 1fr); font-size: .8em; }
+  .log { padding: .4rem .75ch; }
+}

@@ -16,6 +16,7 @@ import (
 	"orc/common/keys"
 	"orc/common/watch"
 	"orc/cq/internal/fault"
+	"orc/cq/internal/logbook"
 	stored "orc/cq/internal/settings"
 	"orc/cq/internal/style"
 )
@@ -61,6 +62,13 @@ type paceCycle struct {
 	tool      string
 	watchArgs []string
 	onceArgs  []string
+	// ownLog says the tool writes its own logbook, so this must not tee it.
+	//
+	// `cq sync --watch` keeps its own — it has to, because it is the one cycle
+	// somebody also runs on its own, without pace above it. Teeing it here as well
+	// would put every line in the file twice, which reads as a loop running at
+	// double the rate it is.
+	ownLog bool
 }
 
 // pace is `cq pace`.
@@ -118,7 +126,7 @@ func (a App) pace(args []string) error {
 
 	cycles := []paceCycle{
 		{
-			name: "sync", kind: watch.Sync, key: keys.CtrlS, tool: self,
+			name: "sync", kind: watch.Sync, key: keys.CtrlS, tool: self, ownLog: true,
 			watchArgs: []string{"sync", "--watch", every, "--home", *home},
 			onceArgs:  []string{"sync", "--home", *home},
 		},
@@ -169,7 +177,7 @@ func (a App) pace(args []string) error {
 				"`cq status` lists what is running", strings.Join(already, " and "))}
 	}
 
-	return a.pacing(cycles, every)
+	return a.pacing(cycles, *home, every)
 }
 
 // The intervals `pace` starts the two Orc cycles at when nobody says otherwise.
@@ -183,7 +191,7 @@ const (
 )
 
 // pacing runs the cycles and the keyboard until it is stopped.
-func (a App) pacing(cycles []paceCycle, every string) error {
+func (a App) pacing(cycles []paceCycle, home, every string) error {
 	if err := a.say("%s   %s", a.ink("pacing", style.Good),
 		a.ink(fmt.Sprintf("sync every %s · ^S sync  ^W wake  ^T tend  ^C stop", every), style.Quiet)); err != nil {
 		return err
@@ -205,7 +213,7 @@ func (a App) pacing(cycles []paceCycle, every string) error {
 		wg.Add(1)
 		go func(c paceCycle) {
 			defer wg.Done()
-			a.keepUp(c, done)
+			a.keepUp(c, home, done)
 		}(c)
 	}
 
@@ -273,7 +281,7 @@ func (a App) pacing(cycles []paceCycle, every string) error {
 			}
 			busy[k] = true
 			go func(c paceCycle, k byte) {
-				a.runNow(c)
+				a.runNow(c, home)
 				finished <- k
 			}(c, k)
 		}
@@ -290,6 +298,30 @@ func cycleFor(cycles []paceCycle, k byte) (paceCycle, bool) {
 	return paceCycle{}, false
 }
 
+// logged is where a cycle's child writes: the terminal, and the machine's log.
+//
+// Both, not one. The terminal is what somebody sitting at this machine is reading
+// right now; the log is what the browser will show hours later, from somewhere
+// else entirely. Dropping either would take away the only view somebody has.
+//
+// A log that cannot be opened costs the file and not the cycle. The alternative —
+// refusing to start a watcher because a directory would not create — would take a
+// fleet down to keep a diagnostic, which is exactly backwards.
+func (a App) logged(c paceCycle, home string) (io.Writer, io.Writer) {
+	if c.ownLog {
+		return a.Stdout, a.Stderr
+	}
+	w, err := logbook.Open(home, logbook.Kind(c.name))
+	if err != nil {
+		a.complain(err)
+		return a.Stdout, a.Stderr
+	}
+	// Deliberately not closed. The writer outlives this call by the length of the
+	// child's run, and the process holding it exits when pace does — at which point
+	// the file is closed by the only thing that can safely close it.
+	return io.MultiWriter(a.Stdout, w), io.MultiWriter(a.Stderr, w)
+}
+
 // keepUp runs one cycle, and starts it again whenever it stops.
 //
 // The backoff is why this is not a bare loop. A cycle that cannot start — a
@@ -297,7 +329,7 @@ func cycleFor(cycles []paceCycle, k byte) (paceCycle, bool) {
 // fast as the machine can fork, and the failure would be buried under its own
 // output. Widening the gap turns that into a line somebody can read while leaving
 // a genuine crash restarted within a second.
-func (a App) keepUp(c paceCycle, done <-chan struct{}) {
+func (a App) keepUp(c paceCycle, home string, done <-chan struct{}) {
 	const (
 		floor   = time.Second
 		ceiling = time.Minute
@@ -312,7 +344,7 @@ func (a App) keepUp(c paceCycle, done <-chan struct{}) {
 
 		started := time.Now()
 		cmd := exec.Command(c.tool, c.watchArgs...)
-		cmd.Stdout, cmd.Stderr = a.Stdout, a.Stderr
+		cmd.Stdout, cmd.Stderr = a.logged(c, home)
 		if err := cmd.Start(); err != nil {
 			a.tell("cq: %s could not start (%v); trying again in %s", c.name, err, round(wait))
 			select {
@@ -380,10 +412,10 @@ func (a App) keepUp(c paceCycle, done <-chan struct{}) {
 // Its own process, so a key cannot disturb a pass already running and cannot be
 // disturbed by one starting. The output goes to the same streams, so what a key
 // did is in the same place as what the cycles do.
-func (a App) runNow(c paceCycle) {
+func (a App) runNow(c paceCycle, home string) {
 	a.tell("%s %s now", a.ink(keys.Name(c.key), style.Value), c.name)
 	cmd := exec.Command(c.tool, c.onceArgs...)
-	cmd.Stdout, cmd.Stderr = a.Stdout, a.Stderr
+	cmd.Stdout, cmd.Stderr = a.logged(c, home)
 	if err := cmd.Run(); err != nil {
 		a.tell("cq: %s now: %v", c.name, err)
 	}
