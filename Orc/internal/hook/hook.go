@@ -74,9 +74,20 @@ var Writers = []string{"Edit", "Write", "NotebookEdit", "MultiEdit"}
 // Readers are the tools whose target path is checked against `read` clauses.
 var Readers = []string{"Read", "NotebookRead"}
 
-// SubagentTool is denied outright. Confirmed with the user: all parallelism goes
+// SubagentTools are denied outright. Confirmed with the user: all parallelism goes
 // through `orc employ`, so the worklist is the whole picture of what is thinking.
-const SubagentTool = "Agent"
+//
+// Both spellings, because Claude uses both. The binary decides whether a tool call
+// is a subagent with `name !== "Agent" && name !== "Task"` — the name depends on the
+// build and on how the call was made — and Orc named only the first. A fleet running
+// a version that spells it `Task` had the denial in its settings, the refusal in its
+// hook, a line in `orc doctor` saying subagents were off, and no denial at all.
+var SubagentTools = []string{"Agent", "Task"}
+
+// isSubagent reports whether a tool call would start one.
+func isSubagent(name string) bool {
+	return slices.Contains(SubagentTools, name)
+}
 
 // Options is everything the hook needs from outside itself. Every field has a working
 // default, so a test sets only what it cares about.
@@ -264,8 +275,8 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 	// depend on a store being readable, because the load accounting depends on it.
 	// A rule that might be ignored under bypassPermissions cannot be the only thing
 	// holding it.
-	if p.ToolName == SubagentTool {
-		return Outcome{Code: CodeBlock, Stderr: refuseSubagent()}
+	if isSubagent(p.ToolName) {
+		return Outcome{Code: CodeBlock, Stderr: refuseSubagent(p.ToolName)}
 	}
 
 	// The shell is checked before anything path-shaped, because it is decided by
@@ -273,6 +284,18 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 	// is the one gate that refuses by default, so it must not depend on a path
 	// having been found first.
 	if p.ToolName == "Bash" {
+		// A nested Claude is a subagent with a shell in front of it. `orc doctor`
+		// named this as the hole in the denial above — "except for a Bash call to
+		// `claude -p`" — and naming it is not closing it: a command line is the one
+		// place the tool-name denial cannot reach, and the load it starts is
+		// invisible to the work list and to the budget.
+		//
+		// Refused before the clauses, like the store escape, because no clause
+		// should be able to permit it. An identity with `shell(**)` is trusted with
+		// a shell, not with a second fleet nobody can see.
+		if nested := nestedAgent(p.ToolInput.Command); nested != "" {
+			return Outcome{Code: CodeBlock, Stderr: refuseNested(nested)}
+		}
 		if out, decided := decideShell(s, who, p.ToolInput.Command); decided {
 			return out
 		}
@@ -810,4 +833,29 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// AgentBinaries are the programs that start a Claude session. A shell call to one
+// of them is a subagent by another route.
+//
+// `claude` is the tool itself. `orc-session` is the supervisor Orc starts one with,
+// and starting one by hand puts a session on the machine that the work list does not
+// know about — which is the same damage from the other direction.
+var AgentBinaries = []string{"claude", "claude.exe", "orc-session", "orc-session.exe"}
+
+// nestedAgent names the program in a command line that would start a session, or ""
+// when none would.
+//
+// The name only, matched after the path is stripped, so `/usr/local/bin/claude` and
+// `claude` are the same answer. A line this cannot read is left to decideShell —
+// which refuses an opaque line unless a clause permits everything, and that is a
+// decision somebody made rather than a gap.
+func nestedAgent(command string) string {
+	for _, run := range Runs(command) {
+		name := filepath.Base(strings.TrimSpace(run.Name))
+		if slices.Contains(AgentBinaries, name) {
+			return name
+		}
+	}
+	return ""
 }

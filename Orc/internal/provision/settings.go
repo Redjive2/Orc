@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"orc/orc/internal/hook"
 	"os"
 	"sort"
 	"strings"
@@ -268,12 +269,15 @@ func Mode() string {
 func denyRules(spec SettingsSpec) []string {
 	root := strings.TrimRight(spec.OrcHome, "/")
 
-	out := []string{
-		// Subagents. Confirmed with the user: all parallelism goes through `orc
-		// employ`, so the worklist is the whole picture of what is thinking and the
-		// load budget is exact rather than approximate.
-		"Agent",
-	}
+	// Subagents, under both names. Confirmed with the user: all parallelism goes
+	// through `orc employ`, so the worklist is the whole picture of what is thinking
+	// and the load budget is exact rather than approximate.
+	//
+	// Claude decides whether a call is a subagent by testing the tool name against
+	// *both* `Agent` and `Task`, and which one a build uses varies. Denying one of
+	// them left a fleet that spelled it the other way with a rule that matched
+	// nothing — and with `orc doctor` reporting that subagents were off.
+	out := append([]string{}, hook.SubagentTools...)
 	for _, glob := range Protected {
 		full := glob
 		if root != "" {

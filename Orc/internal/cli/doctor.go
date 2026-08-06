@@ -601,8 +601,9 @@ func holes() []check {
 				"obvious shapes and records an escape, but a path can be obfuscated and none of " +
 				"this is a kernel boundary"},
 		{guard: "subagents", state: absent, hole: true,
-			detail: "the Agent tool is denied, so the worklist is the whole picture — except for " +
-				"a Bash call to `claude -p`, which orc cannot decide and only names above"},
+			detail: "the Agent and Task tools are denied and a shell call to `claude` or " +
+				"`orc-session` is refused, so the worklist is the whole picture — except for a " +
+				"line orc cannot read, which needs `shell(**)` and is a decision somebody made"},
 		{guard: "bash writes", state: absent, hole: true,
 			detail: "`anno write` is covered because anno asks; `sed -i` is not"},
 		{guard: "pattern breadth", state: absent, hole: true,

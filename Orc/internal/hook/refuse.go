@@ -18,12 +18,32 @@ import (
 // to stderr, which Claude feeds back to the agent as the reason its tool call failed.
 
 // refuseSubagent explains the one denial that has nothing to do with paths.
-func refuseSubagent() string {
+func refuseSubagent(tool string) string {
 	return join(
-		"orc: the Agent tool is off for every identity in this fleet.",
+		"orc: the "+tool+" tool is off for every identity in this fleet.",
 		"",
 		"  parallelism goes through the work list, so `orc status` is the whole picture of",
 		"  what is thinking and the spawn budget is exact. to get more hands:",
+		"",
+		"    orc new identity <name> && orc assign role <name> <role>",
+		"    orc employ <name>",
+		"",
+		"  which needs a `spawn` permission, and says so if you do not have one.",
+	)
+}
+
+// refuseNested explains a subagent started through a shell.
+//
+// Worded as containment rather than as a permission, because that is what it is: no
+// clause permits it and there is nothing to ask for. An identity with `shell(**)` is
+// trusted with a shell, not with a second fleet nobody can see.
+func refuseNested(program string) string {
+	return join(
+		"orc: `"+program+"` starts a session, and starting one from a shell is off in this fleet.",
+		"",
+		"  it is the Agent tool by another route: the work list would not know about it,",
+		"  the spawn budget would not count it, and `orc status` would not show it. to get",
+		"  more hands:",
 		"",
 		"    orc new identity <name> && orc assign role <name> <role>",
 		"    orc employ <name>",

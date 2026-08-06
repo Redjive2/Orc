@@ -99,11 +99,20 @@ and which command grants it will ask for that instead.
 
 Two refusals are worth knowing by sight:
 
-- **A subagent.** `Agent` is denied for reasons that have nothing to do with
-  paths: the fleet's load accounting depends on an identity being one session, and
-  a subagent is a session Orc did not start and cannot see. This denial comes
-  before the store is even opened, because the accounting depends on it holding
-  whether or not the store is readable.
+- **A subagent.** `Agent` and `Task` are both denied, for reasons that have nothing
+  to do with paths: the fleet's load accounting depends on an identity being one
+  session, and a subagent is a session Orc did not start and cannot see. Both
+  spellings, because Claude tests a tool call against both and which one a build
+  uses varies — naming one of them left the other open on a fleet that had a rule
+  in its settings, a refusal in its hook, and `orc doctor` reporting subagents were
+  off. This denial comes before the store is even opened, because the accounting
+  depends on it holding whether or not the store is readable.
+- **A session started from a shell.** `claude` and `orc-session` in a command line
+  are the same thing by another route, and they are refused the same way — before
+  the clauses, because no clause should permit it. An identity trusted with a shell
+  is not thereby trusted with a second fleet nobody can see. What remains is a
+  command line orc cannot read, which needs `shell(**)` and is a decision somebody
+  made rather than a gap.
 - **The store itself.** Reaching into `~/.orc` is worded as a containment failure
   rather than a permission problem, because that is what it is — no clause can
   permit it, so there is nothing to ask for. The message names the parts of that
