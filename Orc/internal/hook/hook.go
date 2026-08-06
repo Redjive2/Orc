@@ -773,7 +773,35 @@ func keeps(s *store.Store, who user.Name, path string) bool {
 	if !own {
 		return false
 	}
-	return rel == "CLAUDE.md" || rel == store.MemoryDir ||
+	if rel == "CLAUDE.md" || underMemory(rel) {
+		return true
+	}
+	// The project-scoped memory, which is where the harness actually points.
+	//
+	// Claude Code keeps per-project state under `projects/<slug>/` inside its
+	// config directory, and its own auto-memory instructions name
+	// `projects/<slug>/memory/` — not the `memory/` beside CLAUDE.md. Orc sets
+	// CLAUDE_CONFIG_DIR to the identity's `claude/` dir, so that path lands
+	// *inside the store*, matched neither carve-out, and was refused as fleet
+	// state. An agent following the instructions it was given had its memory
+	// writes blocked; only an agent that had read CLAUDE.md and used the other
+	// directory got through.
+	//
+	// Just the memory, and not `projects/**`. The rest of that tree is Claude
+	// Code's own per-project state, and settings among it — which is exactly what
+	// `settings.json` is protected for. Widening the hole to the whole subtree to
+	// fix a memory path would hand back the thing the carve-out is careful about.
+	if rest, ok := strings.CutPrefix(rel, "projects"+string(filepath.Separator)); ok {
+		if _, after, found := strings.Cut(rest, string(filepath.Separator)); found {
+			return underMemory(after)
+		}
+	}
+	return false
+}
+
+// underMemory reports whether a path is the memory directory or something in it.
+func underMemory(rel string) bool {
+	return rel == store.MemoryDir ||
 		strings.HasPrefix(rel, store.MemoryDir+string(filepath.Separator))
 }
 

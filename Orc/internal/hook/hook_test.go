@@ -464,7 +464,7 @@ func TestAHiddenCommandNeedsEverything(t *testing.T) {
 		})
 	}
 
-	for _, command := range []string{"echo $(rm -rf /)", "sh -c rm", "echo `whoami`"} {
+	for _, command := range []string{"echo $(rm -rf /)", "echo `whoami`", "echo ${HOME}"} {
 		out := bash(command)
 		if out.Code != hook.CodeBlock {
 			t.Errorf("%q was allowed by a narrow clause", command)
@@ -475,12 +475,20 @@ func TestAHiddenCommandNeedsEverything(t *testing.T) {
 		}
 	}
 
-	// shell(**) is the one clause that can honestly cover it.
+	// An interpreter is *not* one of these any more. Its name is knowable, which
+	// is the question a clause answers, so `shell(sh)` permits `sh -c` — and what
+	// that grants is a shell, which is why the toolkit prices it beside
+	// shell-all rather than beside the compilers.
+	if out := bash("sh -c rm"); out.Code != hook.CodeOK {
+		t.Errorf("shell(sh) names sh, so `sh -c` should run:\n%s", out.Stderr)
+	}
+
+	// shell(**) is the one clause that can honestly cover a substitution.
 	wide := newRig(t)
 	wide.permit("run-anything", "shell(**)")
 	if out := wide.call(wide.as("ember", nil), map[string]any{
 		"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": wide.workspace(),
-		"tool_input": map[string]any{"command": "sh -c echo"},
+		"tool_input": map[string]any{"command": "echo $(whoami)"},
 	}); out.Code != hook.CodeOK {
 		t.Errorf("shell(**) did not cover an opaque line:\n%s", out.Stderr)
 	}
@@ -1043,5 +1051,111 @@ func TestMemoryNeedsAStoreToBeFound(t *testing.T) {
 	// The rung's own rule is unchanged: reads pass, writes block.
 	if out := r.call(opts, tool("Read", memory, r.workspace())); out.Code != hook.CodeOK {
 		t.Errorf("a read was blocked on the blind rung:\n%s", out.Stderr)
+	}
+}
+
+// The memory the harness actually points at.
+//
+// Claude Code keeps per-project state under `projects/<slug>/` in its config
+// directory, and its own auto-memory instructions name `projects/<slug>/memory/`
+// rather than the `memory/` beside CLAUDE.md. Orc sets CLAUDE_CONFIG_DIR to the
+// identity's `claude/` dir, so that path lands inside the store — and it matched
+// neither carve-out, so every agent that followed the instructions it was given
+// had its memory writes refused as fleet state.
+func TestProjectScopedMemoryIsKeptToo(t *testing.T) {
+	r := newRig(t)
+	opts := r.as("ember", nil)
+	claude := r.store.ClaudeDir(r.who)
+	slug := "-Users-someone-Dev-Orc"
+
+	for _, path := range []string{
+		filepath.Join(claude, "projects", slug, "memory", "a-fact.md"),
+		filepath.Join(claude, "projects", slug, "memory", "deep", "nested.md"),
+		filepath.Join(claude, "projects", slug, "memory"),
+	} {
+		for _, name := range []string{"Read", "Write", "Edit"} {
+			if out := r.call(opts, tool(name, path, r.workspace())); out.Code != hook.CodeOK {
+				t.Errorf("%s %s was refused:\n%s", name, path, out.Stderr)
+			}
+		}
+	}
+}
+
+// And only the memory. The rest of a project's tree is Claude Code's own state,
+// settings among it — widening the hole to `projects/**` to fix a memory path
+// would hand back exactly what `settings.json` is protected for.
+func TestTheRestOfAProjectIsNotKept(t *testing.T) {
+	r := newRig(t)
+	opts := r.as("ember", nil)
+	claude := r.store.ClaudeDir(r.who)
+	slug := "-Users-someone-Dev-Orc"
+
+	for _, path := range []string{
+		filepath.Join(claude, "projects", slug, "settings.json"),
+		filepath.Join(claude, "projects", slug, "history.jsonl"),
+		filepath.Join(claude, "projects", slug, "memory-notes.md"),
+		filepath.Join(claude, "projects", "settings.json"),
+		filepath.Join(claude, "projects"),
+	} {
+		if out := r.call(opts, tool("Write", path, r.workspace())); out.Code != hook.CodeBlock {
+			t.Errorf("%s was writable", path)
+		}
+	}
+}
+
+// An interpreter runs when a clause names it, and not otherwise.
+//
+// This is the rule that replaces "every interpreter is unreadable". That one made
+// `shell(python3)` a clause nobody could satisfy — and the toolkit's own
+// shell-build named python, python3, sh and bash, every one of which was refused.
+// A permission that lies about itself is worse than one that refuses.
+func TestAnInterpreterRunsWhenNamed(t *testing.T) {
+	named := newRig(t)
+	named.permit("run-python", "shell(python3)")
+	got := named.call(named.as("ember", nil), map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": named.workspace(),
+		"tool_input": map[string]any{"command": `python3 -c "print(1)"`},
+	})
+	if got.Code != hook.CodeOK {
+		t.Errorf("shell(python3) did not permit python3:\n%s", got.Stderr)
+	}
+
+	// And an interpreter the clause does not name is still refused — naming one
+	// grants that one, not the family.
+	if out := named.call(named.as("ember", nil), map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": named.workspace(),
+		"tool_input": map[string]any{"command": "sh -c rm"},
+	}); out.Code != hook.CodeBlock {
+		t.Error("shell(python3) permitted sh as well")
+	}
+
+	// With no shell clause at all it is refused like anything else.
+	bare := newRig(t)
+	if out := bare.call(bare.as("ember", nil), map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": bare.workspace(),
+		"tool_input": map[string]any{"command": "python3 script.py"},
+	}); out.Code != hook.CodeBlock {
+		t.Error("python3 ran with no shell permission at all")
+	}
+}
+
+// A substitution is still everything-or-nothing, whatever else is named.
+//
+// The two were folded together and are now apart, so the half that must not have
+// moved is worth its own assertion: naming an interpreter does not buy a
+// substitution, because the point of that rule is that no name can be attributed
+// to one.
+func TestNamingAnInterpreterDoesNotBuyASubstitution(t *testing.T) {
+	r := newRig(t)
+	r.permit("run-sh", "shell(sh echo)")
+	out := r.call(r.as("ember", nil), map[string]any{
+		"hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": r.workspace(),
+		"tool_input": map[string]any{"command": "echo $(rm -rf /)"},
+	})
+	if out.Code != hook.CodeBlock {
+		t.Error("a substitution was allowed by a clause naming an interpreter")
+	}
+	if !strings.Contains(out.Stderr, "hides what it runs") {
+		t.Errorf("it should be refused as unreadable:\n%s", out.Stderr)
 	}
 }

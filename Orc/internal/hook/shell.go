@@ -12,19 +12,19 @@ import (
 // a line, past the wrappers that precede one — and hand them to the `shell`
 // clause. `ls -la`, `cd x && ls`, `sudo ls`, `FOO=1 ls`, `/bin/ls` are all `ls`.
 //
-// Two things it cannot see, and both are handled by refusing rather than by
-// guessing:
+// One thing it cannot see, and it is handled by refusing rather than by guessing:
+// **substitution**. `$(…)`, backticks, and `<(…)` run a command this cannot name,
+// so a line containing one is opaque and needs the clause that covers everything.
+// A gate that let `$(rm -rf /)` past because it could not find a command name
+// would be a gate that fails open on exactly the input designed to defeat it.
 //
-//   - **Substitution.** `$(…)`, backticks, and `<(…)` run a command this cannot
-//     name, so a line containing one is opaque.
-//   - **Interpretation.** `eval`, `sh -c`, `bash -c`, `xargs` and friends take a
-//     program as *data*. The name is right there and says nothing about what
-//     runs.
-//
-// Opaque returns true for those, and the caller refuses unless the identity is
-// allowed everything anyway. That is the only honest reading: a gate that let
-// `$(rm -rf /)` past because it could not find a command name would be a gate
-// that fails open on exactly the input designed to defeat it.
+// **Interpretation is not the same problem**, though it was treated as one.
+// `python3 -c …` and `sh -c …` take a program as data, so the name says nothing
+// about what will *happen* — but it says exactly what will *run*, and that is the
+// question a clause answers. So an interpreter goes through the ordinary check
+// and a clause naming it permits it. What that grants is total, within that
+// interpreter, and the toolkit prices it that way rather than pretending
+// otherwise. See the note on `interpreters`.
 
 // wrappers run another command, so the interesting name is the next word.
 //
@@ -42,10 +42,27 @@ var wrappers = map[string]bool{
 	"nice": true, "nohup": true, "time": true,
 }
 
-// interpreters take a program as an argument, so their own name says nothing
-// about what will run.
-// `sudo` and `doas` are here as privilege changes rather than as interpreters:
-// what runs under them is not what a clause named.
+// Interpreters take a program as an argument, so their own name says nothing
+// about *what* will run — only about what could.
+//
+// That is a different thing from a substitution, and the two used to be treated
+// as one. `$(…)` hides the name: nothing can say what it runs, so nothing
+// narrower than everything can honestly permit it. `python3 -c …` hides nothing
+// of the sort — the name is right there, and a clause naming it is a decision
+// somebody made about python3 specifically.
+//
+// Conflating them made `shell(python3)` a clause that could not be satisfied.
+// The toolkit's own `shell-build` named python, python3, sh and bash, and every
+// one of them was refused as unreadable — a permission that lied about itself.
+//
+// So naming an interpreter now permits it, and what that grants is stated
+// plainly rather than implied: **it is everything that interpreter can do.**
+// `shell(python3)` is not a narrow grant. It is a shell, reached through python,
+// and the toolkit prices it accordingly — see FloorShellInterpret.
+//
+// `sudo` and `doas` stay here as privilege changes rather than as interpreters:
+// what runs under them is not what a clause named, and `shell(sudo)` naming a
+// command that then runs as somebody else is not a decision about `sudo`.
 var interpreters = map[string]bool{
 	"awk": true, "bash": true, "dash": true, "doas": true, "eval": true,
 	"ksh": true, "perl": true, "python": true, "python3": true, "ruby": true,
@@ -129,21 +146,30 @@ func runOf(segment string) (Invocation, bool) {
 	return Invocation{}, false
 }
 
-// Opaque reports whether a line hides what it runs.
+// Opaque reports whether a line hides *the name* of what it runs.
 //
-// It is deliberately eager. A false positive costs somebody a rephrase; a false
-// negative costs the whole gate, because every one of these shapes is what
+// Substitutions only. `$(…)`, backticks, `${…}` and process substitution all
+// produce a command nothing can name in advance, so no clause narrower than
+// everything can honestly permit one.
+//
+// Interpreters used to be folded in here and are not any more. Their name is
+// knowable — it is the first word — so they go through the ordinary check, and a
+// clause that names one permits it. What changed is the question being asked: not
+// "could this do anything?", which is true of most commands, but "can this line
+// be attributed to a name a clause could have decided about?"
+//
+// Still deliberately eager about what remains. A false positive costs somebody a
+// rephrase; a false negative costs the whole gate, because a substitution is what
 // somebody reaches for when a command name is the thing being checked.
 func Opaque(line string) bool {
-	if strings.Contains(line, "$(") || strings.Contains(line, "`") ||
+	return strings.Contains(line, "$(") || strings.Contains(line, "`") ||
 		strings.Contains(line, "${") || strings.Contains(line, "<(") ||
-		strings.Contains(line, ">(") {
-		return true
-	}
-	for _, segment := range splitCommands(line) {
-		if interpreters[commandOf(segment)] {
-			return true
-		}
-	}
-	return false
+		strings.Contains(line, ">(")
 }
+
+// Interpreter reports whether a name takes a program as an argument.
+//
+// Exported so a refusal can say what naming one would grant, rather than making
+// an operator work out why `shell(ls)` and `shell(python3)` are priced so
+// differently.
+func Interpreter(name string) bool { return interpreters[strings.ToLower(name)] }

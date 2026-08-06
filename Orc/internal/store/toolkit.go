@@ -69,6 +69,11 @@ const (
 	// FloorShellBuild is the toolchain: compilers, formatters, test runners. They
 	// write, and what they write is build output rather than somebody's work.
 	FloorShellBuild = 40
+	// FloorShellInterpret is running an interpreter. One below shell-all, because
+	// it is the same capability by a longer route — `python3 -c` can do whatever
+	// `sh` can — and above it only in that the line still names which interpreter,
+	// so a fleet reading its own audit can at least see what was reached for.
+	FloorShellInterpret = 70
 	// FloorShellAll is a shell with nothing taken out of it, which is every
 	// capability the machine has. It sits beside FloorWriteAll because it is
 	// strictly more than writing everything: a command can also reach the
@@ -147,8 +152,24 @@ var toolkit = []struct {
 		"shell(ls find grep rg cat head tail wc file stat du df git which)",
 	}, "run the commands that look at a tree without changing it"},
 	{"shell-build", FloorShellBuild, []string{
-		"shell(go gofmt make cargo npm pnpm yarn node python python3 pytest sh bash)",
+		"shell(go gofmt make cargo npm pnpm yarn node pytest)",
 	}, "run the toolchain: compile, format, and test"},
+	// The interpreters, priced for what they actually are.
+	//
+	// They were in `shell-build` at floor 40, alongside the compilers — and every
+	// one of them was refused anyway, because the gate read an interpreter as
+	// unreadable. That was two mistakes cancelling: a permission that named
+	// commands it could not grant, and a floor that would have been far too low if
+	// it had.
+	//
+	// Naming an interpreter grants everything that interpreter can do, which for
+	// `sh` or `python3` is a shell. So this sits beside `shell-all` rather than
+	// beside the toolchain, and is its own permission so that an operator handing
+	// it out is making that decision on purpose rather than inheriting it with a
+	// compiler.
+	{"shell-interpret", FloorShellInterpret, []string{
+		"shell(sh bash zsh dash ksh python python3 ruby perl awk eval source xargs)",
+	}, "run interpreters — which is a shell, reached through each of them"},
 	{"shell-all", FloorShellAll, []string{"shell(**)"},
 		"run any command at all, including ones nothing can read in advance"},
 
