@@ -121,6 +121,24 @@ export function ask({ title, note, fields, submit = "queue it", danger = false }
         // this is a paragraph and a paragraph has no columns to keep.
         input = h("textarea", { rows: String(f.rows || 5), placeholder: f.placeholder });
         input.value = String(f.value ?? "");
+      } else if (f.kind === "permissions") {
+        // A name, or several, with the fleet's whole list under it.
+        //
+        // Typing a permission's name from memory is the one thing this form asked
+        // for and the one thing a browser is placed to make unnecessary: the mirror
+        // already carries every permission and every clause in it. So the list is
+        // shown, each row says what the permission actually allows, and a click puts
+        // its name in the box.
+        //
+        // The box stays a text box rather than becoming a set of checkboxes. Several
+        // names are one line to type and one line to read back, and somebody who
+        // knows what they want should not have to hunt for it in a list of thirty.
+        input = h("input", {
+          type: "text", spellcheck: "false", autocapitalize: "off",
+          autocorrect: "off", placeholder: f.placeholder,
+        });
+        input.value = String(f.value ?? "");
+        extras = [permissionPicker(f, input)];
       } else if (f.kind === "clauses") {
         // A line of permission clauses, drawn coloured underneath as it is typed.
         //
@@ -432,4 +450,61 @@ function value(field, input) {
   // said so under the box; this is where it becomes true.
   const tidier = check.tidierOf(field.check);
   return tidier ? tidier(raw) : raw;
+}
+
+// permissionPicker draws every permission the fleet has, and what each allows.
+//
+// Three things a row has to carry, because each answers a question somebody has
+// while the box is open: the name, what it lets an agent do, and whether this role
+// can have it. A list of bare names would answer only the first, and the first is
+// the one they could already guess.
+//
+// Clauses are drawn with the same colouring the permissions tab uses. Two renderings
+// of one thing is two things to learn, and the point of the colour is that a reader
+// who has seen `read(Docs/*)` on one screen recognises it on the next.
+function permissionPicker(field, input) {
+  const known = [...(field.known || [])].sort((a, b) => a.name.localeCompare(b.name));
+  if (known.length === 0) {
+    return h("p", { class: "muted hint" }, "this fleet has no permissions yet");
+  }
+  const already = new Set(field.held || []);
+
+  // Toggling rather than appending, so a click that was a mistake is undone by the
+  // same click. The box is still the truth — this only edits it.
+  const toggle = (name) => {
+    const names = input.value.trim().split(/\s+/).filter(Boolean);
+    const at = names.indexOf(name);
+    if (at >= 0) names.splice(at, 1);
+    else names.push(name);
+    input.value = names.join(" ");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  };
+
+  const rows = known.map((p) => {
+    const tooHigh = field.authority != null && p.floor > field.authority;
+    const has = already.has(p.name);
+    return h("button", {
+      type: "button",
+      class: "permission-row" + (has ? " held" : "") + (tooHigh ? " barred" : ""),
+      // Said on the row rather than only on refusal: the reason a permission
+      // cannot go on this role is a fact about the role, and hiding it until
+      // somebody tries makes them try.
+      title: tooHigh
+        ? `${p.name} needs authority ${p.floor}; this role has ${field.authority}`
+        : has ? `${field.roleName || "the role"} already has ${p.name}` : `add ${p.name}`,
+      onclick: () => toggle(p.name),
+    },
+      h("span", { class: "permission-name" }, p.name),
+      h("span", { class: "permission-floor muted" }, String(p.floor)),
+      h("span", { class: "clauses" },
+        ...(p.patterns || []).map((c) => clauses.chip(c, field.words))),
+      has ? h("span", { class: "permission-note muted" }, "held") : null,
+      tooHigh ? h("span", { class: "permission-note warn" }, "over the role's authority") : null);
+  });
+
+  return h("div", { class: "permission-picker" },
+    h("p", { class: "muted hint" },
+      "click to add or remove; several may be queued at once, separated by spaces"),
+    ...rows);
 }

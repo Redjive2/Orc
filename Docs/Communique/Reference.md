@@ -10,6 +10,7 @@ cq <command> <args...>
 |------------------|---------------------------------------------------|
 | `serve`          | Serve the website and the cq API on port 8080     |
 | `sync`           | Run one sync against the server, both directions  |
+| `pace`           | Keep sync, wake and tend running; ^S/^W/^T run one now |
 | `status`         | Print local sync state; never touches the network |
 | `admin operator` | Set or change the login password                  |
 | `admin token`    | Mint a sync token; printed once, stored hashed    |
@@ -23,6 +24,7 @@ cq <command> <args...>
 |----------|-----------------------------------------------------------------------------------------------------|
 | `serve`  | `--addr` `--tls-cert` `--tls-key` `--state` `--no-admin` `--admin-metadata-only`                    |
 | `sync`   | `--server` `--machine` `--user` `--home` `--watch` `--nudge` `--dry-run` `--admin` `--admin-bodies` |
+| `pace`   | `--home` `--sync` `--wake` `--tend` `--orc`                                                         |
 | `status` | `--home`                                                                                            |
 | `queue`  | `--state` `--json`                                                                                  |
 | `workspace` | `--adopt` `--from` `--state` `--machine`                                                         |
@@ -525,6 +527,27 @@ what the name will be, because the board shows the tidied name afterwards and
 learning it there reads as cq having renamed the thing. Every other character is
 still refused, and named with its position: turning `%` into something would be
 guessing at what was meant.
+
+**Permissions are picked, not remembered.** Giving a role a permission asked
+somebody to type a name from memory, which is the one thing the mirror could have
+shown them: it already carries every permission and every clause in it. The sheet
+now lists them all — the name, the floor it needs, and what it allows, drawn with
+the same clause colouring the permissions tab uses — and a click puts a name in
+the box or takes it out again.
+
+The box stays a box, so several names may be queued at once, separated by spaces.
+Each becomes its own action, because `orc assign permission` takes one: a name the
+machine refuses fails on its own rather than taking the others down with it. Names
+the role already holds are dropped rather than queued, since an action certain to
+do nothing is one more line for somebody to read and dismiss.
+
+A name is checked against the fleet as it is typed. Three ways it is refused, and
+each says what to do: it is not a name at all; no permission is called that, with
+the nearest one offered; or the permission's floor is above the role's authority,
+which orc refuses on the machine and which this catches while the box is still
+open. A row that cannot be used says so before it is clicked — dimmed, with the
+reason — because "it is not in the list" and "it is there and you cannot have it"
+are different answers.
 
 A refusal of what the caller sent is reported as theirs. Operands are checked in
 the handler that read them rather than deep inside the queue, because the store's

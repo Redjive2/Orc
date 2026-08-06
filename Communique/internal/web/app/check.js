@@ -300,6 +300,98 @@ export function segment(raw, what = "the name") {
   return "";
 }
 
+// permissions checks a space-separated list of permission names against the ones a
+// fleet actually has — mirrors what `orc assign permission` refuses.
+//
+// Every other check in this file measures a value's *shape*. This one measures it
+// against the world, which is why it is built rather than called: the caller holds
+// the fleet, and a check that had to fetch one would be a check that could not run
+// while somebody was typing.
+//
+// Three ways a name is refused, and each says what to do about it:
+//
+//   - it is not a name at all — the shape rule, borrowed from `label`;
+//   - no permission is called that, with the nearest one offered, because a typo
+//     and a name somebody invented look identical in a refusal that only says "no";
+//   - the role's authority is under the permission's floor, which orc refuses on the
+//     machine. Checking it here turns a failure that arrives after the next sync
+//     into one that arrives while the box is open.
+//
+// A name the role already holds is *not* refused. Asking for it again changes
+// nothing, and a form that argued about it would be arguing about a request that
+// does no harm.
+export function permissions(known, { held = [], authority = null } = {}) {
+  const byName = new Map((known || []).map((p) => [p.name, p]));
+  const already = new Set(held || []);
+
+  return (raw, what = "the permissions") => {
+    const names = String(raw ?? "").trim().split(/\s+/).filter(Boolean);
+    if (names.length === 0) return `${what} cannot be empty`;
+
+    const seen = new Set();
+    for (const name of names) {
+      const shape = label(name, `“${name}”`);
+      if (shape) return shape;
+      if (seen.has(name)) return `${what} names “${name}” twice`;
+      seen.add(name);
+
+      const got = byName.get(name);
+      if (!got) {
+        const near = nearest(name, [...byName.keys()]);
+        return near
+          ? `there is no permission called “${name}” — did you mean “${near}”?`
+          : `there is no permission called “${name}” on this fleet`;
+      }
+      if (authority != null && got.floor > authority) {
+        return `“${name}” needs authority ${got.floor}, and the role has ${authority}`;
+      }
+      if (already.has(name)) {
+        // Not an error. Said anyway, through the same channel, because a person
+        // who queues something that will do nothing should know before the sync.
+        continue;
+      }
+    }
+    return "";
+  };
+}
+
+// nearest is the closest of a set of words, or "" when none is close.
+//
+// Edit distance, capped at a third of the word's length so a wrong guess is not
+// offered with a straight face: "did you mean X?" about something unrelated is worse
+// than not guessing, because somebody follows it.
+export function nearest(word, words) {
+  let best = "";
+  let score = Infinity;
+  const limit = Math.max(1, Math.floor(word.length / 3));
+  for (const candidate of words) {
+    const d = distance(word, candidate);
+    if (d < score) {
+      best = candidate;
+      score = d;
+    }
+  }
+  return score <= limit ? best : "";
+}
+
+// distance is Levenshtein, over two rows rather than a matrix.
+function distance(a, b) {
+  if (a === b) return 0;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(
+        prev[j] + 1,
+        row[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    prev = row;
+  }
+  return prev[b.length];
+}
+
 // nonempty is the check a field with no syntax of its own still wants: a subject,
 // a description, a line of prose.
 export function nonempty(raw, what = "it") {

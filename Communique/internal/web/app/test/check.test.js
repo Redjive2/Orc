@@ -266,3 +266,48 @@ test("span is still clock.ParseSpan, for the field that goes there", () => {
   ok(check.span("7d"), "7d");
   bad(check.span("1h30m"), "1h30m");
 });
+
+// --- permissions: measured against the fleet, not against a shape ------------
+
+// Every other check here measures a value's shape. This one measures it against the
+// world, which is why it is built rather than called — and it is the difference
+// between "that is not a name" and "no permission is called that".
+const fleetPerms = [
+  { name: "edit", floor: 20, patterns: ["edit(**)"] },
+  { name: "upgrade", floor: 60, patterns: ["orc(upgrade)"] },
+  { name: "orc-agents", floor: 60, patterns: ["orc(new employ)"] },
+];
+
+test("a permission that does not exist is refused, with the nearest offered", () => {
+  const at = check.permissions(fleetPerms, { authority: 99 });
+  assert.match(at("editt"), /no permission called “editt”/);
+  assert.match(at("editt"), /did you mean “edit”/);
+  // And no guess where none is close: "did you mean X?" about something unrelated
+  // is worse than not guessing, because somebody follows it.
+  assert.doesNotMatch(at("zzzzzzzz"), /did you mean/);
+});
+
+test("a permission the role cannot reach is refused before it is queued", () => {
+  const at = check.permissions(fleetPerms, { authority: 50 });
+  ok(at("edit"), "edit at authority 50");
+  assert.match(at("upgrade"), /needs authority 60, and the role has 50/);
+});
+
+test("several names are checked, and each one names itself when it fails", () => {
+  const at = check.permissions(fleetPerms, { authority: 99 });
+  ok(at("edit upgrade orc-agents"), "three good names");
+  assert.match(at("edit nope"), /“nope”/);
+  assert.match(at("edit edit"), /twice/);
+});
+
+// A name the role already holds is not refused. Asking again changes nothing on the
+// machine, and a form that argued about it would be arguing about a harmless request.
+test("a permission the role already holds is not an error", () => {
+  const at = check.permissions(fleetPerms, { held: ["edit"], authority: 99 });
+  ok(at("edit"), "one it already has");
+  ok(at("edit upgrade"), "one it has and one it does not");
+});
+
+test("an empty list is refused like every other empty field", () => {
+  bad(check.permissions(fleetPerms, {})(""), "nothing typed");
+});

@@ -17,6 +17,7 @@ import * as editor from "./editor.js";
 import * as dialog from "./dialog.js";
 import * as fleetView from "./fleet.js";
 import * as clauses from "./clauses.js";
+import * as check from "./check.js";
 
 // What a name may be, said once, because every box that asks for one was saying
 // something slightly different and all of them were saying less than the truth.
@@ -853,13 +854,45 @@ const actions = {
     if (!got) return;
     await run(() => api.setAuthority(f.machine, role.name, got.authority));
   },
+  // addPermission gives a role one permission, or several.
+  //
+  // Several because that is how the job arrives: a role being set up wants four or
+  // five, and queueing them one dialog at a time was four or five dialogs. Each is
+  // still its own action on the queue — `orc assign permission` takes one — so a
+  // name the machine refuses fails on its own rather than taking the others with it.
   async addPermission(f, role) {
-    const permission = await dialog.one({
-      title: `give ${role.name} a permission`, label: "permission", check: "label",
-      note: "orc refuses if the role's authority is below the permission's floor",
+    const got = await dialog.ask({
+      title: `give ${role.name} permissions`,
+      note: "orc refuses a permission whose floor is above the role's authority",
+      submit: "queue them",
+      fields: [{
+        name: "permissions", label: "permissions", kind: "permissions",
+        known: f.permissions || [],
+        held: role.permissions || [],
+        authority: role.authority,
+        roleName: role.name,
+        words: f.vocabulary,
+        placeholder: "one or more names, separated by spaces",
+        check: check.permissions(f.permissions || [], {
+          held: role.permissions || [], authority: role.authority,
+        }),
+      }],
     });
-    if (!permission) return;
-    await run(() => api.addPermission(f.machine, role.name, permission));
+    if (!got) return;
+
+    const names = got.permissions.trim().split(/\s+/).filter(Boolean);
+    // The ones it already has are dropped rather than queued. Asking again changes
+    // nothing on the machine, and an action that is certain to do nothing is one
+    // more line in the queue for somebody to read and dismiss.
+    const held = new Set(role.permissions || []);
+    const wanted = names.filter((n) => !held.has(n));
+    if (wanted.length === 0) return;
+
+    await run(async () => {
+      for (const name of wanted) {
+        await api.addPermission(f.machine, role.name, name);
+      }
+    });
   },
   async setBudget(f, role) {
     const got = await dialog.ask({

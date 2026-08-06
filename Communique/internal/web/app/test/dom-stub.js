@@ -75,6 +75,20 @@ class Element extends Node {
   getAttribute(k) { return this.attributes.has(k) ? this.attributes.get(k) : null; }
   removeAttribute(k) { this.attributes.delete(k); }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  // dispatchEvent, enough of it for the application: the handlers on this element
+  // and then, for a bubbling event, the ones above it. The dialog uses it to tell a
+  // field that something other than a keystroke changed its value — a click on the
+  // permission list — so the same validation runs either way.
+  dispatchEvent(event) {
+    const type = event && event.type;
+    if (!type) return true;
+    for (let node = this; node; node = event.bubbles ? node.parentNode : null) {
+      for (const fn of [...(node.listeners?.[type] || [])]) {
+        fn({ target: this, currentTarget: node, ...event });
+      }
+    }
+    return true;
+  }
   removeEventListener(type, fn) {
     this.listeners[type] = (this.listeners[type] || []).filter((f) => f !== fn);
   }

@@ -14,6 +14,7 @@ installDOM();
 
 const dialog = await import("../dialog.js");
 const { mount, h } = await import("../dom.js");
+const check = await import("../check.js");
 
 function press(key, mods = {}) {
   for (const fn of [...(document.listeners.keydown || [])]) {
@@ -526,5 +527,90 @@ test("a name that needs no tidying says nothing about it", async () => {
   const becomes = all(document.body, (n) => n.className === "field-becomes")
     .map((n) => n.textContent).join("");
   assert.equal(becomes, "", `it explained a name that was already what it will be: ${becomes}`);
+  press("Escape");
+});
+
+// --- picking a permission rather than remembering its name -------------------
+
+// The mirror already carries every permission and every clause in it, so a form
+// that asked somebody to type one from memory was asking for the one thing it
+// could have shown them.
+const somePerms = [
+  { name: "upgrade", floor: 60, patterns: ["orc(upgrade)"] },
+  { name: "edit", floor: 20, patterns: ["edit(**)"] },
+];
+
+function permissionSheet(extra = {}) {
+  return dialog.ask({
+    title: "give engineer permissions",
+    fields: [{
+      name: "permissions", label: "permissions", kind: "permissions",
+      known: somePerms, words: [], ...extra,
+    }],
+  });
+}
+
+function rows() {
+  return all(document.body, (n) => n.className && String(n.className).startsWith("permission-row"));
+}
+
+test("every permission the fleet has is shown, with what it allows", () => {
+  permissionSheet();
+  const got = rows();
+  assert.equal(got.length, 2, `${got.length} rows drawn`);
+  const text = got.map((r) => r.textContent).join(" ");
+  for (const want of ["edit", "upgrade", "orc(upgrade)", "edit(**)", "60", "20"]) {
+    assert.ok(text.includes(want), `the list does not show ${want}: ${text}`);
+  }
+  // Sorted, so the same fleet draws the same list twice.
+  assert.ok(got[0].textContent.startsWith("edit"), `unsorted: ${got[0].textContent}`);
+  press("Escape");
+});
+
+test("clicking a row puts the name in the box, and clicking it again takes it out", () => {
+  permissionSheet();
+  const box = inputs()[0];
+  const [edit, upgrade] = rows();
+
+  click(edit);
+  assert.equal(box.value, "edit");
+  click(upgrade);
+  assert.equal(box.value, "edit upgrade");
+  click(edit);
+  assert.equal(box.value, "upgrade", "a second click did not remove it");
+  press("Escape");
+});
+
+// The two reasons a row cannot be used are different, and only one of them tells
+// somebody what to change.
+test("a row says when the role has it already, and when its authority is too low", () => {
+  permissionSheet({ held: ["edit"], authority: 30, roleName: "engineer" });
+  const got = rows();
+  const held = got.find((r) => r.textContent.startsWith("edit"));
+  const barred = got.find((r) => r.textContent.startsWith("upgrade"));
+
+  assert.ok(String(held.className).includes("held"), `not marked as held: ${held.className}`);
+  assert.ok(held.textContent.includes("held"), `no word for it: ${held.textContent}`);
+  assert.ok(String(barred.className).includes("barred"), `not marked: ${barred.className}`);
+  assert.match(barred.textContent, /authority/);
+  press("Escape");
+});
+
+// Several at once is the whole point of the box staying a box.
+test("several names are accepted and come back as typed", async () => {
+  const done = permissionSheet({
+    check: (raw) => (String(raw).trim() === "" ? "empty" : ""),
+  });
+  type(inputs()[0], "edit upgrade");
+  submit();
+  assert.deepEqual(await done, { permissions: "edit upgrade" });
+});
+
+// And the check runs against the list, live, like every other field.
+test("a name the fleet does not have is marked as it is typed", () => {
+  permissionSheet({ check: check.permissions(somePerms, { authority: 99 }) });
+  type(inputs()[0], "editt");
+  assert.equal(marked().length, 1, "an unknown permission was not marked");
+  assert.match(said(), /did you mean “edit”/, said());
   press("Escape");
 });
