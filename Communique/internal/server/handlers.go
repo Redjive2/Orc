@@ -931,11 +931,16 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 	// so it merges rather than replaces. Storing it the ordinary way would wipe a
 	// machine's mail, tasks and repository every three seconds to keep one
 	// transcript current — see store.PutSession.
+	// Whether this round is worth telling the browsers about. A full one always
+	// is; a narrow one only when the session actually moved — see below.
+	news := true
 	if req.Watch != "" {
-		if err := s.mergeSession(req, now); err != nil {
+		changed, err := s.mergeSession(req, now)
+		if err != nil {
 			s.fail(w, r, agentSide(err))
 			return
 		}
+		news = changed
 	} else if err := s.state.PutSnapshot(req.Snapshot, req.Agent, now); err != nil {
 		s.fail(w, r, agentSide(err))
 		return
@@ -957,7 +962,14 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 
 	s.log.Info("sync", "machine", req.Snapshot.Machine,
 		"results", len(req.Results), "actions", len(pending))
-	s.events.Publish()
+	// A narrow round that found an agent mid-thought carried back exactly what was
+	// already on screen. Announcing it anyway would wake every open browser into a
+	// full refetch — the mail, the archive, the tasks, the queue, the repository —
+	// three times a minute to redraw a transcript that did not change. The queue
+	// moving is news whatever the session did.
+	if news || len(req.Results) > 0 || len(pending) > 0 {
+		s.events.Publish()
+	}
 
 	s.write(w, r, http.StatusOK, protocol.SyncResponse{
 		Protocol: protocol.Version, ServerTime: now, Actions: pending,
@@ -983,7 +995,9 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 // — and the stored transcript has to *go*, not merely stop advancing. Left in
 // place it would be a live-looking conversation with a process that is not there,
 // on the one screen built to never make that mistake.
-func (s *Server) mergeSession(req protocol.SyncRequest, now time.Time) error {
+// It reports whether anything actually changed, which decides whether the
+// browsers are woken.
+func (s *Server) mergeSession(req protocol.SyncRequest, now time.Time) (bool, error) {
 	if req.Snapshot.Fleet != nil {
 		for _, got := range req.Snapshot.Fleet.Sessions {
 			if got.Identity == req.Watch {

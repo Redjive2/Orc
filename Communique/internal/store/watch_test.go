@@ -102,7 +102,7 @@ func TestDroppingAWatchEndsItAtOnce(t *testing.T) {
 	if err := s.Watch("sandy", "ember", "3s", at); err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	if err := s.Unwatch("sandy"); err != nil {
+	if err := s.Unwatch("sandy", "ember"); err != nil {
 		t.Fatalf("Unwatch: %v", err)
 	}
 	if got := s.Watching("sandy", at); got != nil {
@@ -113,8 +113,24 @@ func TestDroppingAWatchEndsItAtOnce(t *testing.T) {
 func TestDroppingAWatchNobodyTookIsNotAnError(t *testing.T) {
 	// Leaving a pane drops the lease, and a reload can leave two drops for one
 	// take. The second must be quiet.
-	if err := open(t).Unwatch("sandy"); err != nil {
+	if err := open(t).Unwatch("sandy", "ember"); err != nil {
 		t.Errorf("Unwatch on an unwatched machine: %v", err)
+	}
+}
+
+func TestDroppingAWatchDoesNotTakeSomebodyElsesWithIt(t *testing.T) {
+	// A machine holds one lease and two operators can want it. Without the name,
+	// the second one closing their pane would kill the first one's — a transcript
+	// that goes cold with nothing on screen to say why.
+	s := open(t)
+	if err := s.Watch("sandy", "ember", "3s", at); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if err := s.Unwatch("sandy", "atlas"); err != nil {
+		t.Fatalf("Unwatch: %v", err)
+	}
+	if got := s.Watching("sandy", at); got == nil {
+		t.Error("closing a pane on one agent dropped the watch on another")
 	}
 }
 
@@ -125,7 +141,7 @@ func TestANarrowRoundKeepsEverythingItDidNotCarry(t *testing.T) {
 		t.Fatalf("PutSnapshot: %v", err)
 	}
 	later := at.Add(3 * time.Second)
-	if err := s.PutSession("sandy", protocol.FleetSession{
+	if _, err := s.PutSession("sandy", protocol.FleetSession{
 		Identity: "ember", Live: true, Turn: 4,
 	}, later); err != nil {
 		t.Fatalf("PutSession: %v", err)
@@ -155,7 +171,7 @@ func TestANarrowRoundDoesNotMoveTheMirrorsClock(t *testing.T) {
 		t.Fatalf("PutSnapshot: %v", err)
 	}
 	later := at.Add(5 * time.Minute)
-	if err := s.PutSession("sandy", protocol.FleetSession{Identity: "ember", Live: true}, later); err != nil {
+	if _, err := s.PutSession("sandy", protocol.FleetSession{Identity: "ember", Live: true}, later); err != nil {
 		t.Fatalf("PutSession: %v", err)
 	}
 	_, meta, err := s.Snapshot("sandy")
@@ -176,7 +192,7 @@ func TestAWatchedSessionCarriesItsOwnAge(t *testing.T) {
 		t.Fatalf("PutSnapshot: %v", err)
 	}
 	later := at.Add(5 * time.Minute)
-	if err := s.PutSession("sandy", protocol.FleetSession{Identity: "ember", Live: true}, later); err != nil {
+	if _, err := s.PutSession("sandy", protocol.FleetSession{Identity: "ember", Live: true}, later); err != nil {
 		t.Fatalf("PutSession: %v", err)
 	}
 	snap, _, err := s.Snapshot("sandy")
@@ -199,7 +215,7 @@ func TestAnAgentThatStoppedComesOffTheScreen(t *testing.T) {
 	if err := s.PutSnapshot(mirrored("sandy"), "cq/test", at); err != nil {
 		t.Fatalf("PutSnapshot: %v", err)
 	}
-	if err := s.DropSession("sandy", "ember"); err != nil {
+	if _, err := s.DropSession("sandy", "ember"); err != nil {
 		t.Fatalf("DropSession: %v", err)
 	}
 	snap, _, err := s.Snapshot("sandy")
@@ -218,11 +234,35 @@ func TestANarrowRoundForAMachineThatHasNeverSyncedInventsNothing(t *testing.T) {
 	// A snapshot built from one session would put a machine on the site with no
 	// mail and no tasks, which reads exactly like a machine that has lost both.
 	s := open(t)
-	if err := s.PutSession("nowhere", protocol.FleetSession{Identity: "ember"}, at); err != nil {
+	if _, err := s.PutSession("nowhere", protocol.FleetSession{Identity: "ember"}, at); err != nil {
 		t.Fatalf("PutSession: %v", err)
 	}
 	if _, _, err := s.Snapshot("nowhere"); err == nil {
 		t.Error("a machine that never synced now has a snapshot")
+	}
+}
+
+func TestARoundThatChangedNothingSaysSo(t *testing.T) {
+	// Most narrow rounds find an agent mid-thought and carry back what was already
+	// there. Reporting a change would wake every open browser into a full refetch —
+	// the mail, the archive, the tasks, the repository — three times a minute to
+	// redraw a transcript that did not move.
+	s := open(t)
+	if err := s.PutSnapshot(mirrored("sandy"), "cq/test", at); err != nil {
+		t.Fatalf("PutSnapshot: %v", err)
+	}
+	same := protocol.FleetSession{Identity: "ember", Live: true, Turn: 3}
+	if changed, err := s.PutSession("sandy", same, at.Add(3*time.Second)); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	} else if changed {
+		t.Error("an unchanged session was reported as news")
+	}
+	if changed, err := s.PutSession("sandy", protocol.FleetSession{
+		Identity: "ember", Live: true, Turn: 4,
+	}, at.Add(6*time.Second)); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	} else if !changed {
+		t.Error("a turn that advanced was not reported as news")
 	}
 }
 

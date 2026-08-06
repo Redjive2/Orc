@@ -685,21 +685,31 @@ func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
 			}
 		}
 
-		select {
-		case <-ticker.C:
-		case <-watching.tick():
-			// A narrow round. Its failures are complained about and nothing more:
-			// the pane goes stale, which the screen says out loud, and the mirror
-			// is untouched either way.
-			report, err := ag.Watch(context.Background(), watching.who)
-			if err != nil {
-				a.complain(err)
-				continue
+		// Wait for the next full round, serving narrow ones in between.
+		//
+		// An inner loop rather than three arms of one select, and the difference is
+		// the whole feature: `continue` from a select arm goes back to the top of
+		// the outer loop, which is where the *full* round is. A narrow round would
+		// then drag a full mirror along behind it every three seconds — the exact
+		// cost this exists to avoid, arrived at by the shape of the code rather
+		// than by any decision.
+		for next := false; !next; {
+			select {
+			case <-ticker.C:
+				next = true
+			case <-watching.tick():
+				// A narrow round. Its failures are complained about and nothing
+				// more: the pane goes stale, which the screen says out loud, and
+				// the mirror is untouched either way.
+				report, err := ag.Watch(context.Background(), watching.who)
+				if err != nil {
+					a.complain(err)
+					continue
+				}
+				watching.follow(report.Watching, a)
+			case <-expired:
+				return a.say("cq: the watch has run its %s and is stopping", round(ttl))
 			}
-			watching.follow(report.Watching, a)
-			continue
-		case <-expired:
-			return a.say("cq: the watch has run its %s and is stopping", round(ttl))
 		}
 	}
 }

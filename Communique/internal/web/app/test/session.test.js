@@ -95,6 +95,29 @@ test("it says how old the mirror is, and what that means", () => {
   assert.match(out, /leaves on the next sync/);
 });
 
+test("a watched session says its own age, not the mirror's", () => {
+  // The two are genuinely different while a pane is open — the transcript comes
+  // back every few seconds and the mailbox does not — so one number would have to
+  // lie about one of them.
+  const fresh = state();
+  fresh.fleet[0].sessions[0].at = "2026-08-06T11:59:57Z";
+  fresh.machines[0].last_sync = "2026-08-06T11:54:00Z";
+  const out = drawn(fresh, "sandy/ember");
+  assert.match(out, /this conversation is .* old, and refreshes/);
+  assert.doesNotMatch(out, /mirrored/);
+});
+
+test("a pane that has stopped refreshing stops saying that it does", () => {
+  // The one lie this screen exists not to tell. A machine that stopped syncing,
+  // or a lease another operator took, leaves a transcript sitting still under a
+  // line claiming it is live.
+  const cold = state();
+  cold.fleet[0].sessions[0].at = "2026-08-06T11:55:00Z";
+  const out = drawn(cold, "sandy/ember");
+  assert.match(out, /has stopped refreshing/);
+  assert.doesNotMatch(out, /refreshes while you are reading/);
+});
+
 test("a machine that has never synced says so instead of showing an age", () => {
   const out = drawn(state({ machines: [] }), "sandy/ember");
   assert.match(out, /never synced/);

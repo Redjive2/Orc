@@ -74,11 +74,11 @@ func (s *Server) dropWatch(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if err := s.state.Unwatch(machine); err != nil {
+	if err := s.state.Unwatch(machine, named(r, body)); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.write(w, r, http.StatusOK, watchView{Machine: machine})
+	s.write(w, r, http.StatusOK, watchView{Machine: machine, Identity: named(r, body)})
 }
 
 // watchView is what the browser is told back.

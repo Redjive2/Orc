@@ -106,7 +106,18 @@ function head(state, f, id, now) {
 function staleness(got, machine, now) {
   if (got && got.at) {
     const age = now - new Date(got.at).getTime();
-    const cls = age > 60 * 1000 ? "warn" : age > 20 * 1000 ? "muted stale" : "muted";
+    // Beyond about ten rounds, the thing that is supposed to be refreshing this
+    // is not. A machine that stopped syncing, a lease another operator took, a
+    // watcher that died — the reader cannot tell which and does not need to, but
+    // they must not be told it is live while they read a transcript that has
+    // stopped. Saying "and refreshes while you are reading it" over a five-minute
+    // -old pane is the one lie this screen exists to not tell.
+    if (age > 30 * 1000) {
+      return h("p", { class: "warn" },
+        `this conversation is ${since(got.at, now)} old and has stopped refreshing. `,
+        "the machine may not be syncing, or somebody else may have opened another session on it.");
+    }
+    const cls = age > 15 * 1000 ? "muted stale" : "muted";
     return h("p", { class: cls },
       `this conversation is ${since(got.at, now)} old, and refreshes while you are reading it. `,
       "what you send still leaves on the next sync, so an answer takes a few seconds to come back.");

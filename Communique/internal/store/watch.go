@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -66,8 +67,9 @@ func (s *Store) watchPath(machine protocol.MachineID) string {
 // twice. Two operators on *different* agents of one machine is the case worth
 // naming: the second replaces the first, because a machine sends one session per
 // narrow round and choosing to send both would double a cost that exists to be
-// small. The one that lost says so on screen rather than quietly showing a
-// transcript that has stopped moving.
+// small. The one that lost is not left guessing: its session's timestamp stops
+// advancing, and the screen turns that into a warning naming this as one of the
+// two reasons — see staleness in session.js.
 func (s *Store) Watch(machine protocol.MachineID, identity, every string, at time.Time) error {
 	if err := machine.Validate(); err != nil {
 		return err
@@ -99,15 +101,31 @@ func (s *Store) Watch(machine protocol.MachineID, identity, every string, at tim
 	}, fileMode)
 }
 
-// Unwatch drops the lease.
+// Unwatch drops the lease, if it is the one the caller thinks it is.
 //
 // Leaving a pane says so rather than waiting to be timed out. The lease alone
 // would be correct — it lapses either way — but a machine that keeps syncing every
 // three seconds for the better part of a minute after somebody navigated away is
 // work nobody is watching, and the browser knows the moment it happens.
-func (s *Store) Unwatch(machine protocol.MachineID) error {
+//
+// **Named, because a machine holds one lease and two people can want it.** A
+// second operator who opened another agent and closed it again would otherwise
+// drop the first one's watch: their pane would go cold with nothing on screen to
+// say why, and the fix — reload — is not one anybody would guess at. Dropping a
+// lease somebody else now holds is a no-op, and the loser of the race finds out
+// the way they were always going to, from the transcript that stops moving.
+func (s *Store) Unwatch(machine protocol.MachineID, identity string) error {
 	if err := machine.Validate(); err != nil {
 		return err
+	}
+	var got watched
+	if err := atomic.ReadJSON(s.watchPath(machine), &got); err != nil {
+		// Nothing there, or nothing readable. Either way there is no lease to drop
+		// and saying so would make leaving a pane an error somebody has to read.
+		return nil
+	}
+	if got.Identity != identity {
+		return nil
 	}
 	return atomic.Remove(s.watchPath(machine))
 }
@@ -147,20 +165,20 @@ func (s *Store) Watching(machine protocol.MachineID, now time.Time) *protocol.Wa
 // under a timestamp that keeps advancing — a pane showing a live conversation
 // with a process that is not there. The screen already has words for an agent
 // with no session; this is what puts it in that state.
-func (s *Store) DropSession(machine protocol.MachineID, identity string) error {
+func (s *Store) DropSession(machine protocol.MachineID, identity string) (bool, error) {
 	if err := machine.Validate(); err != nil {
-		return err
+		return false, err
 	}
 	dir := s.path("machines", string(machine))
 	var snap protocol.Snapshot
 	if err := atomic.ReadJSON(filepath.Join(dir, "snapshot.json"), &snap); err != nil {
 		if fault.Classify(err) == fault.CodeNotFound {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	if snap.Fleet == nil {
-		return nil
+		return false, nil
 	}
 	kept := snap.Fleet.Sessions[:0]
 	for _, got := range snap.Fleet.Sessions {
@@ -169,10 +187,10 @@ func (s *Store) DropSession(machine protocol.MachineID, identity string) error {
 		}
 	}
 	if len(kept) == len(snap.Fleet.Sessions) {
-		return nil
+		return false, nil
 	}
 	snap.Fleet.Sessions = kept
-	return atomic.WriteJSON(filepath.Join(dir, "snapshot.json"), snap, fileMode)
+	return true, atomic.WriteJSON(filepath.Join(dir, "snapshot.json"), snap, fileMode)
 }
 
 // PutSession merges one agent's session into the stored snapshot.
@@ -193,35 +211,47 @@ func (s *Store) DropSession(machine protocol.MachineID, identity string) error {
 // nothing to merge into, and the first full round is moments away. Inventing a
 // snapshot from a session would put a machine on the site with no mail and no
 // tasks, which reads exactly like a machine that has lost both.
-func (s *Store) PutSession(machine protocol.MachineID, got protocol.FleetSession, at time.Time) error {
+func (s *Store) PutSession(machine protocol.MachineID, got protocol.FleetSession, at time.Time) (bool, error) {
 	if err := machine.Validate(); err != nil {
-		return err
+		return false, err
 	}
 	if err := got.Validate(); err != nil {
-		return err
+		return false, err
 	}
 	if at.IsZero() {
-		return fault.Internal{Where: "store.PutSession", Detail: "zero timestamp"}
+		return false, fault.Internal{Where: "store.PutSession", Detail: "zero timestamp"}
 	}
 
 	dir := s.path("machines", string(machine))
 	var snap protocol.Snapshot
 	if err := atomic.ReadJSON(filepath.Join(dir, "snapshot.json"), &snap); err != nil {
 		if fault.Classify(err) == fault.CodeNotFound {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	// A machine that has synced but runs no agents. Nothing to merge into, and
 	// adding a fleet here would invent one from a single session.
 	if snap.Fleet == nil {
-		return nil
+		return false, nil
 	}
 
 	got.At = at.UTC().Format(time.RFC3339)
 	replaced := false
 	for i := range snap.Fleet.Sessions {
 		if snap.Fleet.Sessions[i].Identity == got.Identity {
+			// Most narrow rounds find an agent mid-thought and carry back exactly
+			// what was there before. Saying so — rather than writing and announcing
+			// a change — is what keeps a watched pane from waking every browser on
+			// the site into a full refetch three times a minute for nothing.
+			//
+			// Compared with the timestamp set aside, because that is the one field
+			// that always differs and never means anything changed.
+			was := snap.Fleet.Sessions[i]
+			was.At = got.At
+			if reflect.DeepEqual(was, got) {
+				return false, nil
+			}
 			snap.Fleet.Sessions[i] = got
 			replaced = true
 			break
@@ -235,5 +265,5 @@ func (s *Store) PutSession(machine protocol.MachineID, got protocol.FleetSession
 		snap.Fleet.Sessions = append(snap.Fleet.Sessions, got)
 	}
 
-	return atomic.WriteJSON(filepath.Join(dir, "snapshot.json"), snap, fileMode)
+	return true, atomic.WriteJSON(filepath.Join(dir, "snapshot.json"), snap, fileMode)
 }
