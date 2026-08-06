@@ -53,6 +53,11 @@ body {
 }
 #nav a:hover { color: var(--text); }
 #nav a[aria-current="page"] { color: var(--title); font-weight: 600; }
+
+/* The phone's whole navigation, and nothing at all on a desktop.
+   Hidden rather than absent, because one rendering serves both widths: the nav
+   decides what exists and this decides what is on screen. See views.nav. */
+#nav .hamburger { display: none; }
 #nav .count { color: var(--success); }
 #nav .spacer { flex: 1; }
 
@@ -887,7 +892,12 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 @media (max-width: 40rem) {
   /* A phone is mostly margin at 1.5rem a side. */
   #chrome { padding: .75rem .5rem 0; }
-  main { padding: .75rem .5rem 1.5rem; }
+  /* No side padding at all. The elements that hold text carry their own — cards
+     and code do, a little further down — so giving the page a margin as well
+     spent a full character of a 40-character screen twice over, once on each
+     side, on nothing. Content runs edge to edge and the padding is where reading
+     happens. */
+  main { padding: .75rem 0 1.5rem; }
 
   /* The box-drawn rules are decoration, and decoration that forces a sideways
      scroll costs more than it gives. */
@@ -909,6 +919,57 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
     padding: 0 .5ch;
   }
   #nav .spacer { display: none; }
+
+  /* The menu, closed.
+
+     Nine links wrapping over four lines cost a third of a small display before
+     any content was drawn. Closed, the navigation is one control that says where
+     you are; open, it is the same two rows telescoped under it. */
+  #nav .hamburger {
+    display: inline-flex;
+    align-items: center;
+    gap: 1ch;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 .5ch;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+  }
+  #nav .hamburger .twist { color: var(--muted); }
+  #nav .hamburger .where { color: var(--title); font-weight: 600; }
+
+  /* The rows appear only while it is open. `:has` is not needed: the button's own
+     state is a sibling attribute away, and every browser that runs this app has
+     had that selector for years. */
+  #nav .hamburger[aria-expanded="false"] ~ .majors,
+  #nav .hamburger[aria-expanded="false"] ~ .subs { display: none; }
+
+  /* Telescoped: the sub-tabs sit under the area they belong to.
+
+     `display: contents` is what makes that possible. The two rows are siblings —
+     `.majors` then `.subs` — which is right on a desktop and wrong in a column,
+     where it puts the sub-tabs under the *last* area instead of the open one.
+     Dissolving `.majors` makes every link a child of the nav, and `order` then
+     places them: each area takes an even slot and the sub-tabs take the odd one
+     after whichever area is open. The numbers come from the render, because only
+     it knows which areas an operator can see. */
+  #nav { display: flex; flex-direction: column; }
+  #nav .majors { display: contents; }
+  #nav .majors > a, #nav .subs { order: var(--order, 0); }
+  #nav .majors > a {
+    border-left: 2px solid transparent;
+  }
+  #nav .majors > a[aria-expanded="true"] { border-left-color: var(--primary); }
+  #nav .subs {
+    flex-direction: column;
+    align-items: stretch;
+    padding-left: 3ch;
+    border-left: 2px solid var(--frame);
+    margin-left: .5ch;
+  }
 
   /* A row's controls are compact on a desk and not on a phone: the reason they
      are small is that a mouse is precise, and a thumb is not.
@@ -1043,9 +1104,32 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   .task > :nth-child(7) { grid-area: status; justify-self: end; }
   .task > :nth-child(8) { display: none; }
 
-  /* Cards and code give up their side padding rather than their content. */
+  /* Cards and code give up their side padding rather than their content. The page
+     has none now, so this is the only side padding a reader gets and it is where
+     the words are. */
   .card > .body, .card > .meta, form.compose { padding-left: .5ch; padding-right: .5ch; }
   pre.code { padding: .5rem .5ch; }
+  .card > .head, .row, .task, .agent, .agent-head { padding-left: .5ch; padding-right: .5ch; }
+
+  /* The last column stops being clipped.
+     Every one of these kept a fixed character width for its flexible column, so a
+     name or a path was cut off while empty space sat beside it. `minmax(0, 1fr)`
+     lets the column take what is there and shrink below its content, which is what
+     stops a long word pushing the grid wider than the screen.
+
+     `body` has `overflow-x: hidden`, so the old failure was quiet: the figures
+     were not scrolled off, they were gone, with nothing to say they had been
+     there. */
+  .event { grid-template-columns: 9ch minmax(0, 1fr); }
+  .survey { grid-template-columns: minmax(0, 1fr) 4ch 6ch 4ch; }
+  .grid.users { grid-template-columns: minmax(0, 1fr); }
+  .row, .task, .work-row, .gen-row, .event, .survey { min-width: 0; }
+  .row > *, .task > *, .work-row > *, .gen-row > *, .event > *, .survey > * { min-width: 0; }
+
+  /* And anything that still will not fit scrolls inside its own box rather than
+     taking the page with it — the rule `.clause` has followed all along. */
+  .path, .detail, .why, .name { overflow-wrap: anywhere; }
+  pre.code, .clauses, .grants { overflow-x: auto; }
 
   /* A fold's indent is a luxury three levels down a repository, so it shrinks
      rather than pushing the name off the screen. */
@@ -1059,7 +1143,6 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   button.fold .note { font-size: .85em; }
 
   /* An account list of one column needs no fixed width. */
-  .grid.users { grid-template-columns: 1fr; }
 
   /* Who has read what does not fit beside a subject at this width, so it takes
      the next line rather than being dropped: it is the answer this screen exists
@@ -1076,7 +1159,6 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   /* The survey drops its drawn bar on a phone and keeps the number: the bar is
      the comparison and the percentage is the fact, and there is only room for
      one of them beside a name. */
-  .survey { grid-template-columns: 1fr 4ch 6ch 4ch; }
   .survey .meter { display: none; }
 }
 

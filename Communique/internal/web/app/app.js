@@ -122,6 +122,10 @@ let state = {
   // `picked` is the one row whose controls are on screen. A tree with a button
   // under every line is a tree nobody can read.
   library: null, files: {}, open: {}, picked: null,
+  // Which area a reader has telescoped open in the phone menu, or null when the
+  // menu is closed. It is not "which area am I in" — that comes from the route —
+  // and the two differ exactly while somebody is looking around without moving.
+  menu: null,
   // The activity series and the window it was fetched for. The window is state
   // rather than a form value because changing it is a *fetch*: the server bounds
   // what it will hand over, so the browser cannot widen a chart it already has.
@@ -212,7 +216,7 @@ function draw() {
   // and taking it a frame early costs nothing while taking it late means the first
   // sync of a freshly opened pane is the slow one.
   holdWatch(route);
-  mount(nav, views.nav(state, route));
+  mount(nav, views.nav(state, route, actions));
   mount(statusBar, views.status(state));
 
   if (state.error) { mount(view, views.error(state.error)); return; }
@@ -234,6 +238,10 @@ function draw() {
     mount(view, drawn || screens.render("mail", "inbox", state, actions));
   }
 
+  // The nav is re-mounted whole on every draw, and a draw happens on every sync —
+  // so a reader part-way through the menu would lose the keyboard under them once a
+  // minute. The menu button carries a name for the same reason a form field does.
+  if (state.menu && focus.restore(nav, place)) return;
   focus.restore(view, place);
 }
 
@@ -303,6 +311,12 @@ const actions = {
   },
   pick(key) {
     set({ picked: key });
+  },
+  // menu opens the phone navigation on an area, telescopes it onto another, or
+  // closes it. One area at a time: a menu that opened everything would be the flat
+  // list of eighteen destinations this replaced.
+  menu(major) {
+    set({ menu: major });
   },
   async openFile(file) {
     const key = library.fileKey(file);

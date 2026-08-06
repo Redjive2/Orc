@@ -170,3 +170,69 @@ func TestALinkActingAsAControlIsSizedLikeOne(t *testing.T) {
 			strings.TrimSpace(line))
 	}
 }
+
+// TestTheNavigationFoldsOnAPhone.
+//
+// The navigation is up to nine links wrapping over three or four lines, and it
+// sits above every screen — a third of a small display spent before any content is
+// drawn. It folds into one control that says where you are.
+//
+// The rendering is the same at both widths on purpose: the nav decides what
+// exists and the stylesheet decides what is on screen. So this asks the
+// stylesheet, and the JavaScript tests ask about the state.
+func TestTheNavigationFoldsOnAPhone(t *testing.T) {
+	css := read(t, "app/app.css")
+	js := read(t, "app/views.js")
+
+	if !strings.Contains(js, `class: "hamburger"`) {
+		t.Fatal("there is no control to open the navigation with on a phone")
+	}
+	// Above the breakpoint it must be gone, or a desktop grows a menu button it
+	// has no use for beside a navigation that is already on screen.
+	if !strings.Contains(css, "#nav .hamburger { display: none; }") {
+		t.Error("the phone menu is not hidden on a wide screen")
+	}
+
+	narrow := css[strings.Index(css, "@media (max-width: 40rem)"):]
+	for _, want := range []string{
+		".hamburger",                       // it appears at all
+		`aria-expanded="false"] ~ .majors`, // and the rows fold behind it
+	} {
+		if !strings.Contains(narrow, want) {
+			t.Errorf("the narrow layer does not carry %q, so the navigation does not fold", want)
+		}
+	}
+	// A thumb, like every other control on this screen.
+	if !strings.Contains(narrow, ".hamburger {") {
+		t.Error("the menu button has no narrow rule, so it is not sized for a thumb")
+	}
+}
+
+// TestNarrowContentUsesTheWidth: the page gives up its side margins, and the
+// grids give up their fixed columns.
+//
+// Both were spending a 40-character screen on nothing. The margin cost a
+// character on each side of every screen; a fixed column cut the last figure off
+// a table while empty space sat beside it, and `overflow-x: hidden` meant it
+// vanished rather than scrolled — a reader saw four figures with no way to know
+// there had been six.
+func TestNarrowContentUsesTheWidth(t *testing.T) {
+	css := read(t, "app/app.css")
+	narrow := css[strings.Index(css, "@media (max-width: 40rem)"):]
+
+	if !strings.Contains(narrow, "main { padding: .75rem 0") {
+		t.Error("the page still keeps a side margin on a phone, on top of the padding " +
+			"the cards inside it already have")
+	}
+	for _, row := range []string{".event", ".survey", ".grid.users"} {
+		if !strings.Contains(narrow, row+" { grid-template-columns: ") {
+			t.Errorf("%s keeps its desktop columns on a narrow screen", row)
+		}
+	}
+	// The column that holds the content has to be able to shrink below it, or a
+	// long word pushes the grid wider than the screen and the rest is clipped.
+	if !strings.Contains(narrow, "minmax(0, 1fr)") {
+		t.Error("no grid column can shrink below its content, so a long name still " +
+			"pushes the row wider than the phone")
+	}
+}

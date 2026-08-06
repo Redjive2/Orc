@@ -532,6 +532,25 @@ Code is shown in a block — monospaced, highlighted, and scrolling inside itsel
 rather than wrapping, because a wrapped line of code is a line whose indentation
 lies. Markdown is rendered rather than highlighted.
 
+On a narrow screen the navigation folds into one control that says where you
+are — `manage / fleet` — and opens into the same two rows telescoped: the areas
+in a column, and the open one's subtabs indented under it. Tapping an area
+expands it rather than moving you, so looking is not the same as going; tapping a
+subtab navigates and closes the menu. One area is open at a time.
+
+One rendering serves both widths, and the stylesheet decides which is on screen.
+That is a testing decision as much as a design one: the test DOM has no CSS and no
+media queries, so a layout that branched on the viewport in JavaScript would stop
+being testable at the width where it matters. What branches is the menu, and it
+branches on state.
+
+The narrow layout gives the page its side margins back — the cards inside it carry
+their own padding, so the page was spending a character on each side of a
+forty-character screen twice over — and lets every grid's content column shrink
+below its content. A fixed column meant the last figure of a table was cut off
+while space sat beside it, and `overflow-x: hidden` meant it vanished rather than
+scrolled: a reader saw four figures with no way to know there had been six.
+
 Everything the site asks for it asks for **in the site**: a sheet in cq's own
 frame and typeface, over an inert page, with escape to leave. No `prompt`, no
 `confirm`, no `alert`. Those arrive in the system font at the top of the window,

@@ -804,36 +804,120 @@ function spaced(nodes) {
 //
 // Only the open area's sub-tabs are shown. Showing all seventeen at once is the
 // flat row this replaced.
-export function nav(state, route) {
+//
+// One rendering serves both widths, and that is a decision rather than a
+// convenience. The stylesheet decides what is on screen at a phone's width; the
+// nav decides what exists. A layout that branched on the viewport in JavaScript
+// would need a media query the test DOM cannot answer, so the breakpoint would
+// stop being testable at exactly the width it matters.
+//
+// What *does* branch is the menu, and it branches on state: `state.menu` holds the
+// area a reader has telescoped open, or null when the menu is closed. The
+// hamburger is the only way to open it and the stylesheet hides the hamburger above
+// the breakpoint — so tapping an area expands it on a phone and follows its link on
+// a desktop, through one handler and no measurement.
+export function nav(state, route, actions) {
   const here = routes.resolve(route) || routes.resolve(routes.MOVED[route.split("?")[0]] || "");
-  const open = here ? here.major : null;
+  const current = here ? here.major : null;
+  // The area whose sub-tabs are drawn: the one a reader telescoped open, else the
+  // one they are in. With the menu closed that is what the nav has always shown.
+  const open = state.menu || current;
 
+  // Where each area sits in the column, so the sub-tabs can be placed *between*
+  // two of them.
+  //
+  // The rows are siblings — `.majors` then `.subs` — which is right on a desktop
+  // and wrong in a column, where it puts the sub-tabs under the last area rather
+  // than under the one they belong to. On a phone `.majors` becomes
+  // `display: contents`, every link becomes a child of the nav directly, and these
+  // numbers order them. Two apart, so the sub-tabs have an odd number to sit on.
+  let place = 0;
   const majors = [];
   for (const area of routes.AREAS) {
     const subs = routes.visible(area, state);
     // An area with nothing behind it is not shown. `--no-admin` empties two.
     if (subs.length === 0) continue;
+    const at = place;
+    place += 2;
     majors.push(tab(routes.home(area.major, state), area.major,
-      routes.areaCount(area, state), area.major === open));
+      routes.areaCount(area, state), area.major === current, {
+        expanded: area.major === open,
+        order: at,
+        openAt: area.major === open ? at : null,
+        // Expand rather than navigate, but only while the menu is open. A tap on a
+        // desktop is a link and does what a link does — middle click, open in a new
+        // tab, copy the address — and none of that is taken away to make a phone
+        // work.
+        onclick: state.menu && actions
+          ? (e) => { e.preventDefault(); actions.menu(area.major); }
+          : null,
+      }));
   }
 
-  const rows = [h("div", { class: "majors" }, ...majors,
+  // Which slot the open area took, for the sub-tabs to follow it into.
+  const openAt = majors.reduce((found, el) => {
+    const at = el.getAttribute("data-open-at");
+    return at === null || at === undefined ? found : Number(at);
+  }, 0);
+
+  const rows = [];
+  if (actions) {
+    rows.push(hamburger(state, here, actions));
+  }
+  rows.push(h("div", { class: "majors" }, ...majors,
     h("span", { class: "spacer" }),
-    h("a", { href: "#" + routes.HOME, onclick: (e) => { e.preventDefault(); logout(); } }, "logout"))];
+    h("a", {
+      href: "#" + routes.HOME,
+      // Last, whatever else is on screen. It is the one link nobody is looking
+      // for and the one worst to press by accident.
+      style: { "--order": 999 },
+      onclick: (e) => { e.preventDefault(); logout(); },
+    }, "logout")));
 
   const area = routes.AREAS.find((a) => a.major === open);
   if (area) {
-    rows.push(h("div", { class: "subs" },
+    rows.push(h("div", { class: "subs", style: { "--order": openAt + 1 } },
       ...routes.visible(area, state).map((s) =>
-        tab(`/${area.major}/${s.sub}`, s.sub, routes.count(s, state), here && here.sub === s.sub))));
+        tab(`/${area.major}/${s.sub}`, s.sub, routes.count(s, state),
+          here && here.major === area.major && here.sub === s.sub, {
+            // Choosing a destination is the end of the menu.
+            onclick: state.menu && actions ? () => actions.menu(null) : null,
+          }))));
   }
   return rows;
 }
 
-function tab(href, label, n, current) {
+// hamburger is the phone's whole navigation when the menu is closed.
+//
+// It says where the reader is, because the rows that used to say so are hidden
+// behind it. A control that only draws three lines makes somebody open it to find
+// out what they are looking at.
+function hamburger(state, here, actions) {
+  const open = Boolean(state.menu);
+  const where = here ? here.major + " / " + here.sub : "menu";
+  return h("button", {
+    class: "hamburger",
+    "aria-expanded": open ? "true" : "false",
+    "aria-controls": "nav",
+    // The name is how focus survives a redraw: the whole nav is re-mounted every
+    // sync, and focus.restore finds an element by its name attribute.
+    name: "menu",
+    onclick: () => actions.menu(open ? null : (here ? here.major : null)),
+  },
+    h("span", { class: "twist" }, open ? "▾" : "▸"),
+    h("span", { class: "where" }, where));
+}
+
+function tab(href, label, n, current, opts = {}) {
   return h("a", {
     href: "#" + href,
     "aria-current": current ? "page" : null,
+    // Written only where it means something. An area that can telescope says
+    // whether it is open; a sub-tab is a destination and has nothing to expand.
+    "aria-expanded": opts.expanded === undefined ? null : String(opts.expanded),
+    "data-open-at": opts.openAt === null || opts.openAt === undefined ? null : String(opts.openAt),
+    style: opts.order === undefined ? null : { "--order": opts.order },
+    onclick: opts.onclick || null,
   }, label, n > 0 ? h("span", { class: "count" }, ` ${n}`) : null);
 }
 

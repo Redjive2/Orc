@@ -789,3 +789,124 @@ test("compose says nothing when every recipient is known", () => {
   const out = text(views.compose({ ...rostered, drafts: { compose: { to: "ember, bob" } } }, null));
   assert.doesNotMatch(out, /not a mailbox/);
 });
+
+// --- the phone's navigation --------------------------------------------------
+
+// Nine links wrapping over four lines cost a third of a small display before any
+// content was drawn. Closed, the navigation is one control that says where you
+// are; open, it is the same two rows telescoped under it.
+//
+// One rendering serves both widths — the stylesheet decides what is on screen and
+// this decides what exists — so every test here is about state, which is the half
+// a DOM without CSS can answer.
+
+function navOf(state, route, actions) {
+  return views.nav(state, route, actions);
+}
+
+// Its own name: `text` above takes a parameter called `nodes`, and two things
+// with one name in one file is a reader's problem even when it is not the
+// compiler's.
+function within(list, ok) {
+  const out = [];
+  const walk = (n) => {
+    if (ok(n)) out.push(n);
+    for (const c of n.childNodes || []) walk(c);
+  };
+  for (const n of list.filter(Boolean)) walk(n);
+  return out;
+}
+
+// click fires an element's own handlers, the way dialog.test.js does.
+function click(node) {
+  for (const fn of node.listeners.click || []) fn({ target: node, preventDefault() {} });
+}
+
+function menuButton(list) {
+  return within(list, (n) => n.className === "hamburger")[0];
+}
+
+// A menu that records nothing, for the tests about what is drawn rather than what
+// a press does.
+const idle = { menu() {} };
+
+test("the menu says where you are while it is closed", () => {
+  const got = menuButton(navOf({ ...state, menu: null }, "/manage/fleet", idle));
+  assert.ok(got, "there is no way to open the navigation on a phone");
+  assert.equal(got.getAttribute("aria-expanded"), "false");
+  // A control that only draws three lines makes somebody open it to find out what
+  // they are looking at.
+  assert.match(got.textContent, /manage \/ fleet/);
+});
+
+test("opening the menu telescopes the area you are in", () => {
+  let asked;
+  const got = menuButton(navOf({ ...state, menu: null }, "/manage/fleet",
+    { menu: (major) => { asked = major; } }));
+  click(got);
+  assert.equal(asked, "manage", "it opened on some other area");
+});
+
+test("the button closes what it opened", () => {
+  let asked = "unset";
+  const got = menuButton(navOf({ ...state, menu: "manage" }, "/manage/fleet",
+    { menu: (major) => { asked = major; } }));
+  assert.equal(got.getAttribute("aria-expanded"), "true");
+  click(got);
+  assert.equal(asked, null, "pressing it again did not close the menu");
+});
+
+// The whole point of telescoping: looking at another area is not moving to it.
+test("an area expands rather than navigating while the menu is open", () => {
+  let asked;
+  let followed = true;
+  const list = navOf({ ...state, menu: "manage" }, "/manage/fleet",
+    { menu: (major) => { asked = major; } });
+  const tooling = within(list, (n) => n.tagName === "A" && n.textContent.startsWith("tooling"))[0];
+
+  for (const fn of tooling.listeners.click || []) {
+    fn({ preventDefault: () => { followed = false; } });
+  }
+  assert.equal(asked, "tooling", "the area did not telescope");
+  assert.equal(followed, false, "it navigated away instead of expanding");
+});
+
+// And with the menu closed it is a link and does what a link does. Taking middle
+// click, open-in-new-tab and copy-address away from a desktop to make a phone work
+// would be paying for one with the other.
+test("an area is an ordinary link while the menu is closed", () => {
+  const list = navOf({ ...state, menu: null }, "/manage/fleet", idle);
+  const tooling = within(list, (n) => n.tagName === "A" && n.textContent.startsWith("tooling"))[0];
+  assert.equal((tooling.listeners.click || []).length, 0, "a closed menu still intercepted a link");
+  assert.match(tooling.getAttribute("href"), /^#\/tooling\//);
+});
+
+test("only the telescoped area shows its sub-tabs", () => {
+  // The sub-tab row itself, not the whole nav: the button above it says where you
+  // are, so `manage / fleet` is on screen on purpose while `tooling` is open.
+  const list = navOf({ ...state, menu: "tooling" }, "/manage/fleet", idle);
+  const subs = text(within(list, (n) => n.className === "subs"));
+  assert.match(subs, /queue/, "the telescoped area did not open");
+  assert.doesNotMatch(subs, /fleet/, "the area behind it kept its sub-tabs on screen");
+});
+
+// Choosing a destination is the end of the menu; leaving it open over the screen
+// it just navigated to would be a menu somebody has to dismiss twice.
+test("choosing a sub-tab closes the menu", () => {
+  let asked = "unset";
+  const list = navOf({ ...state, menu: "tooling" }, "/manage/fleet",
+    { menu: (major) => { asked = major; } });
+  const queue = within(list, (n) => n.tagName === "A" && n.textContent.startsWith("queue"))[0];
+  click(queue);
+  assert.equal(asked, null);
+});
+
+// The desktop is unchanged, and that is what the four tests above this block
+// check. This says it directly: with no menu state and no actions, the rendering
+// is the one it has always been.
+test("without a menu the navigation is what it was", () => {
+  const before = text(views.nav({ ...state, adminEnabled: true }, "/mail/inbox"));
+  const after = text(navOf({ ...state, adminEnabled: true, menu: null }, "/mail/inbox", idle));
+  assert.ok(after.includes("mail"), "the areas went missing");
+  assert.ok(before.split("logout")[0].trim().length > 0, "the old form drew nothing");
+});
