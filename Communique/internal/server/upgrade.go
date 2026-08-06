@@ -1,8 +1,12 @@
 package server
 
 import (
+	"fmt"
+	"strings"
+
 	"context"
 	"net/http"
+	"orc/cq/internal/fault"
 	"time"
 
 	"orc/cq/internal/protocol"
@@ -51,6 +55,10 @@ func (b *upgradeBody) Validate() error { return nil }
 
 type upgradeView struct {
 	Queued []protocol.MachineID `json:"queued"`
+	// Refused names the machines whose queue could not be written. Every machine is
+	// tried, so a queue that is part written says which half is which rather than
+	// stopping at the first refusal and describing neither.
+	Refused []string `json:"refused,omitempty"`
 	// Server reports what the serving machine will do, which is a different thing
 	// from what it has done: the restart happens after this answer is sent.
 	Server     string `json:"server"`
@@ -126,6 +134,23 @@ func (s *Server) upgradeAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(body.Machines) > 0 {
+		known := map[string]bool{}
+		for _, id := range ids {
+			known[string(id)] = true
+		}
+		// A name that matches nothing is a typo, not a request to upgrade nothing.
+		// This used to drop it: `cq upgrade --machines studoi` answered 202, queued
+		// nobody, and read as success.
+		var missing []string
+		for _, m := range body.Machines {
+			if !known[m] {
+				missing = append(missing, m)
+			}
+		}
+		if len(missing) > 0 {
+			s.fail(w, r, fault.NotFound{What: "machine", Name: strings.Join(missing, ", ")})
+			return
+		}
 		wanted := map[string]bool{}
 		for _, m := range body.Machines {
 			wanted[m] = true
@@ -139,14 +164,27 @@ func (s *Server) upgradeAll(w http.ResponseWriter, r *http.Request) {
 		ids = kept
 	}
 
+	// Every machine is tried, and what failed is named.
+	//
+	// This used to stop at the first refusal, which left machines 1..k queued and
+	// the rest not, and told the caller neither set. A queue that is half written is
+	// the state somebody most needs described.
 	view := upgradeView{Queued: []protocol.MachineID{}}
+	var refused []string
 	for _, id := range ids {
 		if _, err := s.state.Enqueue(id, protocol.OpUpgrade, protocol.Args{}, s.now()); err != nil {
-			s.fail(w, r, serverSide(err))
-			return
+			s.log.Error("could not queue an upgrade", "machine", id, "error", err)
+			refused = append(refused, string(id))
+			continue
 		}
 		view.Queued = append(view.Queued, id)
 		s.log.Info("upgrade queued", "machine", id)
+	}
+	view.Refused = refused
+	if len(view.Queued) == 0 && len(refused) > 0 {
+		s.fail(w, r, fault.Conflict{Subject: "the queue", Reason: fmt.Sprintf(
+			"no machine could be queued: %s", strings.Join(refused, ", "))})
+		return
 	}
 	s.events.Publish()
 
@@ -185,6 +223,23 @@ func (s *Server) upgradeAll(w http.ResponseWriter, r *http.Request) {
 // nothing up at all. So a build that fails leaves the running server exactly as it
 // was, which is the outcome an operator wants from a failed upgrade.
 func (s *Server) upgradeSelf() {
+	// One at a time. Two of these run `git pull` and `sh/build` in the same checkout
+	// at the same time, which is a build reading a tree another build is rewriting —
+	// and pressing the button twice, or two operators, is all it took.
+	s.built.Lock()
+	busy := s.building
+	s.building = true
+	s.built.Unlock()
+	if busy {
+		s.log.Warn("an upgrade is already running; the second was ignored")
+		return
+	}
+	defer func() {
+		s.built.Lock()
+		s.building = false
+		s.built.Unlock()
+	}()
+
 	started := s.now().UTC().Format(time.RFC3339)
 	s.recordUpgrade(selfUpgrade{State: "building", Started: started})
 

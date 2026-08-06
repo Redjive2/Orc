@@ -73,22 +73,35 @@ func Replaced(path string, was Stamp) bool {
 // did not go anywhere. It is the same move `cq serve`'s supervisor makes, and the
 // reason both can restart into a new build without anything supervising them.
 //
-// Windows has no exec, and Go's syscall.Exec there returns an error rather than
-// pretending. That is the honest outcome and it is left to the caller, because on
-// Windows the situation cannot arise as cleanly anyway: a running .exe cannot be
-// overwritten, so the build that would have prompted this restart fails first, and
-// loudly. A caller that gets an error here should say so and carry on with the
-// build it has.
-func Restart(exe string, args []string) error {
+// The two platforms end differently, and the return value says which happened.
+//
+// On unix the process image is replaced: this does not return at all on success.
+// Windows has no exec, so a replacement is started beside the caller and
+// `handedOff` is true — the caller must then stop, or there are two of it.
+//
+// This used to refuse on Windows outright, on the reasoning that a running .exe
+// cannot be overwritten and so the build that prompted the restart would have
+// failed first. That was true and it was the bug: it made an upgrade impossible
+// there rather than merely awkward. The build now moves a running binary aside
+// before writing its replacement, which Windows does allow, so the restart is
+// reachable and has to work.
+func Restart(exe string, args []string) (handedOff bool, err error) {
 	// Resolved through the platform's rules rather than trusted as a path, for the
 	// reason `cq serve`'s restartable() documents at length: on Windows a file with
 	// no recognised extension cannot be started even by itself, and the error for
 	// that names a path that is plainly right there. Asking first turns it into
 	// something an operator can act on.
 	if _, err := exec.LookPath(exe); err != nil {
-		return fault.IO{Op: "start", Path: exe, Err: err}
+		return false, fault.IO{Op: "start", Path: exe, Err: err}
 	}
-	return execSelf(exe, append([]string{exe}, args...), os.Environ())
+	if err := execSelf(exe, append([]string{exe}, args...), os.Environ()); err != nil {
+		return false, err
+	}
+	// Only Windows gets here. On unix the exec above replaced this process and
+	// nothing after it runs; on Windows a replacement was started beside us and the
+	// caller has to stand down. Returning a bool rather than nil-and-hope, because a
+	// watcher that carried on here would be the second one watching.
+	return true, nil
 }
 
 // Spawn starts a watcher that outlives the process starting it.

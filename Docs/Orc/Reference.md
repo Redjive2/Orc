@@ -24,7 +24,7 @@ Orc exposes the following commands:
 | `list identities\|roles\|permissions\|grants`†| The flat rosters: one line per thing, filtered to your own branch          |
 | `budget`†                                   | What each identity may keep employed, and what it is spending              |
 | `budget <role> <load>`†                     | Set the load a role may keep on the work list                              |
-| `attach <identity>`                         | Hand your terminal to the session — **Ctrl-\ then d** leaves it running    |
+| `attach <identity>`                         | Join a session: the composed pane. Type, `^S` sends, `^Q` leaves, `^]` hands over the terminal |
 | `poke <identity> [message]`                 | Nudge the identity to continue working                                     |
 | `prose <path…>`                             | Measure writing against the house rule; exit 6 when it disagrees           |
 | `wake [<identity>…] [--every <dur>]`†      | Poke whatever has gone quiet; `--every` runs it as a cycle                  |
@@ -84,7 +84,8 @@ Terms:
 | `--until <dur>`| `grant`                   | Give the grant a wall-clock expiry instead of a session one |
 | `--model <m>`  | `employ`                  | Which model the session runs; defaults to `sonnet`          |
 | `--effort <e>` | `employ`                  | How hard it thinks; defaults to `medium`                    |
-| `--view`       | `attach`                  | Orc's composed pane instead of the terminal; `^Q` leaves     |
+| `--direct`     | `attach`                  | The raw terminal instead of the pane; `Ctrl-\` then `d` leaves |
+| `--view`       | `attach`                  | Accepted, and means the default — the composed pane          |
 | `--watch <dur>`| `tend`                    | Keep reconciling on an interval, as a backstop              |
 | `--every <dur>` | `wake`                    | Run the wake cycle on an interval instead of once            |
 | `--after <dur>` | `wake`                    | How long a waiting session may stay waiting (default 10m)    |
@@ -279,6 +280,7 @@ got.
 | `orc-policy` | 85    | `orc(assign)` `orc(grant)` `orc(revoke)` `orc(remove)` | hand out roles, permissions, authority |
 | `shell-read` | 10    | `shell(ls find grep …)`          | run the commands that look without changing |
 | `shell-build`| 40    | `shell(go make npm …)`           | run the toolchain: compile, format, test    |
+| `shell-interpret` | 70 | `shell(sh bash python3 …)`      | run interpreters — a shell by a longer route |
 | `shell-all`  | 75    | `shell(**)`                      | run any command at all                      |
 | `upgrade`    | 90    | `tool(upgrade)`                  | rebuild and restart every tool, every machine |
 
@@ -413,8 +415,22 @@ the `write(…)` clauses still decide which files it may be pointed at, as far a
 the hook can tell — which for an arbitrary command is not far. The two are
 different questions and both are asked.
 
-Three toolkit permissions cover the usual cases: `shell-read` at floor 10 for the
-commands that look without touching, `shell-build` at 40 for the toolchain, and
+**An interpreter runs when a clause names it.** `python3 -c …` and `sh -c …` take
+a program as data, so the name says nothing about what will *happen* — but it says
+exactly what will *run*, and that is the question a clause answers. So `shell(sh)`
+permits `sh -c`. What it grants is everything that interpreter can do, which for a
+shell or for python is a shell; the toolkit prices it at 70, beside `shell-all`
+rather than beside the compilers.
+
+That is a change. Interpreters used to be refused as unreadable along with
+substitutions, which made `shell(python3)` a clause nobody could satisfy — and
+`shell-build` named python, python3, sh and bash, every one of which was refused.
+Those four have moved out of `shell-build` and into `shell-interpret`, so a
+permission no longer names commands it cannot grant.
+
+Four toolkit permissions cover the usual cases: `shell-read` at floor 10 for the
+commands that look without touching, `shell-build` at 40 for the toolchain,
+`shell-interpret` at 70 for the interpreters, and
 `shell-all` at 75 for a shell with nothing taken out. A fleet that wants a
 different set writes one.
 

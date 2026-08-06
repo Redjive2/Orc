@@ -25,22 +25,29 @@ import (
 
 // attach connects to a session.
 //
-// Without --direct this is Orc's own view (Plan.md §6.2): a rendering of Orc's event
-// journal with the transcript as the source of prose. It is a reader — nothing in it
-// writes to the session except the composed buffer, and only when ^S says so — which
-// is what makes it safe to watch a working agent with.
+// The default is Orc's own view (Plan.md §6.2): a rendering of Orc's event journal
+// with the transcript as the source of prose, and a compose buffer that sends on
+// ^S. `--direct` hands the terminal over instead.
+//
+// It has been both ways round. Direct was the default for a while, on the argument
+// that the pane can look blank — it is built from the transcript and the hook's
+// feed, so anything Claude draws in its own interface, and anything written before
+// the first event, is not in it.
+//
+// The pane is the default again because of what the two modes cost when they are
+// wrong. Attaching to the raw terminal puts every keystroke into a working agent's
+// session; a mistyped key is a prompt it acts on. The pane cannot do that by
+// accident — text goes into a buffer and nothing reaches the session until ^S — and
+// it is not read-only either, which was the other half of the objection: it sends.
+//
+// And it is not a dead end. ^] hands the terminal over from inside it, so the case
+// the blank-pane argument was about — needing to see what Claude is drawing — costs
+// one key rather than a detach and a second command.
 func (a App) attach(args []string) error {
-	// `--direct` is the default, and `--view` asks for the composed pane.
-	//
-	// It was the other way round, and that was wrong about what somebody attaches
-	// *for*. The composed pane is built from the session's transcript and the hook's
-	// feed, so it shows what an agent has said and done — but not what its terminal
-	// is drawing. Anything Claude renders in its own interface, and anything written
-	// before the first event, is simply not there: the pane is often blank while the
-	// session is perfectly busy, which reads as an attach that does not work.
-	//
-	// Attaching is the thing an operator reaches for when they want to *see*. The
-	// mode that shows everything is the one that should need no flag.
+	// `--view` is still accepted and now means what the default does. It was the
+	// flag for this mode for as long as direct was the default, so it is in
+	// people's fingers and in whatever scripts were written meanwhile; refusing it
+	// would break those to make a point about spelling.
 	var direct, composed bool
 	rest, err := flagged(args, options{switches: map[string]*bool{
 		"--direct": &direct, "--view": &composed,
@@ -72,10 +79,10 @@ func (a App) attach(args []string) error {
 	if composed && direct {
 		return fault.Usage{Reason: "attach shows the terminal or the composed pane; name one"}
 	}
-	if composed {
-		return a.cleanView(s, who)
+	if direct {
+		return a.proxy(s, who)
 	}
-	return a.proxy(s, who)
+	return a.cleanView(s, who)
 }
 
 // The detach sequence: Ctrl-\ then one of d, q, or `.`.
@@ -106,6 +113,8 @@ func isDetachKey(b byte) bool {
 }
 
 // proxy is `attach --direct`: the operator's terminal, wired to the session.
+//
+// Reached by the flag, or by ^] from inside the pane — see view.KeyDirect.
 func (a App) proxy(s caller, who user.Name) error {
 	// The terminal is checked before the session is dialled. Both orders work, but
 	// this one gives the more useful error: "this needs a terminal" is about the
@@ -249,7 +258,7 @@ const (
 	factsInterval = 15 * time.Second
 )
 
-// watch is `orc attach` without --direct: Orc's own view.
+// watch is `orc attach`: Orc's own view, which is what an attach with no flag gets.
 //
 // The whole screen is drawn from a model built by internal/view, which is a pure
 // function of the feed's bytes. This function is the impure half — the terminal, the

@@ -479,6 +479,10 @@ func (a App) sync(args []string) error {
 	// applies inside this adapter, and this is what it calls afterwards.
 	src.EnsureWatch = a.ensureWatch(watchPlan{
 		Home: *home, Server: *serverURL, Machine: *machine, User: *user,
+		// The library too. watchPlan has carried the field and args() has forwarded
+		// it all along; nothing filled it in, so a watcher started after an upgrade
+		// mirrored no repository even when the sync that spawned it did.
+		Library: libraryRoot,
 	})
 
 	ag, err := agent.New(agent.Options{
@@ -631,7 +635,13 @@ func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
 			// one's claim. The new watcher writes its own on the way in.
 			release()
 			a.tell("cq: restarting into the new build")
-			if err := watch.Restart(exe, selfArgs()); err != nil {
+			handedOff, err := watch.Restart(exe, selfArgs())
+			if handedOff {
+				// Windows: a replacement is already running. Standing down is the
+				// restart — carrying on would be two watchers on one machine.
+				return a.say("cq: the new build is watching now")
+			}
+			if err != nil {
 				// Not fatal, and not the end of the watch. Carrying on means the
 				// mirror keeps updating on the build it has, which is the whole
 				// point of this loop; the next round tries again, and a build that

@@ -348,8 +348,14 @@ func TestRestartingIntoSomethingUnrunnableSaysSo(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not a program"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := watch.Restart(path, nil); err == nil {
+	handedOff, err := watch.Restart(path, nil)
+	if err == nil {
 		t.Fatal("restarting into a file that cannot be run reported success")
+	}
+	// And it did not claim a replacement is running. A caller that believed that
+	// would stop watching, leaving nothing behind it.
+	if handedOff {
+		t.Error("a failed restart said it had handed off")
 	}
 }
 

@@ -118,6 +118,19 @@ for module in $(modules); do
 			printf '%scannot write to %s%s\n' "$red" "$target" "$off" >&2
 			exit 1
 		fi
+		# Windows cannot overwrite a running program, and the one being rebuilt is
+		# very often running — a `cq serve`, a watcher, the very `cq upgrade` that
+		# started this. It *can* be renamed, though, so an existing binary is moved
+		# aside and the new one written in its place. The old file stays open for
+		# whoever is running it and is cleaned up on a later build.
+		#
+		# Nothing is moved aside on unix: a build there replaces the inode and every
+		# running process keeps the one it opened, which is the whole reason an
+		# upgrade can replace the tool that is performing it.
+		if [[ -n "$exe" && -e "$target/$name$exe" ]]; then
+			rm -f "$target/$name$exe.old" 2>/dev/null || true
+			mv -f "$target/$name$exe" "$target/$name$exe.old" 2>/dev/null || true
+		fi
 		(cd "$dir" && GOWORK=off go build -o "$target/$name$exe" "./cmd/$name")
 		installed+=("$name$exe")
 	done

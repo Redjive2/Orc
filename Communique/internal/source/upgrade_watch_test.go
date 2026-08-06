@@ -24,7 +24,15 @@ import (
 // test is the sequence around the upgrade, not the upgrade itself.
 func fakeRun(steps *[]string) func(context.Context, string, string, ...string) ([]byte, error) {
 	return func(_ context.Context, dir, name string, args ...string) ([]byte, error) {
-		*steps = append(*steps, strings.TrimSpace(name+" "+strings.Join(args, " ")))
+		joined := strings.TrimSpace(name + " " + strings.Join(args, " "))
+		*steps = append(*steps, joined)
+		// A clean checkout. `git status --porcelain` says nothing about a tree with
+		// nothing in it, and an upgrade refuses a tree that answers — so a fake that
+		// answered "ok" to everything was a fake of a checkout full of uncommitted
+		// work, which is not what any test here is about.
+		if strings.Contains(joined, "status --porcelain") {
+			return nil, nil
+		}
 		return []byte("ok"), nil
 	}
 }

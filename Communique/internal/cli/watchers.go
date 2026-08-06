@@ -88,7 +88,20 @@ func round(d time.Duration) string {
 // no error anywhere: the upgrade succeeded, the queue drained, and the mirror
 // simply stopped. So one is started, detached, with a life of its own.
 func (a App) ensureWatch(p watchPlan) func() error {
+	// Resolved now, before the upgrade runs, and not inside the closure.
+	//
+	// The closure is called *after* the build has replaced this binary. `go build
+	// -o` unlinks the destination and creates a new file, so on Linux
+	// `os.Executable` then reads `/proc/self/exe` as `…/cq (deleted)` and the spawn
+	// fails — leaving nothing mirroring the machine, which is the one thing this
+	// function exists to prevent. Reading the path first costs nothing and is true
+	// either way.
+	exe, exeErr := os.Executable()
+
 	return func() error {
+		if exeErr != nil {
+			return fault.IO{Op: "find", Subject: "this executable", Err: exeErr}
+		}
 		needed, err := watchNeeded(p.Home)
 		if err != nil {
 			return err
@@ -97,10 +110,6 @@ func (a App) ensureWatch(p watchPlan) func() error {
 			return nil
 		}
 
-		exe, err := os.Executable()
-		if err != nil {
-			return fault.IO{Op: "find", Subject: "this executable", Err: err}
-		}
 		if err := watch.Spawn(exe, p.args()); err != nil {
 			return err
 		}

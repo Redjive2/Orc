@@ -87,7 +87,13 @@ func (w *watchdog) renew() {
 	w.release = func() {}
 	w.app.note("restarting into the new build")
 
-	if err := watch.Restart(w.exe, selfArgs()); err != nil {
+	handedOff, err := watch.Restart(w.exe, selfArgs())
+	if handedOff {
+		// Windows: the replacement is up, so this one is done. See watch.Restart.
+		w.app.note("the new build is watching now; this one is standing down")
+		os.Exit(0)
+	}
+	if err != nil {
 		// Not fatal. Carrying on means the sweep keeps running on the build it has,
 		// which is the whole point of the loop. The stamp moves on so that a build
 		// this process cannot exec into is complained about once rather than every

@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -31,6 +32,12 @@ const Timeout = 10 * time.Minute
 
 // Options say where the source is and where the binaries go.
 type Options struct {
+	// Dirty allows a build from a checkout with uncommitted changes in it. Off by
+	// default: an upgrade installs what it builds on every machine, and doing that
+	// from somebody's work in progress is the kind of mistake that is only found
+	// later, everywhere at once.
+	Dirty bool
+
 	// Source is the checkout to pull. Empty means this machine does not build
 	// from source and cannot be upgraded, which is a refusal rather than a
 	// silent success.
@@ -114,7 +121,21 @@ func (o Options) Upgrade(ctx context.Context) (Report, error) {
 	// log. Asked first, so the refusal names the actual condition — a checkout on a
 	// branch the remote does not have is the usual cause, and it is nothing like
 	// "local commits".
+	// A checkout with uncommitted work in it builds that work and installs it
+	// across the fleet. `sh/pull` refuses this outright and the upgrade did not —
+	// it only consulted the working tree *after* a failed pull, to explain the
+	// failure. A tree that fast-forwards cleanly with edits in it went straight
+	// through.
+	if !o.Dirty {
+		if what := o.dirty(ctx, source); what != "" {
+			report.Steps = append(report.Steps, Step{What: "status", Output: trim(what)})
+			return report, fault.Conflict{Subject: source, Reason: "the checkout has uncommitted " +
+				"changes, and an upgrade installs what it builds on every machine; commit or stash " +
+				"them, or pass --dirty to build them anyway"}
+		}
+	}
 	if why := o.checkUpstream(ctx, source); why != "" {
+		report.Steps = append(report.Steps, Step{What: "upstream", Error: why})
 		return report, fault.IO{Op: "pull", Subject: source, Err: fmt.Errorf("%s", why)}
 	}
 
@@ -147,7 +168,12 @@ func (o Options) Upgrade(ctx context.Context) (Report, error) {
 		report.Steps = append(report.Steps, Step{What: "go version", Error: trim(err.Error())})
 		return report, err
 	}
-	out, err := step("build", source, script, "--to", target)
+	name, args, err := runScript(script, "--to", target)
+	if err != nil {
+		report.Steps = append(report.Steps, Step{What: "build", Error: trim(err.Error())})
+		return report, err
+	}
+	out, err := step("build", source, name, args...)
 	if err != nil {
 		return report, fault.IO{Op: "build", Subject: source, Err: fmt.Errorf("%s", trim(string(out)))}
 	}
@@ -178,6 +204,21 @@ func installDir(raw string) (string, error) {
 			return "", fault.IO{Op: "find", Subject: "this executable", Err: err}
 		}
 		return filepath.Dir(exe), nil
+	}
+
+	// Absolute, always. The build script never changes to the repository root, so a
+	// relative target resolves against two different directories inside one run:
+	// `mkdir -p "$target"` against the script's own working directory, and
+	// `go build -o "$target/cq"` against the *module* directory it built from. The
+	// binaries then land inside the checkout, in a directory nothing is on the path
+	// of, and the upgrade reports success.
+	//
+	// `$CQ_BIN` is documented as taking the same spelling a nudge does, which is a
+	// bare command name — that is, exactly a relative path.
+	if !filepath.IsAbs(target) {
+		return "", fault.Usage{Reason: fmt.Sprintf(
+			"the install directory %q is relative; give an absolute path, because the build "+
+				"script resolves it against a different directory from the one you are in", target)}
 	}
 
 	got, err := os.Stat(target)
@@ -217,29 +258,70 @@ func (o Options) toolchain(ctx context.Context, source string) error {
 
 // built picks the tool names out of the build script's output, so the report can
 // say what was replaced rather than only that something was.
+//
+// The format is one line per **module**, and the module name comes first:
+//
+//	Anno         ok anno-hook anno
+//	Common       ok (library)
+//	Communique   ok cq
+//
+// This used to read the first field as the tool name and require it to be lower
+// case. Every real line begins with a capital, so every real line was rejected and
+// the report was empty — while the note the script prints when the install
+// directory is off `$PATH`,
+//
+//	export PATH="/tmp/x:$PATH"
+//
+// began with a lower-case word and two fields, and was accepted. On the output the
+// script actually produces the answer was `["export"]`, on every upgrade, and the
+// test that passed fed it lines the script cannot print.
+//
+// So it reads the shape instead: a module, the word `ok`, and the commands after
+// it. A module with no commands says `(library)`, which is not a tool.
 func built(out string) []string {
 	var names []string
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
-		// The script prints one line per tool, the name first. Anything that does
-		// not look like that is a heading or a note and is not a tool.
-		if len(fields) >= 2 && isToolName(fields[0]) {
-			names = append(names, fields[0])
+		if len(fields) < 3 || fields[1] != "ok" {
+			continue
+		}
+		for _, name := range fields[2:] {
+			if isToolName(name) {
+				names = append(names, name)
+			}
 		}
 	}
 	return names
 }
 
+// isToolName reports whether a field is a command's name rather than a note.
+//
+// Commands in this tree are lower case with hyphens — `anno-hook`, `orc-session`.
+// `(library)` is the one other thing that appears in that position, and the
+// parentheses are what rule it out.
 func isToolName(s string) bool {
 	if s == "" || len(s) > 32 {
 		return false
 	}
 	for _, r := range s {
-		if (r < 'a' || r > 'z') && r != '-' {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 			return false
 		}
 	}
 	return true
+}
+
+// dirty reports what is uncommitted in the checkout, or "" when it is clean.
+//
+// Unreadable answers "clean". This gates a build rather than reporting damage, and
+// a `git status` that could not run must not be able to stop an upgrade — the pull
+// that follows is the step that actually refuses a tree it cannot fast-forward.
+func (o Options) dirty(ctx context.Context, source string) string {
+	out, err := o.run(ctx, source, "git", "status", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // checkUpstream reports why this checkout cannot be pulled, or "" if it can.
@@ -339,4 +421,50 @@ func trim(s string) string {
 		return s[:most] + "…"
 	}
 	return s
+}
+
+// runScript is how the build script is started on this platform.
+//
+// On unix the script is executable and has a shebang, so it runs as itself. On
+// Windows it is neither: `sh/build` has no extension, so it matches no PATHEXT
+// entry, and a text file with a `#!` line is not a PE image. `CreateProcess`
+// refuses it, and the upgrade failed there with an error about a file that plainly
+// exists — which is the whole of why Windows has never been able to rebuild.
+//
+// So Windows runs it through bash. Git for Windows ships one and nearly every
+// machine with a checkout on it has Git; WSL and MSYS2 provide one too. Where none
+// is found the refusal names what to install rather than repeating the exec error.
+func runScript(script string, args ...string) (string, []string, error) {
+	if runtime.GOOS != "windows" {
+		return script, args, nil
+	}
+	shell, err := findBash()
+	if err != nil {
+		return "", nil, err
+	}
+	// A Windows path reaches bash as it is; Git for Windows accepts one.
+	return shell, append([]string{script}, args...), nil
+}
+
+// bashPlaces are where Git for Windows puts bash, in the order they are tried.
+//
+// PATH first, so a machine that has made a choice keeps it.
+var bashPlaces = []string{
+	`C:\Program Files\Git\bin\bash.exe`,
+	`C:\Program Files (x86)\Git\bin\bash.exe`,
+	`C:\Program Files\Git\usr\bin\bash.exe`,
+}
+
+func findBash() (string, error) {
+	if got, err := exec.LookPath("bash"); err == nil {
+		return got, nil
+	}
+	for _, place := range bashPlaces {
+		if info, err := os.Stat(place); err == nil && info.Mode().IsRegular() {
+			return place, nil
+		}
+	}
+	return "", fault.Usage{Reason: "the build script needs bash, and none was found on PATH or " +
+		"in the usual Git for Windows places; install Git for Windows, or run `sh/build` by hand " +
+		"from a shell that has one"}
 }

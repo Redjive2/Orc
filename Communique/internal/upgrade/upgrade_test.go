@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestUpgradePullsThenBuilds(t *testing.T) {
 	dir := checkout(t)
 	r := &recorder{out: map[string]string{
 		"rev-parse": "aaaaaaa\n",
-		"sh/build":  "orc      /bin/orc\nmailman  /bin/mailman\n",
+		"sh/build":  buildOutput,
 	}}
 
 	report, err := upgrade.Options{Source: dir, Target: "/tmp/bin", Run: r.run}.Upgrade(t.Context())
@@ -95,8 +96,10 @@ func TestUpgradePullsThenBuilds(t *testing.T) {
 		t.Errorf("the build was not told where to install: %s", joined)
 	}
 	// The report names what was replaced, so an operator reading the queue knows
-	// which tools moved rather than only that something did.
-	if len(report.Built) != 2 || report.Built[0] != "orc" {
+	// which tools moved rather than only that something did. What it should say
+	// about this output is pinned by TestBuiltReadsWhatTheScriptPrints; here it is
+	// enough that the order of the steps did not cost the report.
+	if len(report.Built) == 0 {
 		t.Errorf("the report does not say what was built: %+v", report.Built)
 	}
 }
@@ -385,5 +388,58 @@ func TestAMissingToolchainIsNamedRatherThanLeftToTheBuild(t *testing.T) {
 		if strings.Contains(strings.Join(call, " "), "sh/build") {
 			t.Error("the build ran despite there being nothing to build with")
 		}
+	}
+}
+
+// buildOutput is what `sh/build --to <dir>` really prints, captured from a run of
+// it rather than written by hand.
+//
+// The difference matters more than it looks. The fixture here used to be two lines
+// of `name  /path`, which the script has never printed — so the parser was pinned
+// against a format nobody produced, passed, and returned the wrong answer on every
+// real upgrade. A fixture that cannot occur is a test of nothing.
+//
+// The trailing note is part of it on purpose: it is the line that used to be
+// mistaken for a tool called `export`.
+const buildOutput = `Anno         ok anno-hook anno
+Common       ok (library)
+Communique   ok cq
+Dock         ok dock-hook dock
+Macmuffin    ok muff-hook muff
+Mailman      ok mailman
+Orc          ok orc-hook orc-session orc
+Orcprobe     ok orcprobe-shim orcprobe
+Theme        ok (library)
+
+✓ installed 13 binaries to /tmp/bin
+  /tmp/bin is not on your PATH. add it with:
+    export PATH="/tmp/bin:$PATH"
+`
+
+// TestBuiltReadsWhatTheScriptPrints, against that output.
+func TestBuiltReadsWhatTheScriptPrints(t *testing.T) {
+	dir := checkout(t)
+	r := &recorder{out: map[string]string{"rev-parse": "aaaaaaa\n", "sh/build": buildOutput}}
+
+	report, err := upgrade.Options{Source: dir, Target: "/tmp/bin", Run: r.run}.Upgrade(t.Context())
+	if err != nil {
+		t.Fatalf("Upgrade: %v", err)
+	}
+
+	want := []string{
+		"anno-hook", "anno", "cq", "dock-hook", "dock", "muff-hook", "muff",
+		"mailman", "orc-hook", "orc-session", "orc", "orcprobe-shim", "orcprobe",
+	}
+	if strings.Join(report.Built, " ") != strings.Join(want, " ") {
+		t.Errorf("built %v, want %v", report.Built, want)
+	}
+	// The two things that used to be got wrong, said as themselves.
+	for _, wrong := range []string{"export", "Anno", "Communique", "(library)"} {
+		if slices.Contains(report.Built, wrong) {
+			t.Errorf("%q was read as a tool", wrong)
+		}
+	}
+	if len(report.Built) == 0 {
+		t.Error("the real output produced no tools at all, which is what the bug was")
 	}
 }

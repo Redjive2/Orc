@@ -80,8 +80,8 @@ func usage(p style.Palette) string {
 	verb("orc fire <identity> [--yes]", "take it off; --yes if a session is live")
 	verb("orc tend [--watch <dur>]", "reconcile the work list with what is running")
 	verb("orc view <identity>", "what it has been doing, without joining it")
-	verb("orc attach <identity>", "hand your terminal over; Ctrl-\\ then d leaves")
-	verb("orc attach <identity> --view", "orc's composed pane instead; ^Q leaves")
+	verb("orc attach <identity>", "join it: type, ^S sends, ^Q leaves")
+	verb("orc attach <identity> --direct", "hand your terminal over; Ctrl-\\ then d leaves")
 	verb("orc poke <identity> [message]", "type into it without attaching")
 	verb("orc wake [<identity>…] [--every <dur>]", "poke whatever has gone quiet, on a cycle")
 	verb("orc refresh <identity>", "new session, fresh context, same identity")
@@ -520,24 +520,30 @@ var topics = map[string]topic{
 		examples: []string{"orc tend", "orc tend --watch 5m"},
 	},
 	"attach": {
-		forms: []string{"orc attach <identity>", "orc attach <identity> --view"},
-		does:  "hand your terminal to the session",
-		detail: "Your terminal, wired to the real Claude session: everything it draws,\n" +
-			"exactly as it draws it.\n" +
+		forms: []string{"orc attach <identity>", "orc attach <identity> --direct"},
+		does:  "join a session: watch it, and say things to it",
+		detail: "Orc's composed pane: what the session has done, built from orc's event\n" +
+			"journal and the transcript rather than by parsing a terminal.\n" +
 			"\n" +
-			"**To leave, press Ctrl-\\ and then d.** Two keystrokes, not one: every\n" +
-			"single key belongs to the session — ^C interrupts the agent, ^D ends its\n" +
-			"input — so a prefix is the only safe shape. `q` and `.` work in place of\n" +
-			"`d`, since the prefix is the hard part. The session keeps running either\n" +
-			"way; leaving an attach never stops an agent.\n" +
+			"Typing composes and **^S sends**, so a stray keystroke cannot land in a\n" +
+			"working session — and ^Q leaves in one key. It is not read-only; the\n" +
+			"buffer is how you talk to the agent.\n" +
 			"\n" +
-			"--view shows orc's composed pane instead: what the session has done,\n" +
-			"built from orc's event journal and the transcript rather than by parsing\n" +
-			"a terminal. Typing composes and ^S sends, so a stray keystroke cannot\n" +
-			"land in a working session, and ^Q leaves in one key. It shows what an\n" +
-			"agent has *said* — not what its interface is drawing, which is why it is\n" +
-			"no longer what you get by default.",
-		examples: []string{"orc attach ember", "orc attach ember --view"},
+			"What it cannot show is what Claude's own interface is *drawing*: the\n" +
+			"pane is built from events, so anything rendered before the first one, or\n" +
+			"drawn rather than recorded, is not in it. **^] hands the terminal over**\n" +
+			"when that is what you need, without leaving and running a second command.\n" +
+			"\n" +
+			"--direct starts there instead: your terminal wired to the real session,\n" +
+			"everything it draws exactly as it draws it. **To leave that, press\n" +
+			"Ctrl-\\ and then d.** Two keystrokes, not one: every single key belongs\n" +
+			"to the session — ^C interrupts the agent, ^D ends its input — so a prefix\n" +
+			"is the only safe shape. `q` and `.` work in place of `d`. The session\n" +
+			"keeps running either way; leaving an attach never stops an agent.\n" +
+			"\n" +
+			"--view is accepted and means the default, which is what it always\n" +
+			"selected.",
+		examples: []string{"orc attach ember", "orc attach ember --direct"},
 	},
 	"view": {
 		forms: []string{"orc view <identity>", "orc view <identity> --lines 50 --json"},

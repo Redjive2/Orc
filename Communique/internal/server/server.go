@@ -133,7 +133,10 @@ type Server struct {
 	restart func()
 	// How this machine's own last build went, and the lock over it. In memory
 	// because a build that succeeds ends in a restart — see selfUpgrade.
-	built       sync.Mutex
+	built sync.Mutex
+	// building is whether a self-upgrade is in flight, under the same lock. Two in
+	// one checkout is a build reading a tree another build is rewriting.
+	building    bool
 	selfUpgrade *selfUpgrade
 
 	assets  http.Handler
@@ -330,7 +333,11 @@ func (s *Server) routes() {
 	// And asking how the last one went. A GET because asking has no effect, and
 	// the same path because it is the same subject: the outcome of a build that
 	// happens after the response to the POST has already been sent.
-	s.route("GET /api/v1/upgrade", needSession, s.upgradeStatus)
+	// needEither, like the POST beside it. `cq upgrade` authenticates with a token
+	// and could therefore start a build it had no way to watch: it printed
+	// "upgrading" and returned, and a build that failed four minutes later reached
+	// the log and nowhere else.
+	s.route("GET /api/v1/upgrade", needEither, s.upgradeStatus)
 
 	// The task verbs, one route per Macmuffin command that changes something.
 	// See tasks.go for why this is a route each rather than one pass-through.

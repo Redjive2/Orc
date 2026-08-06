@@ -52,20 +52,25 @@ func Alive(pid int) bool {
 // execSelf cannot be done on Windows, and says so rather than pretending.
 //
 // There is no exec: a process cannot become another program in place, and the
-// nearest equivalent — start a replacement and exit — is a different thing with
-// different consequences (a new pid, a broken parent relationship, a gap where
-// nothing is watching). Doing that silently under a function named for exec would
-// be the worst of the three options.
+// nearest equivalent is to start a replacement and stand down, which is a
+// different thing with different consequences: a new pid, a new parent, and a
+// moment where two are alive.
 //
-// It costs less than it looks. A running .exe cannot be replaced on Windows, so
-// the build that would have prompted this restart fails before it gets here, and
-// the operator is told by the upgrade rather than by a watcher.
-// It is a plain error rather than one of fault's kinds because no caller exits on
-// it: a watcher that cannot restart carries on watching, correctly, on the build
-// it has. An exit code would be claiming this ended something, and it does not.
-func execSelf(exe string, _, _ []string) error {
-	return fmt.Errorf("windows cannot replace a running program in place; "+
-		"stop and start %s to pick up the new build", exe)
+// It is done anyway, because the alternative was that Windows could never take a
+// new build at all. Restart returns whether this path was the one taken, so the
+// caller stops rather than watching alongside its own replacement — which is the
+// consequence that would matter. An exit code would be claiming this ended something, and it does not.
+func execSelf(exe string, argv, env []string) error {
+	// A replacement beside us, and the caller stands down. Restart's return value
+	// says this happened, so nothing has to guess.
+	cmd := exec.Command(exe, argv[1:]...)
+	cmd.Env = env
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("could not start the new build at %s: %w", exe, err)
+	}
+	return nil
 }
 
 // detach starts a watcher with no console and a process group of its own.
