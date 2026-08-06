@@ -126,3 +126,47 @@ func TestTheActivityTablesFoldOnAPhone(t *testing.T) {
 		}
 	}
 }
+
+// TestALinkActingAsAControlIsSizedLikeOne guards the seam an anchor-as-button has.
+//
+// `a.button` exists because a control that *navigates* should be a link: middle
+// click, open-in-new-tab and copy-link are all things a reader expects of one, and
+// a <button> calling location.hash takes every one of them away. The cost is that
+// it does not match `button` in a selector, so a rule narrowing the controls on a
+// row has to name it too.
+//
+// That cost has already been paid once. `.controls.row button` shrinks the
+// controls on an agent row; the anchor did not match it, kept the full padding and
+// font, and stood a third taller than the three buttons beside it. Nothing failed
+// — a stylesheet has no way to say a rule missed something — so this asks the
+// question directly.
+func TestALinkActingAsAControlIsSizedLikeOne(t *testing.T) {
+	sheet := read(t, "app/app.css")
+
+	for _, line := range strings.Split(sheet, "\n") {
+		selector, _, ok := strings.Cut(line, "{")
+		if !ok || !strings.Contains(selector, "button") {
+			continue
+		}
+		// Only where a link-as-control actually lives: a row's controls. Every
+		// other `button` rule in the sheet is for a context with no anchor in it,
+		// and demanding they all name one would be ceremony that teaches people to
+		// add the token without thinking.
+		if !strings.Contains(selector, ".controls") {
+			continue
+		}
+		if strings.Contains(selector, "a.button") {
+			continue
+		}
+		// A rule can still be genuinely about buttons — a disabled state an anchor
+		// cannot be in — and saying so keeps that a decision rather than an
+		// oversight.
+		if strings.Contains(line, "/* buttons only") {
+			continue
+		}
+		t.Errorf("this rule sizes buttons in a context and does not name a.button, "+
+			"so a link acting as a control there will not match its neighbours:\n  %s\n"+
+			"add a.button to the selector, or mark it `/* buttons only */` if no link belongs there",
+			strings.TrimSpace(line))
+	}
+}

@@ -155,7 +155,17 @@ form.compose input:focus, form.compose textarea:focus, form.compose select:focus
 form.compose p.error:empty { display: none; }
 form.compose p.error { margin: 0 0 .6rem; }
 
-button {
+/* A control that goes somewhere is an anchor wearing a button, not a button that
+   calls location.hash. Middle-click, open-in-new-tab, copy-link and the address
+   bar are all things a reader expects of a thing that navigates, and a <button>
+   takes every one of them away for nothing.
+
+   **Both in one selector, rather than a second block restating the metrics.** The
+   first version had its own copy, and it went wrong the way a copy does: a rule
+   further down shrinks the controls on an agent row, the anchor did not match it,
+   and one control there stood a third taller than its neighbours. Sharing the base
+   means only a rule that *narrows* has to name both — and the row rule now does. */
+button, a.button {
   background: transparent;
   color: var(--primary);
   border: 1px solid var(--primary);
@@ -163,29 +173,19 @@ button {
   font: inherit;
   cursor: pointer;
 }
-button:hover { background: var(--primary); color: var(--canvas); }
+button:hover, a.button:hover { background: var(--primary); color: var(--canvas); }
 button:disabled { color: var(--muted); border-color: var(--frame); cursor: default; }
 button:disabled:hover { background: transparent; color: var(--muted); }
-button.quiet { color: var(--muted); border-color: var(--frame); }
-button.quiet:hover { background: var(--frame); color: var(--text); }
+button.quiet, a.button.quiet { color: var(--muted); border-color: var(--frame); }
+button.quiet:hover, a.button.quiet:hover { background: var(--frame); color: var(--text); }
 
-/* A control that goes somewhere is an anchor wearing a button, not a button that
-   calls location.hash. Middle-click, open-in-new-tab, copy-link and the address
-   bar are all things a reader expects of a thing that navigates, and a <button>
-   takes every one of them away for nothing. It borrows the button's own metrics
-   rather than restating them so the two cannot drift apart on a row. */
+/* What is left is only what an anchor does differently: it underlines, and it
+   lays its text on the page's line box rather than centring it in its own. */
 a.button {
-  display: inline-block;
-  background: transparent;
-  color: var(--primary);
-  border: 1px solid var(--primary);
-  padding: .3rem 2ch;
-  font: inherit;
+  display: inline-flex;
+  align-items: center;
   text-decoration: none;
 }
-a.button:hover { background: var(--primary); color: var(--canvas); }
-a.button.quiet { color: var(--muted); border-color: var(--frame); }
-a.button.quiet:hover { background: var(--frame); color: var(--text); }
 /* Quiet to the point of being a word rather than a control: this appears on
    every row, and a column of bordered buttons down the side of a mailbox is
    chrome competing with the mail. The border arrives on hover and on focus, so
@@ -645,9 +645,9 @@ button.fold.picked .twist { color: var(--primary); }
    narrow-screen layer puts the height back: a thumb needs the target a mouse
    does not. */
 .controls.row { gap: 1ch; padding: .15rem 0 .35rem; }
-.controls.row button { padding: .05rem 1ch; font-size: .85em; }
+.controls.row button, .controls.row a.button { padding: .05rem 1ch; font-size: .85em; }
 .fold-row > .controls.row { gap: .5ch; }
-.fold-row > .controls.row button { padding: 0 .75ch; font-size: .75em; }
+.fold-row > .controls.row button, .fold-row > .controls.row a.button { padding: 0 .75ch; font-size: .75em; }
 
 /* Prose inside a fold is set off from the rule that marks its depth. Without
    this the first letter of every line touches the border, and a document reads
@@ -803,7 +803,7 @@ button.fold.picked .twist { color: var(--primary); }
    Dimmed rather than removed, and still focusable — it is aria-disabled, not
    disabled, so pressing it says what is missing instead of doing nothing. The
    cursor says so before the press. */
-.controls button[aria-disabled="true"] {
+.controls button[aria-disabled="true"] { /* buttons only: an anchor never sits in this state — it navigates, or it is absent */
   opacity: .55;
   cursor: not-allowed;
 }
@@ -920,7 +920,8 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   .fold-row { display: block; }
   .fold-row > .controls { padding: 0; }
   .controls.row button, .controls.row a.button,
-  .fold-row > .controls.row button { font-size: 1em; padding: .3rem 1ch; }
+  .fold-row > .controls.row button,
+  .fold-row > .controls.row a.button { font-size: 1em; padding: .3rem 1ch; }
   .fold-row > .controls.row { gap: 1ch; }
 
   /* The activity tables stop being tables.

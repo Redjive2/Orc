@@ -135,6 +135,14 @@ type ViewOf struct {
 type ViewLine struct {
 	Who  string `json:"who"`
 	Text string `json:"text"`
+	// At is when it was said, as Claude's transcript records it, or empty from a
+	// transcript that does not carry one.
+	//
+	// It is here so a reader can *merge* this stream with the timestamped feed
+	// beside it — which is what a pane showing what an agent said and what it did
+	// as one conversation needs. It is not an order in its own right: see
+	// view.Prose, where what it is and is not good for is written down.
+	At string `json:"at,omitempty"`
 }
 
 // ViewRow is one event from the feed.
@@ -202,7 +210,7 @@ func (a App) collectView(s caller, who user.Name, count int) (ViewOf, error) {
 		prose = prose[len(prose)-count:]
 	}
 	for _, p := range prose {
-		out.Prose = append(out.Prose, ViewLine{Who: string(p.Who), Text: p.Text})
+		out.Prose = append(out.Prose, ViewLine{Who: string(p.Who), Text: p.Text, At: p.At})
 	}
 	return out, nil
 }

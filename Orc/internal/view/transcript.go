@@ -48,13 +48,24 @@ const (
 type Prose struct {
 	Who  Speaker
 	Text string
+	// At is when it was said, as the transcript records it, or empty.
+	//
+	// Carried rather than dropped, and the caution it used to be dropped for is
+	// worth writing down: this is Claude's field, not Orc's, so nothing may depend
+	// on it. It is checked against file order — 4,610 entries of a real session ran
+	// monotonic but for the two either side of a compaction — which makes it good
+	// enough to *merge* two streams that each already have their own order, and not
+	// good enough to be the order itself. A reader that sorts by it alone will one
+	// day put an answer before its question.
+	At string
 }
 
 // entry is the part of a transcript line this reads. Everything else is ignored,
 // deliberately.
 type entry struct {
-	Type    string `json:"type"`
-	Message struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	Message   struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
@@ -146,7 +157,7 @@ func proseOf(line []byte) (Prose, bool) {
 	if text == "" {
 		return Prose{}, false
 	}
-	return Prose{Who: who, Text: text}, true
+	return Prose{Who: who, Text: text, At: e.Timestamp}, true
 }
 
 // textOf pulls the words out of a content field.

@@ -138,7 +138,10 @@ function row(f, id, actions) {
       // The whole session, rather than the last few events this row has room for.
       // A link and not a button: it goes somewhere, and it is worth having on a
       // reader with no controls at all.
-      h("a", { class: "quiet button", href: sessionAt(f.machine, id.name) }, "open"),
+      //
+      // "attach" is orc's own word for joining a session, and this is that through
+      // a different window.
+      h("a", { class: "quiet button", href: sessionAt(f.machine, id.name) }, "attach"),
       actions && id.populated
         ? h("button", { class: "quiet", onclick: () => actions.poke(f, id) }, "poke…")
         : null,

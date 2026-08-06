@@ -157,6 +157,51 @@ test("the operator is not one of the agents a session can be opened for", () => 
   assert.match(out, /has no agent called rdm/);
 });
 
+test("what it said and what it did are one conversation, in order", () => {
+  // Two lists is the right shape for a glance and the wrong one for reading: a
+  // refusal belongs next to the sentence that provoked it.
+  const mixed = state();
+  mixed.fleet[0].sessions[0] = {
+    identity: "ember", live: true, prose_available: true,
+    prose: [
+      { who: "user", text: "FIRST ask", at: "2026-08-06T11:00:00Z" },
+      { who: "assistant", text: "THIRD answer", at: "2026-08-06T11:00:20Z" },
+    ],
+    rows: [{ at: "2026-08-06T11:00:10Z", tool: "SECOND-tool", detail: "" }],
+  };
+  const out = drawn(mixed, "sandy/ember");
+  const order = ["FIRST", "SECOND", "THIRD"].map((w) => out.indexOf(w));
+  assert.ok(order.every((n) => n >= 0), `all three should be drawn: ${order}`);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), "they are not in order");
+});
+
+test("an orc that sends no times keeps the two bands", () => {
+  // Every agent built before this one. Prose that cannot be placed goes after the
+  // feed rather than guessed into it.
+  const old = state();
+  old.fleet[0].sessions[0] = {
+    identity: "ember", live: true, prose_available: true,
+    prose: [{ who: "assistant", text: "SECOND said" }],
+    rows: [{ at: "2026-08-06T11:00:10Z", tool: "FIRST-tool", detail: "" }],
+  };
+  const out = drawn(old, "sandy/ember");
+  assert.ok(out.indexOf("FIRST") < out.indexOf("SECOND"),
+    "untimed prose was threaded into the feed rather than left after it");
+});
+
+test("the prompt sits inside the pane, under the conversation", () => {
+  // Shaped after `orc attach`. Two cards with the controls between them put the
+  // reply three screens from the sentence being replied to on a phone.
+  const out = view.screen(state(), "sandy/ember", {
+    draft() {}, forget() {}, async sendPoke() { return true; },
+  }, NOW);
+  const cards = out.filter((n) => n.className === "card");
+  const withForm = cards.filter((c) => all(c, (x) => x.tagName === "FORM").length > 0);
+  assert.equal(withForm.length, 1, "the form should be in exactly one card");
+  assert.ok(all(withForm[0], (x) => x.className && String(x.className).includes("said")).length > 0,
+    "the form is not in the card that holds the conversation");
+});
+
 test("a poke that has not landed yet is shown as waiting", () => {
   const queued = {
     queue: [{

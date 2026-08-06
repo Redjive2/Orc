@@ -78,6 +78,15 @@ type FleetSession struct {
 type SessionLine struct {
 	Who  string `json:"who"`
 	Text string `json:"text"`
+	// At is when it was said, or empty from an orc that does not carry one.
+	//
+	// It exists so the browser can show what an agent said and what it did as one
+	// conversation rather than two lists. It is good for *merging* two streams that
+	// each already have their own order and not good as an order in its own right —
+	// see view.Prose in orc, where the measurement behind that is written down. The
+	// screen falls back to keeping them apart when it is absent, which is what
+	// every older agent will send.
+	At string `json:"at,omitempty"`
 }
 
 // SessionRow is one event from orc's own journal.

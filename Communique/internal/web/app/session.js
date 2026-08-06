@@ -19,7 +19,7 @@
 // — two machines with an `ember` each would otherwise share one screen.
 
 import { h, since } from "./dom.js";
-import { sessionBody, sessionSummary, sessionOf, agents } from "./fleet.js";
+import { sessionRow, sessionSummary, sessionOf, agents } from "./fleet.js";
 import { draftKey, drafted } from "./views.js";
 
 // where splits `<machine>/<identity>` out of the route.
@@ -59,8 +59,8 @@ export function screen(state, rest, actions, now = Date.now()) {
   return [
     back,
     head(state, f, id, now),
-    transcript(f, id),
-    ...(actions ? [compose(state, f, id, actions), controls(f, id, actions)] : []),
+    pane(state, f, id, actions),
+    ...(actions ? [controls(f, id, actions)] : []),
     ...pending(state, f, id),
   ];
 }
@@ -131,20 +131,95 @@ function staleness(got, machine, now) {
     `mirrored ${since(machine.last_sync, now)} — this is a mirror, not a terminal, and what you send leaves on the next sync`);
 }
 
-// transcript is what it said and what it did, in the shape the fold already used.
+// pane is the conversation and the prompt, in one box.
+//
+// Shaped after `orc attach`: the stream, and then what you are about to say sitting
+// directly under the last thing in it. It used to be two cards with the controls
+// between them, which put the reply three screens from the sentence being replied
+// to on a phone — and made answering feel like filing a form rather than talking.
 //
 // Unfolded, because opening a fold is what somebody came here to stop doing.
-function transcript(f, id) {
+function pane(state, f, id, actions) {
   const got = sessionOf(f, id.name);
   return h("article", { class: "card" },
     h("h2", {}, "session"),
     h("div", { class: "body session" },
       ...(got
-        ? sessionBody(got)
+        ? stream(got)
         : [h("p", { class: "muted" },
             id.employed
               ? "employed, but nothing is running — `tend` starts what should be"
-              : "not employed, so there is no session to read")])));
+              : "not employed, so there is no session to read")]),
+      // The prompt is part of the pane, not a card below it. It is the last line
+      // of the conversation, which is where somebody looking for it looks.
+      actions ? compose(state, f, id, actions) : null));
+}
+
+// stream is what the agent said and what it did, as one conversation.
+//
+// Two lists — everything said, then everything done — is what the fold in the
+// fleet list shows, and it is the right shape for a glance. It is the wrong shape
+// for reading: a refusal belongs next to the sentence that provoked it, and an
+// operator scrolling one list to find the moment that matches the other is doing
+// by hand what a timestamp is for.
+//
+// **Merged, never sorted.** Each stream already has its own order and keeps it;
+// what the timestamps decide is only which stream to take the next line from. A
+// transcript entry whose clock disagrees with its neighbours moves by one place
+// instead of leaping to the wrong end of the conversation. And an orc that sends
+// no times at all falls back to the two bands, which is exactly what it used to
+// draw — see protocol.SessionLine.
+function stream(s) {
+  const out = [];
+  if (s.note) out.push(h("p", { class: "warn" }, s.note));
+
+  const said = s.prose || [];
+  const did = s.rows || [];
+  if (said.length === 0 && did.length === 0) {
+    if (!s.prose_available && s.live) {
+      // Told apart from "said nothing": one is an agent that has not spoken, the
+      // other a transcript that could not be read, and they send somebody to
+      // different places.
+      out.push(h("p", { class: "muted" },
+        "no transcript to read — `orc attach --direct` shows the session itself"));
+    } else {
+      out.push(h("p", { class: "muted" }, "nothing recorded yet"));
+    }
+    return out;
+  }
+
+  out.push(h("div", { class: "said" }, ...merge(said, did).map(one)));
+  if (!s.prose_available && s.live && said.length === 0) {
+    out.push(h("p", { class: "muted" },
+      "no transcript to read — `orc attach --direct` shows the session itself"));
+  }
+  return out;
+}
+
+// merge walks two ordered streams and takes whichever is next.
+//
+// Prose with no timestamp cannot be placed, so it goes after the feed rather than
+// into it — the old two-band shape, arrived at per line rather than as a mode.
+function merge(said, did) {
+  const timed = said.filter((p) => p.at);
+  const untimed = said.filter((p) => !p.at);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < timed.length && j < did.length) {
+    out.push(timed[i].at <= (did[j].at || "") ? { said: timed[i++] } : { did: did[j++] });
+  }
+  while (i < timed.length) out.push({ said: timed[i++] });
+  while (j < did.length) out.push({ did: did[j++] });
+  for (const p of untimed) out.push({ said: p });
+  return out;
+}
+
+// one draws whichever kind of thing this is.
+function one(item) {
+  if (item.did) return sessionRow(item.did);
+  const p = item.said;
+  return h("p", { class: p.who === "assistant" ? "from-agent" : "from-human" },
+    h("span", { class: "muted" }, p.who === "assistant" ? "» " : "· "), p.text);
 }
 
 // compose is a box rather than a modal.

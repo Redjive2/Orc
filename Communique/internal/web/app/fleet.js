@@ -181,7 +181,7 @@ function work(f, actions) {
       id.employed
         ? h("button", { class: "quiet", onclick: () => actions.fire(f, id) }, "fire")
         : h("button", { class: "quiet", onclick: () => actions.employ(f, id) }, "employ…"),
-      h("a", { class: "quiet button", href: sessionAt(f.machine, id.name) }, "open"),
+      h("a", { class: "quiet button", href: sessionAt(f.machine, id.name) }, "attach"),
       id.populated ? h("button", { class: "quiet", onclick: () => actions.poke(f, id) }, "poke…") : null,
       id.populated ? h("button", { class: "quiet", onclick: () => actions.refreshAgent(f, id) }, "refresh") : null,
     ) : null,
@@ -451,8 +451,14 @@ export function session(f, id, state, actions) {
   // The fold stays: it is the glance, and most of the time a glance is what a
   // list is for. The link is what it grew a floor under — somewhere to read the
   // whole thing and answer it without losing the words to a dialog.
+  //
+  // "attach", because that is the word orc uses for joining a session and this is
+  // the same act through a different window. It is not the same thing as
+  // `orc attach` and does not pretend to be — what it opens says so in its own
+  // first line — but a fleet with two names for joining an agent would be a fleet
+  // where somebody has to learn which is which.
   const whole = h("p", { class: "muted" },
-    h("a", { href: sessionAt(f.machine || "", id.name) }, "open this session"));
+    h("a", { href: sessionAt(f.machine || "", id.name) }, "attach to this session"));
 
   if (!open) return summary;
   // `session` as well as `inner`, because this fold holds prose and rows rather
@@ -502,7 +508,7 @@ export function sessionBody(s) {
   return out;
 }
 
-function sessionRow(r) {
+export function sessionRow(r) {
   return h("div", { class: r.blocked ? "event blocked" : "event" },
     h("span", { class: "when" }, (r.at || "").slice(11, 19)),
     // The verdict as a word, never only as a colour: this is the column that says
