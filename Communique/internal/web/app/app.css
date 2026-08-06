@@ -420,8 +420,18 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 .cheatsheet .cheat td { padding: 0 2ch .1rem 0; vertical-align: baseline; }
 .cheatsheet .hint { margin: 0; }
 /* A sheet inside a sheet: the words one kind takes. Indented so the nesting is
-   visible when both are open, and quiet when closed, which is most of the time. */
-.cheatsheet .inner { border: none; border-left: 1px solid var(--frame); margin: .4rem 0 0 1ch; }
+   visible when both are open, and quiet when closed, which is most of the time.
+
+   Set in from its own rule for the reason every other fold body is: a list of words
+   whose first letter touches the line marking it reads as pinned to the edge of the
+   sheet rather than as sitting inside it. This one is not a `.folded > .inner` and
+   so takes none of that rule — it is a `<details>`, which is its own machinery. */
+.cheatsheet .inner {
+  border: none;
+  border-left: 1px solid var(--frame);
+  margin: .4rem 0 0 1ch;
+  padding-left: 1.5ch;
+}
 
 /* --- activity ----------------------------------------------------------- */
 
@@ -619,7 +629,20 @@ pre.code {
   line-height: 1.45;
 }
 
-.folded > .inner { border-left: 1px solid var(--frame); margin-left: 1ch; }
+/* A fold's body: a rule marking how deep it is, and the body set in from it.
+
+   The inset is the default rather than the exception, because three of the four
+   things that open into one are *content* — an agent's session, a log, a stored
+   message. Each of those was drawn flat against the rule, with a blocked row's red
+   edge touching the grey one and log lines starting on top of it.
+
+   `.tree` is the fourth and the one that must not have it. In the library an
+   `.inner` holds deeper folds, and every fold carries its own indent already, so a
+   padding here would compound once per level and push a filename five levels down
+   off the side of a phone. Naming the rare case and defaulting the common one is
+   the way round that leaves a new fold correct without anybody remembering. */
+.folded > .inner { border-left: 1px solid var(--frame); margin-left: 1ch; padding-left: 1.5ch; }
+.folded > .inner.tree { padding-left: 0; }
 
 /* The picked row: the one thing whose controls are on screen.
    Marked as well as acted on, so it is obvious which row the buttons underneath
@@ -962,8 +985,13 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   #nav { display: flex; flex-direction: column; }
   #nav .majors { display: contents; }
   #nav .majors > a, #nav .subs { order: var(--order, 0); }
+  /* The open area is marked with a rule down its left. The extra character of
+     padding is what keeps its name off that rule: at the desk width these links
+     have half a character each, which is right for a row and too tight beside a
+     two-pixel bar. */
   #nav .majors > a {
     border-left: 2px solid transparent;
+    padding-left: 1.5ch;
   }
   #nav .majors > a.open { border-left-color: var(--primary); }
   #nav .subs {
@@ -1191,16 +1219,6 @@ html, body { max-width: 100%; overflow-x: hidden; }
 .agent, .agent-head, .clauses, .grants, .grant { min-width: 0; }
 
 /* --- an agent's session ------------------------------------------------- */
-
-/* Set in from the rule that marks the fold, rather than against it.
-
-   `.inner` carries no padding of its own because in the library it is a container
-   for deeper folds — each of which brings its own indent, so padding there would
-   compound once per level. This fold is the bottom of its tree: what is inside is
-   prose and rows, and it was drawn hard against the border, with a blocked row's
-   red edge touching the grey one. Two characters, so the text lands under the
-   fold's own label rather than at an indent of its own invention. */
-.inner.session { padding-left: 2ch; }
 
 /* What `orc view` reported, under the identity it belongs to. The columns line
    up with the rest of the site's tables rather than being their own shape: this

@@ -246,17 +246,17 @@ test("an opened session shows what was said and what was done", () => {
   assert.match(text, /Docs\/Orc\/Reference\.md/, "what the agent did is missing");
 });
 
-// The pane holds prose and rows rather than deeper folds, so it takes an indent of
-// its own — a library fold's inner must not, since every fold inside one brings its
-// own and padding there would compound once per level. Which of the two this is has
-// to be said in the markup, because the stylesheet cannot tell them apart.
-test("an opened session is marked as a pane rather than as more tree", () => {
+// A fold body is set in from the rule that marks it, and the inset is the default:
+// three of the four things that open into one hold content. `tree` is the exception
+// — the library's, whose folds each carry their own indent — so a pane that marked
+// itself one would lose the inset and sit flat against the bar.
+test("an opened session takes the ordinary fold body, not the tree exception", () => {
   const nodes = fleetView.tree({ fleet: [withSession], open: { "session:studio:ember": true } }, null);
   const inners = nodes.flatMap((n) => all(n, (x) => String(x.className).split(/\s+/).includes("inner")));
   assert.ok(inners.length > 0, "the fold drew no body at all");
   for (const el of inners) {
-    assert.ok(String(el.className).split(/\s+/).includes("session"),
-      `a session body was drawn as plain tree: ${el.className}`);
+    assert.ok(!String(el.className).split(/\s+/).includes("tree"),
+      `a session body opted out of the inset: ${el.className}`);
   }
 });
 

@@ -424,7 +424,11 @@ function fold({ key, ctx, depth, label, note, children, controls, onOpen }) {
 
   if (!open) return row;
   return h("div", { class: "folded" }, row,
-    h("div", { class: "inner" }, ...children()));
+    // `tree`, because this one holds deeper folds rather than content. Each fold
+    // carries its own indent, so the inset every other fold body takes would
+    // compound once per level here and push a filename five levels down off the
+    // side of a phone.
+    h("div", { class: "inner tree" }, ...children()));
 }
 
 // crumbs is the header line: what is being read, and how much of it there is.
