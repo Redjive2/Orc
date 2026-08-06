@@ -891,7 +891,10 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
  * breakpoint named after a phone lies the moment somebody resizes. */
 @media (max-width: 40rem) {
   /* A phone is mostly margin at 1.5rem a side. */
-  #chrome { padding: .75rem .5rem 0; }
+  /* The chrome and the content line up. The page gives up its side padding just
+     below, so leaving the navigation inset indented the one thing above the
+     content by half a character of a forty-character screen. */
+  #chrome { padding: .75rem 0 0; }
   /* No side padding at all. The elements that hold text carry their own — cards
      and code do, a little further down — so giving the page a margin as well
      spent a full character of a 40-character screen twice over, once on each
@@ -962,7 +965,7 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   #nav .majors > a {
     border-left: 2px solid transparent;
   }
-  #nav .majors > a[aria-expanded="true"] { border-left-color: var(--primary); }
+  #nav .majors > a.open { border-left-color: var(--primary); }
   #nav .subs {
     flex-direction: column;
     align-items: stretch;
@@ -1120,11 +1123,24 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
      `body` has `overflow-x: hidden`, so the old failure was quiet: the figures
      were not scrolled off, they were gone, with nothing to say they had been
      there. */
-  .event { grid-template-columns: 9ch minmax(0, 1fr); }
   .survey { grid-template-columns: minmax(0, 1fr) 4ch 6ch 4ch; }
   .grid.users { grid-template-columns: minmax(0, 1fr); }
   .row, .task, .work-row, .gen-row, .event, .survey { min-width: 0; }
-  .row > *, .task > *, .work-row > *, .gen-row > *, .event > *, .survey > * { min-width: 0; }
+  .row > *, .task > *, .work-row > *, .gen-row > *, .event > *, .survey > * {
+    min-width: 0;
+    /* And a word with nowhere to break in it breaks anyway. `min-width: 0` lets
+       the track shrink, which stops the row pushing the page sideways — but the
+       word inside it then runs past the cell and is clipped, which is the failure
+       these columns were widened to prevent, arriving by another route. A subject
+       line of one long token is the ordinary case: a URL, a branch name, a path.
+
+       `break-word` rather than `anywhere`, and the difference is the whole reason
+       to write it down. `anywhere` counts toward the smallest size a column can
+       be, so a grid is free to give a cell one character — which it did, and
+       `open` came out down the side of the screen a letter at a time. This breaks
+       a word that would otherwise overflow and leaves the measuring alone. */
+    overflow-wrap: break-word;
+  }
 
   /* And anything that still will not fit scrolls inside its own box rather than
      taking the page with it — the rule `.clause` has followed all along. */
@@ -1218,7 +1234,13 @@ html, body { max-width: 100%; overflow-x: hidden; }
 
 @media (max-width: 40rem) {
   /* The columns stop being columns: at this width a four-column grid gives the
-     detail six characters, which is not a detail. */
-  .event { grid-template-columns: 9ch 1fr; }
+     detail six characters, which is not a detail.
+
+     `minmax(0, 1fr)` rather than `1fr`: a track's default minimum is its content,
+     so one unbroken path made the row wider than the phone and the rest was
+     clipped away with nothing to say it had been there. This block is second, so
+     it is the one that decides — a rule for `.event` in the block above is
+     overridden and does nothing. */
+  .event { grid-template-columns: 9ch minmax(0, 1fr); }
   .event .tool, .event .detail, .event .why { grid-column: 2 / -1; }
 }

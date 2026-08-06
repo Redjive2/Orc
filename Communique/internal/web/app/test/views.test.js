@@ -910,3 +910,66 @@ test("without a menu the navigation is what it was", () => {
   assert.ok(after.includes("mail"), "the areas went missing");
   assert.ok(before.split("logout")[0].trim().length > 0, "the old form drew nothing");
 });
+
+// `state.menu` can name an area that has since gone: `--no-admin` empties two of
+// them, and the flag arrives with a sync. The menu then telescoped an area nobody
+// could see, and left an empty indented block behind the *first* area — because
+// the open one had no slot for the sub-tabs to follow.
+test("a telescoped area nobody can see leaves nothing behind", () => {
+  const list = navOf({ ...state, adminEnabled: false, menu: "admin" }, "/mail/inbox", idle);
+  assert.equal(within(list, (n) => n.className === "subs").length, 0,
+    "an area with no visible sub-tabs still drew a row");
+  // And the areas that are there are unharmed.
+  assert.match(text(list), /mail/);
+});
+
+// One rendering serves both widths, so an area link cannot know whether it is a
+// row in a menu or a link in a bar. `aria-expanded` on a desktop link that expands
+// nothing is a promise to a screen reader the page does not keep — and it was on
+// every area. The button that does expand something says so itself.
+test("only the control that expands something claims to", () => {
+  const list = navOf({ ...state, adminEnabled: true, menu: "mail" }, "/mail/inbox", idle);
+  const claiming = within(list, (n) => n.tagName === "A" && n.getAttribute("aria-expanded") !== null);
+  assert.equal(claiming.length, 0, "a link claimed to expand something");
+
+  const button = menuButton(list);
+  assert.equal(button.getAttribute("aria-expanded"), "true", "the menu button says nothing");
+  // And it does not claim to control the region it is inside.
+  assert.equal(button.getAttribute("aria-controls"), null,
+    "the button points at an element it is a child of");
+});
+
+// The open area is marked for the stylesheet, which is what draws the rule beside
+// it. Losing that would make the telescope open with nothing saying which area it
+// belongs to.
+test("the telescoped area is marked", () => {
+  const list = navOf({ ...state, menu: "tooling" }, "/mail/inbox", idle);
+  const open = within(list, (n) => n.tagName === "A" && String(n.className).includes("open"));
+  assert.equal(open.length, 1, "the open area is not marked, or more than one is");
+  assert.match(open[0].textContent, /tooling/);
+});
+
+// A detail screen — a message, a task, a session — is reached by tapping a row,
+// and `routes.resolve` matches none of them. The button opened onto null there,
+// which is the value that means closed: it did nothing at all on exactly the
+// screens somebody most wants to leave.
+test("the menu opens from a detail screen", () => {
+  let asked = "unset";
+  const list = navOf({ ...state, menu: null }, "/message/41",
+    { menu: (major) => { asked = major; } });
+  const button = menuButton(list);
+  assert.match(button.textContent, /menu/, "it should still offer a way out");
+  click(button);
+  assert.ok(asked, `it opened onto ${JSON.stringify(asked)}, which closes it`);
+});
+
+// And it opens onto an area that is there. `--no-admin` empties two, so the first
+// area is a question rather than a constant.
+test("it opens onto an area that exists", () => {
+  let asked;
+  const list = navOf({ ...state, adminEnabled: false, menu: null }, "/message/41",
+    { menu: (major) => { asked = major; } });
+  click(menuButton(list));
+  const shown = text(navOf({ ...state, adminEnabled: false, menu: asked }, "/message/41", idle));
+  assert.match(shown, new RegExp(asked), "it opened onto an area that is not on screen");
+});

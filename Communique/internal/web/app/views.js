@@ -832,6 +832,10 @@ export function nav(state, route, actions) {
   // `display: contents`, every link becomes a child of the nav directly, and these
   // numbers order them. Two apart, so the sub-tabs have an odd number to sit on.
   let place = 0;
+  // Where the open area landed, and whether it is on screen at all. `state.menu`
+  // can name an area that has since gone — `--no-admin` empties two of them — and
+  // an area nobody can see must not leave an empty indented block behind it.
+  let openAt = -1;
   const majors = [];
   for (const area of routes.AREAS) {
     const subs = routes.visible(area, state);
@@ -839,11 +843,11 @@ export function nav(state, route, actions) {
     if (subs.length === 0) continue;
     const at = place;
     place += 2;
+    if (area.major === open) openAt = at;
     majors.push(tab(routes.home(area.major, state), area.major,
       routes.areaCount(area, state), area.major === current, {
-        expanded: area.major === open,
+        open: area.major === open,
         order: at,
-        openAt: area.major === open ? at : null,
         // Expand rather than navigate, but only while the menu is open. A tap on a
         // desktop is a link and does what a link does — middle click, open in a new
         // tab, copy the address — and none of that is taken away to make a phone
@@ -854,15 +858,14 @@ export function nav(state, route, actions) {
       }));
   }
 
-  // Which slot the open area took, for the sub-tabs to follow it into.
-  const openAt = majors.reduce((found, el) => {
-    const at = el.getAttribute("data-open-at");
-    return at === null || at === undefined ? found : Number(at);
-  }, 0);
-
   const rows = [];
   if (actions) {
-    rows.push(hamburger(state, here, actions));
+    // The area the button opens onto when there is no current one, which is every
+    // detail screen: a message, a task, a session. `routes.resolve` matches nothing
+    // there, so the button used to open onto null — that is, it closed a menu that
+    // was already closed, and did nothing at all on exactly the screens somebody
+    // reaches by tapping a row and then wants to leave.
+    rows.push(hamburger(state, here, firstArea(state), actions));
   }
   rows.push(h("div", { class: "majors" }, ...majors,
     h("span", { class: "spacer" }),
@@ -874,7 +877,10 @@ export function nav(state, route, actions) {
       onclick: (e) => { e.preventDefault(); logout(); },
     }, "logout")));
 
-  const area = routes.AREAS.find((a) => a.major === open);
+  // Only for an area that is actually on screen. An area whose sub-tabs are all
+  // hidden used to render an empty row, indented under nothing, at the slot after
+  // the first area — because the open one had no slot to follow.
+  const area = openAt >= 0 ? routes.AREAS.find((a) => a.major === open) : null;
   if (area) {
     rows.push(h("div", { class: "subs", style: { "--order": openAt + 1 } },
       ...routes.visible(area, state).map((s) =>
@@ -892,30 +898,43 @@ export function nav(state, route, actions) {
 // It says where the reader is, because the rows that used to say so are hidden
 // behind it. A control that only draws three lines makes somebody open it to find
 // out what they are looking at.
-function hamburger(state, here, actions) {
+function hamburger(state, here, fallback, actions) {
   const open = Boolean(state.menu);
   const where = here ? here.major + " / " + here.sub : "menu";
   return h("button", {
     class: "hamburger",
     "aria-expanded": open ? "true" : "false",
-    "aria-controls": "nav",
     // The name is how focus survives a redraw: the whole nav is re-mounted every
     // sync, and focus.restore finds an element by its name attribute.
     name: "menu",
-    onclick: () => actions.menu(open ? null : (here ? here.major : null)),
+    onclick: () => actions.menu(open ? null : (here ? here.major : fallback)),
   },
     h("span", { class: "twist" }, open ? "▾" : "▸"),
     h("span", { class: "where" }, where));
+}
+
+// firstArea is the area a menu opens onto when the route names none. It is the
+// first one an operator can actually see, which `--no-admin` makes a question
+// worth asking rather than assuming.
+function firstArea(state) {
+  for (const area of routes.AREAS) {
+    if (routes.visible(area, state).length > 0) return area.major;
+  }
+  return null;
 }
 
 function tab(href, label, n, current, opts = {}) {
   return h("a", {
     href: "#" + href,
     "aria-current": current ? "page" : null,
-    // Written only where it means something. An area that can telescope says
-    // whether it is open; a sub-tab is a destination and has nothing to expand.
-    "aria-expanded": opts.expanded === undefined ? null : String(opts.expanded),
-    "data-open-at": opts.openAt === null || opts.openAt === undefined ? null : String(opts.openAt),
+    // A class rather than `aria-expanded`.
+    //
+    // One rendering serves both widths, so this element cannot know whether it is
+    // a row in a menu or a link in a bar. `aria-expanded` on a desktop link that
+    // expands nothing is a promise to a screen reader that the page does not keep,
+    // and it was on all five areas. The one control that does expand something —
+    // the menu button — says so itself; this only needs to be styled.
+    class: opts.open ? "open" : null,
     style: opts.order === undefined ? null : { "--order": opts.order },
     onclick: opts.onclick || null,
   }, label, n > 0 ? h("span", { class: "count" }, ` ${n}`) : null);

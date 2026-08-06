@@ -1,8 +1,10 @@
 package web_test
 
 import (
+	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -234,5 +236,51 @@ func TestNarrowContentUsesTheWidth(t *testing.T) {
 	if !strings.Contains(narrow, "minmax(0, 1fr)") {
 		t.Error("no grid column can shrink below its content, so a long name still " +
 			"pushes the row wider than the phone")
+	}
+}
+
+// TestNoNarrowRuleIsOverriddenByAnother.
+//
+// There are two `@media (max-width: 40rem)` blocks, and the second wins. A
+// selector written in both is a rule that looks applied and is not — which is how
+// `.event` kept a `1fr` column after being given `minmax(0, 1fr)`, and how the
+// clipping that change was meant to stop went on happening.
+//
+// A stylesheet has no way to say a rule was overridden, so this asks directly.
+func TestNoNarrowRuleIsOverriddenByAnother(t *testing.T) {
+	css := read(t, "app/app.css")
+	narrow := css[strings.Index(css, "@media (max-width: 40rem)"):]
+
+	// Per block, not per file. Two rules for one selector *inside* a block both
+	// apply — they set different properties and that is ordinary. The pair that
+	// bites is one selector in both blocks, where the second decides and the first
+	// reads as though it did.
+	//
+	// One-selector rules only. A grouped selector legitimately restates part of
+	// another, and the exact repeat is what is worth catching.
+	rule := regexp.MustCompile(`(?m)^\s{2}([.#][A-Za-z0-9_.#>-]*)\s*\{`)
+	blocks := strings.Split(narrow, "@media (max-width: 40rem)")
+	seen := map[string]int{}
+	for _, block := range blocks {
+		here := map[string]bool{}
+		for _, match := range rule.FindAllStringSubmatch(block, -1) {
+			here[match[1]] = true
+		}
+		for selector := range here {
+			seen[selector]++
+		}
+	}
+
+	var twice []string
+	for selector, n := range seen {
+		if n > 1 {
+			twice = append(twice, fmt.Sprintf("%s (in %d blocks)", selector, n))
+		}
+	}
+	sort.Strings(twice)
+	if len(twice) > 0 {
+		t.Errorf("these selectors are written in more than one narrow block, so the earlier "+
+			"one does nothing:\n  %s\nkeep one definition, in the block that wins",
+			strings.Join(twice, "\n  "))
 	}
 }
