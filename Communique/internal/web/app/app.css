@@ -484,6 +484,38 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
 }
 .window { margin: .6rem 0 .3rem; }
 
+/* Who generated what, as a share of the machine's total.
+
+   A grid rather than a flex row so the bars line up down the column: the whole
+   point of the panel is comparing one row against another, and bars that started
+   at a different x for every name would be a chart nobody can read. `1fr` for the
+   bar and fixed columns either side, so a long agent name does not shorten the
+   thing being compared. */
+.gen { display: grid; gap: .15rem; margin: .3rem 0; }
+.gen-row {
+  display: grid;
+  grid-template-columns: 12ch minmax(4ch, 1fr) 5ch 11ch 10ch 8ch 8ch 8ch;
+  gap: 0 1ch;
+  align-items: baseline;
+}
+/* The money column. Right-aligned so the magnitudes line up down the column —
+   the comparison is the point, and ragged figures defeat it. */
+.gen-row > :last-child { text-align: right; }
+/* What it came to, under the rows it was computed from. Not `warn` and not
+   `ok`: a cost is a fact, and colouring it would be this page having an opinion
+   about somebody's spending. */
+.spend { margin: .35rem 0 .2rem; color: var(--text); font-size: .9em; }
+/* Painted, not sized — the same reason the vertical bars are. A gradient stop
+   resolves against the element's own box, which nothing here leaves undefined. */
+.gen-bar {
+  align-self: center;
+  height: .7rem;
+  min-width: 0;
+  border-radius: 2px;
+  background-color: var(--frame);
+}
+.gen-share { text-align: right; color: var(--text); }
+
 /* What it came to. Four figures on one row and a sentence under them: the caveat
    is part of the reading, not a footnote, because a number that looks like a
    ranking will be read as one unless something says otherwise. */
@@ -870,6 +902,23 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   .controls.row button,
   .fold-row > .controls.row button { font-size: 1em; padding: .3rem 1ch; }
   .fold-row > .controls.row { gap: 1ch; }
+
+  /* The activity tables stop being tables.
+
+     Both of these are fixed character columns adding up to nearly sixty, which
+     is more than twice a phone's width — so on a narrow screen they either force
+     the page sideways or, because the body clips it, get quietly cut off with no
+     sign that a column is missing. The name and its bar keep the top line, since
+     that is the comparison the panel is for, and the figures wrap underneath
+     where there is room to read them. */
+  .gen-row {
+    grid-template-columns: 12ch minmax(4ch, 1fr) 5ch;
+    row-gap: .1rem;
+    padding-bottom: .35rem;
+  }
+  .gen-row > :nth-child(n+4) { grid-column: span 1; font-size: .9em; }
+  .work-row { grid-template-columns: repeat(3, 1fr); row-gap: .1rem; padding-bottom: .35rem; }
+  .work-row > .name { grid-column: 1 / -1; }
 
   button, button.quiet, button.fold {
     min-height: 44px;

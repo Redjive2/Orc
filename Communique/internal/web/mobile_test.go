@@ -107,3 +107,22 @@ func TestTheFoldIndentIsAStylesheetDecision(t *testing.T) {
 		t.Error("app.css does not use the depth it is given")
 	}
 }
+
+// TestTheActivityTablesFoldOnAPhone: both are fixed character grids that add up
+// to far more than a phone is wide.
+//
+// The failure is quiet, which is why it is worth a test. `body` has
+// `overflow-x: hidden`, so a row too wide to fit is not a page that scrolls
+// sideways — it is a row whose last columns are cut off with nothing to say they
+// were there. A reader sees four figures and has no way to know there were six.
+func TestTheActivityTablesFoldOnAPhone(t *testing.T) {
+	css := read(t, "app/app.css")
+	narrow := css[strings.Index(css, "@media (max-width: 40rem)"):]
+
+	for _, row := range []string{".gen-row", ".work-row"} {
+		if !strings.Contains(narrow, row+" {") && !strings.Contains(narrow, row+",") {
+			t.Errorf("%s keeps its desktop columns on a narrow screen, so its last "+
+				"figures are clipped away without a sign", row)
+		}
+	}
+}

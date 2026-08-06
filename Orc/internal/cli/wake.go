@@ -186,14 +186,6 @@ func (w *waker) once(verbose bool) error {
 			continue
 		}
 
-		if w.paused(s, who) {
-			// Not woken, and not counted as quiet either: an agent nobody is
-			// waking is a decision somebody made, and a summary that folded it in
-			// with the working ones would hide the decision.
-			paused++
-			continue
-		}
-
 		got, err := w.consider(s, who)
 		if err != nil {
 			// One unreadable session is not a reason to stop waking the rest: a
@@ -214,6 +206,8 @@ func (w *waker) once(verbose bool) error {
 			dead++
 		case limited:
 			waiting++
+		case pausedWake:
+			paused++
 		default:
 			quiet++
 		}
@@ -225,7 +219,7 @@ func (w *waker) once(verbose bool) error {
 		// that is not running at all is something to say.
 		return nil
 	}
-	return w.report(woke, stuck, quiet, dead, waiting, len(targets))
+	return w.report(woke, stuck, quiet, dead, waiting, paused, len(targets))
 }
 
 // outcome is what a pass decided about one identity.
@@ -245,6 +239,15 @@ const (
 	// the clock is the thing to wait for; the same three counted as stuck would send
 	// them to `orc doctor` to look for a fault that is not there.
 	limited
+	// pausedWake: nobody is waking this one.
+	//
+	// Its own outcome rather than a `continue` before the checks, because the pause
+	// is about *poking* and not about the rest. An agent whose waking is off can
+	// still be employed with no session, and that is the cycle's other job — so the
+	// pause is consulted after the not-running branch, and `wake --tend` starts it
+	// exactly as it would any other. Turning off the nudges is not a request to let
+	// the agent stay down.
+	pausedWake
 	// down: the fleet says it should be running and it is not.
 	//
 	// Not this cycle's job to fix — `tend` reconciles, and two things reconciling
@@ -285,6 +288,12 @@ func (w *waker) consider(s caller, who user.Name) (outcome, error) {
 		// the nudge `tend` may already have sent would be two messages for one gap.
 		return down, w.app.say(fmt.Sprintf("%s %s   %s", w.app.out.Good("started"),
 			w.app.out.Identity(who.String()), w.app.out.Muted("it was employed with no session")))
+	}
+
+	// Running, and nobody is waking it. Nothing below this line is about anything
+	// but poking, so this is where the pause belongs.
+	if w.paused(s, who) {
+		return pausedWake, nil
 	}
 
 	feed, err := view.Load(s.store.EventsPath(who), who)
@@ -439,7 +448,13 @@ func (w *waker) limited(s caller, who user.Name, limit view.Limit, session strin
 	if !limit.Known() {
 		// Unknown reset: treat the limit as an ordinary silence, measured from when
 		// it was hit, and let the mark below stop it becoming a stream of nudges.
-		if quiet := now.Sub(limit.At); quiet >= w.quiet {
+		//
+		// Against `after`, not the raw threshold. This read `w.quiet` — the fleet
+		// default or the flag — which meant an agent with its own pace was measured
+		// by somebody else's number on this one path and by its own everywhere
+		// else. An agent paced to two hours was poked at ten minutes; one paced
+		// tighter than the fleet was left sitting.
+		if quiet := now.Sub(limit.At); quiet >= w.after(s, who) {
 			mark, marked := w.woken[who.String()]
 			if !marked {
 				mark, marked = s.store.Woken(who, session)
@@ -521,14 +536,23 @@ func silence(feed view.Session, started, now time.Time) (last string, quiet time
 }
 
 // report says what the pass came to.
-func (w *waker) report(woke, stuck, quiet, dead, waiting, total int) error {
+func (w *waker) report(woke, stuck, quiet, dead, waiting, paused, total int) error {
 	if total == 0 {
 		return w.app.say(w.app.out.Muted("nothing is employed, so nothing can be silent"))
 	}
 	if woke == 0 && stuck == 0 && dead == 0 && waiting == 0 {
+		said := fmt.Sprintf("%d session%s, none silent for %s",
+			quiet, plural(quiet), round(w.quiet))
+		// Counted and then dropped, before: a fleet of eight with three paused
+		// reported "all working — 5 sessions", and the three nobody was waking were
+		// not in the line at all. Which is the decision this is supposed to make
+		// visible — an agent nobody is waking looks exactly like a healthy one
+		// until something says otherwise.
+		if paused > 0 {
+			said += fmt.Sprintf(" · %d not being woken", paused)
+		}
 		return w.app.say(fmt.Sprintf("%s   %s", w.app.out.Good("all working"),
-			w.app.out.Muted(fmt.Sprintf("%d session%s, none silent for %s",
-				quiet, plural(quiet), round(w.quiet)))))
+			w.app.out.Muted(said)))
 	}
 
 	line := fmt.Sprintf("%s of %d", w.app.out.Good(fmt.Sprintf("woke %d", woke)), total)
@@ -540,6 +564,9 @@ func (w *waker) report(woke, stuck, quiet, dead, waiting, total int) error {
 	}
 	if stuck > 0 {
 		line += fmt.Sprintf("   %s", w.app.out.Warn(fmt.Sprintf("%d still silent after a wake", stuck)))
+	}
+	if paused > 0 {
+		line += fmt.Sprintf("   %s", w.app.out.Muted(fmt.Sprintf("%d not being woken", paused)))
 	}
 	// Not running is worse than silent and is said last, where a reader's eye
 	// finishes: a woken fleet with one agent down is not a healthy fleet.
@@ -667,5 +694,5 @@ func (w *waker) interval(given time.Duration) time.Duration {
 	if err != nil {
 		return given
 	}
-	return s.store.FleetPacing().WakeEvery.Duration(given)
+	return atLeast(s.store.FleetPacing().WakeEvery.Duration(given), MinWatch, given)
 }

@@ -767,3 +767,53 @@ func TestAWorkspaceIsAbsoluteOnItsOwnMachine(t *testing.T) {
 		}
 	}
 }
+
+// An action the agent assembles itself must satisfy the same envelope as one the
+// server queued.
+//
+// agent.reconcilePace builds one locally to put a fleet's pace back, and built it
+// with no id and no queue time — so `source.Apply`, which validates the whole
+// envelope before it looks at the verb, refused every single one. The correction
+// had never once run; it logged "could not put the fleet's pace back" on every
+// sync instead.
+func TestALocallyBuiltActionValidates(t *testing.T) {
+	id, err := protocol.NewActionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := id.Validate(); err != nil {
+		t.Fatalf("a freshly minted id does not validate: %v", err)
+	}
+
+	action := protocol.Action{
+		ID: id, Machine: "studio", Op: protocol.OpOrcPace,
+		Args: protocol.Args{Cycle: "wake", After: "20m"}, Queued: at,
+	}
+	if err := action.Validate(); err != nil {
+		t.Errorf("a locally assembled pace correction was refused: %v", err)
+	}
+
+	// The exact shape that was being sent, so the failure is recorded rather than
+	// only fixed: no id, no queue time.
+	bare := protocol.Action{Machine: "studio", Op: protocol.OpOrcPace,
+		Args: protocol.Args{Cycle: "wake", After: "20m"}}
+	if err := bare.Validate(); err == nil {
+		t.Error("an action with no id and no queue time was accepted")
+	}
+}
+
+// Two mints are two ids. A fixed one would make every correction look like a
+// repeat of the last to anything keying on the id.
+func TestMintedActionIDsDiffer(t *testing.T) {
+	seen := map[protocol.ActionID]bool{}
+	for range 64 {
+		id, err := protocol.NewActionID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[id] {
+			t.Fatalf("minted the same id twice: %s", id)
+		}
+		seen[id] = true
+	}
+}

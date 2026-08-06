@@ -54,6 +54,10 @@ let state = {
   // rather than a form value because changing it is a *fetch*: the server bounds
   // what it will hand over, so the browser cannot widen a chart it already has.
   activity: null, activityWindow: "48h",
+  // Which agent the activity charts are drawn for; empty is the whole machine.
+  // Unlike the window this is a *filter* — the route already answers per identity,
+  // so every agent's series is already here and choosing one costs no request.
+  activityWho: "",
   // How often the server asks to be synced. Held here rather than read out of the
   // form that sets it: it is the third of the three cycles the tab reports, and one
   // nobody could see without opening a dialog was one they could not check.
@@ -524,6 +528,12 @@ const actions = {
     set({ activityWindow: window });
     await refresh();
   },
+  // Whose series the charts show. A filter over what the browser already holds, so
+  // it redraws without going near the server — the same reason `setChartScale`
+  // below does not refresh either.
+  setActivityWho(who) {
+    set({ activityWho: who || "" });
+  },
   // The y-axis ceiling, per chart. Unlike the window this is not a fetch — the
   // values are already here and only the scale they are drawn against changes, so
   // it redraws without going near the server.
@@ -623,15 +633,30 @@ const actions = {
       // belongs on `until`, which is the only field that actually uses it.
       check: "pace.sync", required: false,
       note: `how often each machine mirrors. empty leaves every watcher at whatever ` +
-        `it was started with; the shortest is ${now.floor || "10s"}.`,
+        `it was started with; the shortest is ${now.floor || "10s"}. this is not a ` +
+        `queued action — the server holds it and each machine picks it up when it ` +
+        `next syncs, so nothing will appear in the queue.`,
       submit: "set it",
     });
     if (got === null) return;
-    await run(async () => {
-      const said = await api.setSyncPace(got.trim());
-      // Said rather than implied: nothing changes on any machine until its watcher
-      // next asks, and a form that reported "done" would be claiming otherwise.
-      return said;
+
+    // The server's answer is shown rather than dropped.
+    //
+    // `run` returns a boolean and discards whatever the call produced, so the note
+    // this asked for — "each machine picks this up on its next sync" — went
+    // nowhere, and the comment claiming it was "said rather than implied" was
+    // describing an intention rather than the code. With nothing said here and
+    // nothing in the queue either, because this is a setting and not an action,
+    // setting a sync interval looked exactly like setting one that failed.
+    let said = null;
+    const ok = await run(async () => { said = await api.setSyncPace(got.trim()); });
+    if (!ok) return;
+    dialog.show({
+      title: "sync every",
+      text: said && said.watch
+        ? `every machine will mirror every ${said.watch}.`
+        : "every machine keeps whatever interval its watcher was started with.",
+      note: (said && said.note) || "each machine picks this up on its next sync",
     });
   },
   async pauseCycle(f, cycle, who, off) {

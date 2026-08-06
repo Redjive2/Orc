@@ -72,6 +72,38 @@ type Reply struct {
 // either way the session should not keep a goroutine for it.
 const HandshakeDeadline = 5 * time.Second
 
+// ReplyDeadline bounds how long a *client* waits for the answer to a request.
+//
+// A separate number from HandshakeDeadline, which it used to share, and the two
+// were never measuring the same thing. The handshake bounds a server waiting for
+// somebody to say something — a stuck client, a port scan — and five seconds is
+// generous for that. This bounds a client waiting for the server to finish
+// *working*, and the work behind OpPoke is the confirmation ladder: up to three
+// waits of ConfirmWithin, 4.5 seconds, before the reply is written.
+//
+// Sharing one five-second constant left half a second of margin over a 4.5-second
+// worst case, with every feed parse and pty write inside it — and the failure past
+// that margin is the bad one. `ask` returns fault.Unavailable when the reply read
+// times out, `transient` reads that as "not yet", and keepTrying **sends the whole
+// message again**: a poke that was slow but perfectly successful is delivered
+// twice, to an agent that then acts on it twice. Everything in `confirm` is built
+// to avoid exactly that — its rungs are ordered so a merely-unsent message is
+// never re-typed — and a client-side retry walked straight past it.
+//
+// So it is derived from the ladder rather than picked, and pinned by a test. A
+// client that waits too long costs one slow command; a client that gives up too
+// early costs a duplicated instruction.
+var ReplyDeadline = WorstConfirm() + 3*time.Second
+
+// WorstConfirm is the longest Supervisor.Poke can spend before it replies.
+//
+// Every rung of the ladder waits ConfirmWithin, and so does the check after the
+// last one — see confirm. Computed from `retries` rather than written down, so
+// adding a rung cannot silently push the server past what the client will wait.
+func WorstConfirm() time.Duration {
+	return time.Duration(len(retries)+1) * ConfirmWithin
+}
+
 // serve accepts connections until the listener closes.
 func (s *Supervisor) serve(l net.Listener) {
 	for {
@@ -268,7 +300,10 @@ func (c *Client) ask(req Request) (Reply, error) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	if err := conn.SetReadDeadline(time.Now().Add(HandshakeDeadline)); err != nil {
+	// The client's own bound, not the server's handshake — see ReplyDeadline. This
+	// has to outlast the work behind the request, and for a poke that work is the
+	// confirmation ladder.
+	if err := conn.SetReadDeadline(time.Now().Add(ReplyDeadline)); err != nil {
 		return Reply{}, err
 	}
 	line, err := reader.ReadBytes('\n')

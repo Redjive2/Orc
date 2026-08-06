@@ -702,3 +702,255 @@ test("a bar carries no percentage height for a browser to disagree about", () =>
     assert.match(String(style.background), /linear-gradient/);
   }
 });
+
+// --- who is generating ----------------------------------------------------
+
+// The charts above answer "what did this machine do over time", each fitted to
+// its own maximum. They cannot answer "whose spend was that" — two agents drawn
+// at the same height with different numbers under them is the whole problem — so
+// the panel below is a share of one total, which compares by construction.
+
+// A bucket, with only the counters a test cares about.
+function spent(at, tokens, turns = 1) {
+  return { at, turns, tokens };
+}
+
+const twoAgents = {
+  ember: [spent("2026-07-27T10:00:00Z", { input: 100, output: 900, cache_create: 0, cache_read: 50000 }, 3)],
+  quill: [spent("2026-07-27T10:00:00Z", { input: 50, output: 200, cache_create: 0, cache_read: 10 }, 1)],
+};
+
+test("each agent's share of the machine's tokens is drawn and named", () => {
+  const got = text(view.activity(withSeries(twoAgents), null));
+
+  assert.match(got, /who is generating/);
+  // 1000 of 1250 and 250 of 1250.
+  assert.match(got, /80%/);
+  assert.match(got, /20%/);
+  // The figures are beside the bar, because a share is a proportion of an amount
+  // nobody has been told yet — and because length must never be the only thing
+  // carrying a number.
+  assert.match(got, /1000 new/);
+  assert.match(got, /900 out/);
+});
+
+// Cache reads are excluded on purpose: they run orders of magnitude larger, so a
+// row that included them would be a reading of context size wearing the name of
+// spend. ember's 50 000 cache reads must not move its share.
+test("the share is new tokens, not context size", () => {
+  const got = text(view.activity(withSeries(twoAgents), null));
+  assert.match(got, /80%/);
+  assert.doesNotMatch(got, /9[89]%/);
+});
+
+// Biggest first: a fleet of twenty is read from the top, and the row worth acting
+// on should not be the one somebody scrolls to.
+test("the heaviest agent is at the top", () => {
+  const drawn = view.activity(withSeries({
+    small: [spent("2026-07-27T10:00:00Z", { output: 10 })],
+    huge: [spent("2026-07-27T10:00:00Z", { output: 9000 })],
+  }), null);
+  // The agents table specifically: the models table below it draws identical rows.
+  const table = drawn.flatMap((n) => all(n, (x) => x.className === "gen agents"))[0];
+  const rows = all(table, (x) => x.className === "gen-row");
+  const names = rows.map((r) => all(r, (x) => x.className === "name")[0].textContent);
+  assert.deepEqual(names, ["huge", "small"]);
+});
+
+test("a window with no generation says so rather than drawing an empty bar", () => {
+  const got = text(view.activity(withSeries({ ember: [] }), null));
+  assert.match(got, /nothing was generated in this window/);
+});
+
+// --- picking one agent ----------------------------------------------------
+
+test("the charts can be drawn for one agent, and say whose", () => {
+  const state = { ...withSeries(twoAgents), activityWho: "quill" };
+  const drawn = view.activity(state, null);
+  const picked = drawn.flatMap((n) =>
+    all(n, (x) => x.tagName === "BUTTON" && x.attributes.get("aria-pressed") === "true"));
+  assert.ok(picked.some((b) => b.textContent === "quill"), "the chosen agent is marked pressed");
+});
+
+// The axis stays the machine's. An agent that worked ten minutes of a two-day
+// window is ten busy minutes in two quiet days, and an axis fitted to its own
+// buckets would redraw those ten minutes as the whole chart.
+test("choosing an agent narrows the bars, not the window", () => {
+  const everyone = slots(view.activity(withSeries(twoAgents), null));
+  const one = slots(view.activity({ ...withSeries(twoAgents), activityWho: "quill" }, null));
+  assert.equal(one.length, everyone.length);
+});
+
+// A name that has since gone quiet is not a chart with somebody else's numbers
+// under it.
+test("an agent that is no longer in the series falls back to everyone", () => {
+  const state = { ...withSeries(twoAgents), activityWho: "long-gone" };
+  const drawn = view.activity(state, null);
+  const pressed = drawn.flatMap((n) =>
+    all(n, (x) => x.tagName === "BUTTON" && x.attributes.get("aria-pressed") === "true"));
+  assert.ok(pressed.some((b) => b.textContent === "everyone"));
+});
+
+test("picking an agent hands the name to the action", () => {
+  const picked = [];
+  const drawn = view.activity(withSeries(twoAgents),
+    { setActivityWindow() {}, setActivityWho: (who) => picked.push(who), poke() {} });
+  const buttons = drawn.flatMap((n) => all(n, (x) => x.tagName === "BUTTON" && x.textContent === "quill"));
+  assert.equal(buttons.length, 1, "one button per agent");
+  buttons[0].listeners.click.forEach((fn) => fn({}));
+  assert.deepEqual(picked, ["quill"]);
+});
+
+// A row that did work must never read as 0%. Rounding puts every small agent
+// there, and a share of nothing beside a figure of something is a row
+// contradicting itself.
+test("a small share reads as under one percent, not as none", () => {
+  const got = text(view.activity(withSeries({
+    whale: [spent("2026-07-27T10:00:00Z", { output: 1000000 })],
+    minnow: [spent("2026-07-27T10:00:00Z", { output: 1200 })],
+  }), null));
+  assert.match(got, /<1%/);
+  assert.doesNotMatch(got, /\b0%/);
+  // And the absolute figure is still there, because that is the reading a share
+  // this small cannot carry.
+  assert.match(got, /1200 new/);
+});
+
+// --- what it ran on -------------------------------------------------------
+
+// The per-agent panel says whose spend it was; this says what it was spent on,
+// which is the half with an action attached. Both come from the same buckets —
+// orc has always keyed its rollups on model and effort — and nothing showed it.
+
+function onModel(at, model, effort, tokens, turns = 1) {
+  return { at, turns, model, effort, tokens };
+}
+
+// models is the models table alone. Assertions about it have to be scoped: the
+// live agent rows above print their own model and effort, so a page-wide match
+// for "opus" passes on the wrong element.
+function models(drawn) {
+  return drawn.flatMap((n) => all(n, (x) => x.className === "gen models"))[0];
+}
+
+function agentsTable(drawn) {
+  return drawn.flatMap((n) => all(n, (x) => x.className === "gen agents"))[0];
+}
+
+const mixed = {
+  ember: [
+    onModel("2026-07-27T10:00:00Z", "opus", "high", { output: 800 }, 4),
+    onModel("2026-07-27T11:00:00Z", "sonnet", "medium", { output: 200 }, 2),
+  ],
+  quill: [onModel("2026-07-27T10:00:00Z", "sonnet", "medium", { output: 1000 }, 1)],
+};
+
+test("spend is split by model and effort, and the pair is named together", () => {
+  const got = text(view.activity(withSeries(mixed), null));
+  assert.match(got, /what it ran on/);
+  assert.match(got, /opus\/high/);
+  assert.match(got, /sonnet\/medium/);
+  // sonnet is 1200 of 2000 across both agents, opus 800.
+  assert.match(got, /60%/);
+  assert.match(got, /40%/);
+});
+
+// Picking an agent turns it into that agent's own mix, which is the pairing worth
+// having: whose spend, then what they spent it on.
+test("the models table follows the agent selection", () => {
+  const drawn = view.activity({ ...withSeries(mixed), activityWho: "quill" }, null);
+  assert.match(text(drawn), /what quill ran on/);
+  // Scoped to the table: the live agent rows above print their own model too, and
+  // the per-agent table deliberately still lists everybody — it is the comparison.
+  const got = text([models(drawn)]);
+  assert.match(got, /sonnet\/medium/);
+  assert.match(got, /100%/);
+  assert.doesNotMatch(got, /opus/);
+});
+
+// A reading taken before orc recorded a model is *absent*, not a model called
+// unknown — and its tokens still count, or these shares would add up to less than
+// the panel above them.
+test("a bucket with no model is named as unrecorded and still counted", () => {
+  const drawn = view.activity(withSeries({
+    ember: [
+      onModel("2026-07-27T10:00:00Z", "", "", { output: 500 }),
+      onModel("2026-07-27T11:00:00Z", "opus", "high", { output: 500 }),
+    ],
+  }), null);
+  const got = text(drawn);
+  assert.match(got, /not recorded/);
+  // Half each — the unrecorded half was not dropped.
+  const models = drawn.flatMap((n) => all(n, (x) => x.className === "gen models"))[0];
+  const shares = all(models, (x) => x.className === "gen-share").map((n) => n.textContent);
+  assert.deepEqual(shares, ["50%", "50%"]);
+});
+
+// A model with no effort recorded is the model on its own, not "opus/".
+test("a model with no effort is not given an empty one", () => {
+  const drawn = view.activity(withSeries({
+    ember: [onModel("2026-07-27T10:00:00Z", "opus", "", { output: 10 })],
+  }), null);
+  const got = text([models(drawn)]);
+  assert.match(got, /opus/);
+  assert.doesNotMatch(got, /opus\//);
+});
+
+// The two tables draw identical rows, so the markup has to say which is which —
+// otherwise "the top row" is ambiguous to a reader and to anything reading the page.
+test("the two share tables are distinguishable", () => {
+  const drawn = view.activity(withSeries(mixed), null);
+  assert.equal(drawn.flatMap((n) => all(n, (x) => x.className === "gen agents")).length, 1);
+  assert.equal(drawn.flatMap((n) => all(n, (x) => x.className === "gen models")).length, 1);
+});
+
+// --- what it cost ---------------------------------------------------------
+
+// Tokens are the measurement; money is the figure people act on. What matters
+// here is that the conversion happens per bucket (an agent's buckets span
+// models, and the same tokens cost five times as much on opus as on haiku) and
+// that a model with no published rate is never folded in as free.
+
+test("each row says what it came to, and the table totals it", () => {
+  const got = text(view.activity(withSeries({
+    ember: [onModel("2026-07-27T10:00:00Z", "opus", "high", { output: 1000000 })],
+  }), null));
+
+  assert.match(got, /\$25/);            // 1M opus output at $25/M
+  assert.match(got, /at list api rates/);
+  assert.match(got, /prices as of \d{4}-\d{2}-\d{2}/);
+});
+
+// The reason cost is computed per bucket rather than per row.
+test("an agent's cost follows the model each bucket ran on", () => {
+  const drawn = view.activity(withSeries({
+    ember: [
+      onModel("2026-07-27T10:00:00Z", "opus", "high", { output: 1000000 }),
+      onModel("2026-07-27T11:00:00Z", "haiku", "low", { output: 1000000 }),
+    ],
+  }), null);
+  // $25 on opus + $5 on haiku. A row-level rate would have priced both at one.
+  assert.match(text([agentsTable(drawn)]), /\$30/);
+});
+
+// The rule the module exists for: an unpriced model added as nothing would make
+// a fleet look cheaper the more it used the model nobody had a rate for.
+test("a model with no published rate is named, not counted as free", () => {
+  const got = text(view.activity(withSeries({
+    ember: [onModel("2026-07-27T10:00:00Z", "fable", "high", { output: 1000000 })],
+  }), null));
+
+  assert.match(got, /not priced/);
+  assert.match(got, /unpriced models, not counted/);
+  // And it must not claim the fleet spent nothing.
+  assert.doesNotMatch(got, /\$0 at list api rates/);
+});
+
+test("an unpriced model does not drag a priced total to zero", () => {
+  const got = text(view.activity(withSeries({
+    ember: [onModel("2026-07-27T10:00:00Z", "opus", "high", { output: 1000000 })],
+    quill: [onModel("2026-07-27T10:00:00Z", "fable", "high", { output: 9000000 })],
+  }), null));
+  assert.match(got, /\$25 at list api rates/);
+  assert.match(got, /1 reading on unpriced models/);
+});

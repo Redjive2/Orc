@@ -10,6 +10,8 @@
 package protocol
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -95,6 +97,21 @@ func (m MachineID) Validate() error {
 // ActionID identifies one queued user action. The server mints it; the agent
 // uses it to make application idempotent.
 type ActionID string
+
+// NewActionID mints one.
+//
+// Exported and here, beside the validation it has to satisfy, because the server
+// is no longer the only end that builds an action. The agent assembles one for a
+// correction it decides on locally — see agent.reconcilePace — and the store's own
+// unexported minter is out of its reach, so that path constructed an action with
+// no id at all and `Apply` refused every one of them.
+func NewActionID() (ActionID, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fault.Internal{Where: "protocol.NewActionID", Detail: err.Error()}
+	}
+	return ActionID(hex.EncodeToString(b[:])), nil
+}
 
 // Validate checks the id is a 32-character hex string.
 func (a ActionID) Validate() error {

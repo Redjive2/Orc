@@ -25,3 +25,8 @@ cookies.txt
 # Go's own.
 *.test
 *.out
+
+# Finder's leavings. macOS writes one of these into every directory somebody opens,
+# they hold window positions and nothing anybody wrote, and they arrive faster than
+# they can be removed by hand.
+.DS_Store

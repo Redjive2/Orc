@@ -16,10 +16,22 @@
 // hour. It comes from its own route rather than the snapshot, because a snapshot is
 // replaced whole on every sync and a rate is a fact about history.
 //
-// The controls — pacing wake, tend and sync — are Activity.md §5 and are not built.
+// The series is read three ways, and they answer three different questions rather
+// than being three views of one:
+//
+//   - **over time**, as charts, for the whole machine or one agent — is it busy,
+//     and was it busier yesterday;
+//   - **by agent**, as shares of one total — whose spend was that;
+//   - **by model and effort** — what it was spent on, which is the only one of the
+//     three with a command attached to the answer.
+//
+// The charts cannot do the last two. Each is fitted to its own maximum, so two
+// series drawn at the same height mean different numbers — right for reading one
+// thing over time and useless for reading two against each other.
 
 import { h, since } from "./dom.js";
 import { perMachine, agents } from "./fleet.js";
+import { cost, priced, money, PRICED } from "./prices.js";
 
 // STATES is every state Orc can send, what it means, and how it is drawn.
 //
@@ -204,17 +216,61 @@ function over(state, series, actions) {
   }
 
   const all = names.flatMap((name) => series.identities[name] || []);
+
+  // Whose series the charts are drawn from. The whole machine by default; one
+  // agent when somebody has picked one, and an agent that has since gone quiet
+  // falls back to everyone rather than drawing an empty chart with a name on it.
+  const who = names.includes(state.activityWho) ? state.activityWho : "";
+  const shown = who ? (series.identities[who] || []) : all;
+
+  // The axis stays the *machine's*, not the selection's. An agent that worked for
+  // ten minutes of a two-day window should be drawn as ten busy minutes in two
+  // quiet days — which is the fact somebody is looking for — and an axis fitted to
+  // its own buckets would redraw those ten minutes as the whole chart.
   const slots = axis(state.activityWindow, series.period, all);
+
+  // The scale key is the chart's label and deliberately not the agent's name, so a
+  // ceiling set once holds while the selection moves. That is what makes the
+  // charts comparable between agents: same height, same number. Left fitted they
+  // scale to whichever agent is shown, and two agents cannot be told apart by eye
+  // — which is why the panel below exists as well as this.
   const drawn = (label, of) =>
-    chart(label, slots, all, of, series.period, (state.chartScale || {})[label], actions);
+    chart(label, slots, shown, of, series.period, (state.chartScale || {})[label], actions);
+
   return [
     head,
+    whose(names, who, actions),
     drawn("new tokens", (b) => tok(b).input + tok(b).output + tok(b).cache_create),
     drawn("cache reads", (b) => tok(b).cache_read),
     drawn("turns", (b) => b.turns || 0),
+    h("h3", {}, "who is generating"),
+    ...generation(names, series, state),
+    // Whose spend, then what it was spent on. The second is the one with an
+    // action attached, so it reads better after the first has said whose it was.
+    h("h3", {}, who ? `what ${who} ran on` : "what it ran on"),
+    ...onModels(shown, state, who),
     h("h3", {}, "what it read and wrote"),
     ...work(names, series),
   ];
+}
+
+// whose picks the agent the charts above are drawn for.
+//
+// A filter and not a fetch, unlike the window beside it: the route already answers
+// per identity, so every agent's series is in the browser and choosing one costs
+// nothing. It is the same distinction `chartScale` draws, and worth keeping visible
+// — the window button is slow because it has to be, and this one is not.
+function whose(names, who, actions) {
+  if (names.length < 2) return null;
+  const pick = (value, label) => h("button", {
+    class: value === who ? "" : "quiet",
+    "aria-pressed": value === who ? "true" : "false",
+    onclick: actions ? () => actions.setActivityWho(value) : null,
+  }, label);
+  return h("div", { class: "controls window" },
+    h("span", { class: "muted" }, "for"),
+    pick("", "everyone"),
+    ...names.map((name) => pick(name, name)));
 }
 
 // MaxSlots is the most columns a chart will lay out.
@@ -483,6 +539,190 @@ function every(step) {
 // a file count and a line count have different guarantees: the first is Orc's own
 // record and always right, the second is missing wherever the transcript could not
 // be read. An estimate that looks like a measurement is worse than no figure.
+// generation is what each agent cost, side by side.
+//
+// The charts above cannot answer this and are not meant to. Each one is fitted to
+// its own maximum, so a quiet agent and a busy one are drawn the same height with
+// different numbers under them — which is right for reading one series over time
+// and useless for reading two against each other. This panel is the other
+// question: of everything the machine spent, whose was it?
+//
+// So the bar is a **share of the machine's total**, which is comparable by
+// construction — every row is drawn against the same denominator, and no scale
+// setting can make two rows mean different things. The figures are beside it
+// because a share is a proportion of an amount nobody has been told yet, and
+// because colour and length are never the only thing carrying a number here.
+function generation(names, series, state) {
+  const rows = names
+    .map((name) => ({ label: name, ...sumTokens(series.identities[name] || []) }))
+    .sort((a, b) => b.fresh - a.fresh || a.label.localeCompare(b.label));
+
+  return shareTable("agents", rows, state, "nothing was generated in this window",
+    "new tokens are input, output and cache writes — what the turn caused to be " +
+    "produced. cache reads are left out of that figure and of the share: they run " +
+    "orders of magnitude larger and would make every row a reading of context " +
+    "size. the money does count them, at the tenth-rate they are billed at, " +
+    "because they are a real cost. the rate is across the whole window, so an " +
+    "agent that worked in one burst reads low.");
+}
+
+// onModels is the same spend split the other way: by what was thinking rather
+// than by who.
+//
+// It is the question the panel above cannot answer and the one that decides what
+// to do about a number. An agent at 80% of the machine's tokens is a fact with no
+// action attached; the same agent at 80% *on opus at high effort* has an obvious
+// one, and `orc model` is the command. Every bucket has carried the pair all
+// along — orc keys its rollups on them — and nothing had ever shown it.
+//
+// It follows the selection above, so picking an agent turns this into that agent's
+// own mix. That is the pairing worth having: whose spend, then what they spent it
+// on.
+function onModels(buckets, state, who) {
+  const by = new Map();
+  for (const b of buckets) {
+    // Absent is not "unknown model", it is a reading taken before orc recorded
+    // one — so it says that rather than inventing a name or dropping the tokens,
+    // which would leave these shares adding up to less than the panel above.
+    const label = b.model ? `${b.model}${b.effort ? `/${b.effort}` : ""}` : "not recorded";
+    if (!by.has(label)) {
+      by.set(label, { label, fresh: 0, output: 0, cacheRead: 0, turns: 0, spend: 0, unpriced: 0 });
+    }
+    const into = by.get(label);
+    const t = tok(b);
+    into.fresh += t.input + t.output + t.cache_create;
+    into.output += t.output;
+    into.cacheRead += t.cache_read;
+    into.turns += b.turns || 0;
+    const spent = cost(t, b.model);
+    if (spent === null) into.unpriced += 1;
+    else into.spend += spent;
+  }
+
+  const rows = [...by.values()].sort((a, b) => b.fresh - a.fresh || a.label.localeCompare(b.label));
+  return shareTable("models", rows, state, "nothing ran in this window",
+    `what each model and effort cost, for ${who || "the whole machine"}. ` +
+    "`orc model <agent> <model> --effort <e>` is what changes it.");
+}
+
+// shareTable draws labelled rows against one denominator.
+//
+// One implementation for both panels, because they are the same table asked of two
+// different groupings, and two copies would drift — a share computed one way
+// beside a share computed another, on one screen, under headings that do not say
+// they differ.
+//
+// The bar is a share of the rows' own total, so it compares by construction: every
+// row is drawn against the same number, and no scale setting can make two of them
+// mean different things.
+// `kind` names which grouping this is, and reaches the markup. Two tables with
+// identical rows and no way to tell them apart is a screen where "the top row" is
+// ambiguous — to a reader skimming, and to anything reading the page.
+function shareTable(kind, rows, state, empty, note) {
+  const kept = rows.filter((r) => r.turns > 0 || r.fresh > 0);
+  if (kept.length === 0) return [h("p", { class: "muted" }, empty)];
+
+  const total = kept.reduce((sum, r) => sum + r.fresh, 0);
+  // Per hour across the whole window, idle time included. That is the honest
+  // denominator for "what is this costing me a day" and the wrong one for "how
+  // hard does it work when it works" — something that burned its whole budget in
+  // ten minutes of a two-day window reads as almost nothing here. The sentence
+  // under the rows says so rather than leaving it to be discovered.
+  const hours = span(state.activityWindow) / 3600000;
+
+  return [
+    h("div", { class: `gen ${kind}` }, ...kept.map((r) => {
+      const share = total > 0 ? r.fresh / total : 0;
+      return h("div", { class: "gen-row" },
+        h("span", { class: "name" }, r.label),
+        h("span", {
+          class: "gen-bar",
+          // The reading in words, on the bar itself, so a shape somebody cannot
+          // measure by eye still says its own number on hover and to a reader.
+          title: `${r.label}: ${(share * 100).toFixed(1)}% of ${number(total)} new tokens`,
+          // Painted rather than sized, and through the CSSOM rather than as a
+          // `style` attribute — the same two reasons as the bars in `chart`: a
+          // percentage height does not resolve on WebKit here, and the content
+          // policy discards the attribute without a word. See dom.js.
+          style: {
+            "--fill": `${Math.max(1, share * 100).toFixed(1)}%`,
+            background: "linear-gradient(to right,var(--primary) 0 var(--fill),transparent var(--fill))",
+          },
+        }),
+        // A row that did work must never read as `0%`. Rounding puts every small
+        // one there — 0.4% of a busy machine is still thousands of tokens — and a
+        // share of nothing beside a figure of something is the row contradicting
+        // itself.
+        h("span", { class: "gen-share" },
+          share > 0 && share < 0.005 ? "<1%" : `${Math.round(share * 100)}%`),
+        h("span", {}, `${number(r.fresh)} new`),
+        h("span", { class: "muted" }, `${number(r.output)} out`),
+        h("span", { class: "muted" }, hours > 0 ? `${number(r.fresh / hours)}/h` : ""),
+        h("span", { class: "muted" }, `${number(r.turns)} ${r.turns === 1 ? "turn" : "turns"}`),
+        // Money last, because it is the figure a reader stops on — and it is a
+        // conversion of the tokens beside it rather than a separate measurement,
+        // so it reads better after the thing it was computed from.
+        h("span", {
+          class: r.unpriced > 0 ? "muted" : "",
+          title: r.unpriced > 0
+            ? `${r.unpriced} ${r.unpriced === 1 ? "reading" : "readings"} on a model with no published rate — not counted`
+            : "at list api rates",
+        }, r.unpriced > 0 && r.spend === 0 ? "not priced" : money(r.spend)));
+    })),
+    spendLine(kept),
+    h("p", { class: "muted hint" }, note),
+  ];
+}
+
+// spendLine is the money line under a share table.
+//
+// Separate from the rows because it is the figure somebody came for, and because
+// it is the only place the caveats fit: what the prices are, when they were
+// taken, and how much of the window could not be priced at all. A total printed
+// bare would be read as a bill.
+function spendLine(rows) {
+  const spend = rows.reduce((sum, r) => sum + r.spend, 0);
+  const missing = rows.reduce((sum, r) => sum + r.unpriced, 0);
+
+  // Nothing priceable at all is not "$0" — that is the module's whole point
+  // stated as a total. A fleet whose every model is unknown to the price list
+  // has spent an unknown amount, and saying zero would be the one reading that
+  // is certainly wrong.
+  const parts = [spend === 0 && missing > 0
+    ? "nothing here could be priced"
+    : `${money(spend)} at list api rates`];
+  if (missing > 0) {
+    // Named rather than folded in as zero. An unpriced model added as nothing
+    // would make a fleet look cheaper the more it used the model nobody had a
+    // rate for — which is the wrong way round for every decision made from this.
+    parts.push(`${number(missing)} ${missing === 1 ? "reading" : "readings"} on unpriced models, not counted`);
+  }
+  parts.push(`prices as of ${PRICED}`);
+
+  return h("p", { class: "spend" }, parts.join(" · "));
+}
+
+// sumTokens totals one agent's buckets. `fresh` is activity.Tokens.New — input,
+// output and cache writes — under a name that cannot be read as "recent".
+function sumTokens(buckets) {
+  const out = { fresh: 0, output: 0, cacheRead: 0, turns: 0, spend: 0, unpriced: 0 };
+  for (const b of buckets) {
+    const t = tok(b);
+    out.fresh += t.input + t.output + t.cache_create;
+    out.output += t.output;
+    out.cacheRead += t.cache_read;
+    out.turns += b.turns || 0;
+    // Priced per bucket rather than per row, because a row is one agent and an
+    // agent's buckets span models: the same tokens cost five times as much on
+    // opus as on haiku, so a row-level rate would be an average of whatever mix
+    // happened to run.
+    const spent = cost(t, b.model);
+    if (spent === null) out.unpriced += 1;
+    else out.spend += spent;
+  }
+  return out;
+}
+
 function work(names, series) {
   const rows = names.map((name) => {
     const files = sumFiles(series.identities[name] || []);

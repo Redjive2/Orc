@@ -71,6 +71,35 @@ var commands = []commandDoc{
 		},
 	},
 	{
+		name: "pace", side: "agent",
+		summary: "Keep the three cycles running, with a key to run each now",
+		detail: "A working agent machine needs three long-running things: a sync that\n" +
+			"mirrors it, a wake that pokes agents which have gone quiet, and a tend\n" +
+			"that puts back sessions which stopped. This starts all three and keeps\n" +
+			"them up — a cycle that dies is started again.\n\n" +
+			"It supervises rather than re-times. Each cycle re-reads its own stored\n" +
+			"pace between passes, honouring the fleet, role and identity layers, so\n" +
+			"`orc pace` and cq's own panel still decide the cadence; the intervals\n" +
+			"here only govern the first round after a start.\n\n" +
+			"It refuses to start beside a cycle already doing the same job. Two\n" +
+			"wakers on one fleet both decide an agent is silent and both poke it.\n\n" +
+			"  ^S  sync now      ^W  wake now      ^T  tend now      ^C  stop\n\n" +
+			"The keys run the one-shot form beside the watcher, so pressing one\n" +
+			"never disturbs a pass already running. With input redirected there is\n" +
+			"no keyboard and the cycles simply keep their own time.",
+		flags: []flagDoc{
+			{"--home", "<dir>", "Where the agent keeps its journal", "$CQ_HOME"},
+			{"--sync", "<duration>", "How often to mirror", "what the server last asked for"},
+			{"--wake", "<duration>", "How often to look for quiet agents", "5m"},
+			{"--tend", "<duration>", "How often to reconcile the work list", "30s"},
+			{"--orc", "<path>", "The orc executable", "$ORC, else `orc`"},
+		},
+		examples: []string{
+			"cq pace",
+			"cq pace --wake 2m --tend 15s",
+		},
+	},
+	{
 		name: "sync", side: "agent",
 		summary: "Mirror this machine up, and bring queued actions down",
 		detail: "Runs where Mailman and Macmuffin live. One round trip carries both\n" +

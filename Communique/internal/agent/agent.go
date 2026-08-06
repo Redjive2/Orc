@@ -457,8 +457,25 @@ func (a *Agent) reconcilePace(ctx context.Context, snap protocol.Snapshot,
 		if len(cycle.says) == 0 {
 			continue
 		}
-		err := a.source.Apply(ctx, protocol.Action{
-			Machine: a.machine, Op: protocol.OpOrcPace, Args: cycle.args,
+		// A real id and a queue time, because `Apply` validates the whole envelope
+		// before it looks at the verb — and this action was assembled here rather
+		// than handed down by the server, so it arrived with neither. Every
+		// correction was refused with "action id \"\" must be 32 hex characters"
+		// and the warning below fired on every sync: the feature had never once put
+		// a pace back.
+		//
+		// The envelope is not decoration here. It is what the agent's journal keys
+		// on, and a locally-decided action still has to be one the rest of the
+		// machinery can name.
+		id, err := protocol.NewActionID()
+		if err != nil {
+			a.log.Warn("could not put the fleet's pace back",
+				"cycle", cycle.name, "error", err)
+			continue
+		}
+		err = a.source.Apply(ctx, protocol.Action{
+			ID: id, Machine: a.machine, Op: protocol.OpOrcPace,
+			Args: cycle.args, Queued: time.Now().UTC(),
 		})
 		if err != nil {
 			a.log.Warn("could not put the fleet's pace back",

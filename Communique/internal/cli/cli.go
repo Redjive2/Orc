@@ -112,6 +112,8 @@ func (a App) dispatch(args []string) error {
 		return a.serve(args[1:])
 	case "sync":
 		return a.sync(args[1:])
+	case "pace":
+		return a.pace(args[1:])
 	case "status":
 		return a.status(args[1:])
 	case "queue":

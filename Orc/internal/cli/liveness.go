@@ -422,6 +422,27 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 			continue
 		}
 
+		// Tending turned off for this agent, its role, or the fleet.
+		//
+		// Read through the layers, the way `orc wake` reads its own pause. It was
+		// read at the fleet layer only, which made `orc pace tend <agent> --off` a
+		// control that confirmed, drew itself as in force in `orc pace` and in cq's
+		// browser, and did nothing: the backstop repopulated the agent on its very
+		// next pass. A setting that reports success and has no effect is worse than
+		// one that refuses, because the operator stops looking.
+		//
+		// Only the *starting* half is skipped. An agent nobody is tending should
+		// stay down when it is down, and still come off the work list when it is
+		// fired — depopulating is what `fire` asked for, and a pause on the backstop
+		// is not a veto over an instruction somebody gave.
+		if who.Employed() && !live && s.store.Pacing(name, roleOf(s, name)).TendOff.Off() {
+			if verbose {
+				a.note("%s is employed and not running, and its tending is off "+
+					"(`orc pace tend %s --on` starts it again)", name, name)
+			}
+			continue
+		}
+
 		switch {
 		case who.Employed() && !live:
 			// A start that keeps failing is tried again on a widening interval
@@ -851,7 +872,23 @@ func (a App) tendInterval(given time.Duration) time.Duration {
 	if err != nil {
 		return given
 	}
-	return s.store.FleetPacing().TendWatch.Duration(given)
+	return atLeast(s.store.FleetPacing().TendWatch.Duration(given), MinWatch, given)
+}
+
+// atLeast keeps a stored interval above the floor its flag would have enforced.
+//
+// `orc pace` refuses anything under the floor on the way in, so this only ever
+// fires on a value that reached the file another way — a hand edit, a restore from
+// an older build, a half-written sync. It matters because the read path is what a
+// running cycle obeys: a "1s" that slipped past the writer turns the backstop into
+// a busy-wait that derives the whole fleet sixty times a minute, on the machine
+// nobody is watching. Falling back rather than clamping, so the cycle keeps the
+// pace it was actually given rather than silently adopting the floor.
+func atLeast(got, floor, fallback time.Duration) time.Duration {
+	if got < floor {
+		return fallback
+	}
+	return got
 }
 
 // tendPaused reports whether the fleet has turned its backstop off.
