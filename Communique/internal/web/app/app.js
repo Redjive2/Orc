@@ -211,7 +211,7 @@ function draw() {
   // Before the mount rather than after: the lease is about which screen is open,
   // and taking it a frame early costs nothing while taking it late means the first
   // sync of a freshly opened pane is the slow one.
-  hold(route);
+  holdWatch(route);
   mount(nav, views.nav(state, route));
   mount(statusBar, views.status(state));
 
@@ -1513,7 +1513,7 @@ async function refresh() {
 // timer does not let it lapse under somebody who is still looking.
 const RENEW = 15000;
 
-let held = null;
+let leased = null;
 let renewal = null;
 
 function watched(route) {
@@ -1521,31 +1521,36 @@ function watched(route) {
   return session.where(route.slice("/session/".length));
 }
 
-// hold takes, keeps or drops the lease so that it matches what is on screen.
+// holdWatch takes, keeps or drops the lease so that it matches what is on screen.
+//
+// Not `hold`: that is already the library's digest-of-the-file-being-edited, a
+// hundred lines up, and two function declarations of one name in a module is a
+// SyntaxError that takes the whole site down rather than a shadowing somebody
+// notices later.
 //
 // Every failure is swallowed. A watch that could not be taken means the pane
 // updates at the ordinary pace, which is what it did before any of this existed —
 // and an error banner over a working transcript would be the wrong trade. The
 // screen says how old what it shows is, so a pane that has gone slow is visible
 // without being announced.
-function hold(route) {
+function holdWatch(route) {
   const want = watched(route);
-  const same = want && held && want.machine === held.machine && want.name === held.name;
+  const same = want && leased && want.machine === leased.machine && want.name === leased.name;
   if (same) return;
 
-  if (held) {
-    api.unwatch(held.machine, held.name).catch(() => {});
+  if (leased) {
+    api.unwatch(leased.machine, leased.name).catch(() => {});
     clearInterval(renewal);
     renewal = null;
-    held = null;
+    leased = null;
   }
   if (!want) return;
 
-  held = want;
+  leased = want;
   api.watch(want.machine, want.name).catch(() => {});
   renewal = setInterval(() => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-    if (held) api.watch(held.machine, held.name).catch(() => {});
+    if (leased) api.watch(leased.machine, leased.name).catch(() => {});
   }, RENEW);
 }
 
@@ -1554,14 +1559,14 @@ if (typeof document !== "undefined") {
   // this the pane would sit at the ordinary pace until the next renewal came round,
   // which is up to fifteen seconds of a screen somebody is already looking at.
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && held) {
-      api.watch(held.machine, held.name).catch(() => {});
+    if (document.visibilityState === "visible" && leased) {
+      api.watch(leased.machine, leased.name).catch(() => {});
     }
   });
   // Best effort, and deliberately not relied on: a closing page may not get its
   // request away. The lease is what actually ends this.
   window.addEventListener("pagehide", () => {
-    if (held) api.unwatch(held.machine, held.name).catch(() => {});
+    if (leased) api.unwatch(leased.machine, leased.name).catch(() => {});
   });
 }
 
