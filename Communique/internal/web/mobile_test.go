@@ -222,9 +222,30 @@ func TestNarrowContentUsesTheWidth(t *testing.T) {
 	css := read(t, "app/app.css")
 	narrow := css[strings.Index(css, "@media (max-width: 40rem)"):]
 
-	if !strings.Contains(narrow, "main { padding: .75rem 0") {
-		t.Error("the page still keeps a side margin on a phone, on top of the padding " +
-			"the cards inside it already have")
+	// A gutter, and one decision behind it.
+	//
+	// This used to demand *no* side padding at all, on the argument that a
+	// 40-character screen cannot spare a character a side. That was right about
+	// text and wrong about edges: a card's border ran against the bezel, a rounded
+	// display clipped it, and a notch took a bite out of whichever side was up in
+	// landscape. So the rule is no longer "none" — it is that every edge of the
+	// page's column comes from `--gutter`, which is a max() of a character and the
+	// device's own inset.
+	//
+	// Named rather than measured, because nothing here can evaluate that max().
+	// What is checkable, and what actually broke before, is three edges drifting
+	// apart because each was typed separately.
+	for _, edge := range []string{"#chrome { padding:", "main { padding:", "#nav { padding:"} {
+		i := strings.Index(narrow, edge)
+		if i < 0 {
+			t.Errorf("%s has no narrow rule at all", edge)
+			continue
+		}
+		line := narrow[i : i+strings.Index(narrow[i:], "\n")]
+		if !strings.Contains(line, "--gutter") {
+			t.Errorf("this edge is set by hand rather than from the shared gutter, "+
+				"so the three that make the page's column can drift apart:\n  %s", line)
+		}
 	}
 	for _, row := range []string{".event", ".survey", ".grid.users"} {
 		if !strings.Contains(narrow, row+" { grid-template-columns: ") {

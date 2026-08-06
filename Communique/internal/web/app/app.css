@@ -913,21 +913,49 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
  * 40rem, not a device. A narrow desktop window deserves the same layout, and a
  * breakpoint named after a phone lies the moment somebody resizes. */
 @media (max-width: 40rem) {
-  /* A phone is mostly margin at 1.5rem a side. */
-  /* The chrome and the content line up. The page gives up its side padding just
-     below, so leaving the navigation inset indented the one thing above the
-     content by half a character of a forty-character screen. */
-  #chrome { padding: .75rem 0 0; }
-  /* No side padding at all. The elements that hold text carry their own — cards
-     and code do, a little further down — so giving the page a margin as well
-     spent a full character of a 40-character screen twice over, once on each
-     side, on nothing. Content runs edge to edge and the padding is where reading
-     happens. */
-  main { padding: .75rem 0 1.5rem; }
+  /* A safe edge, and one number for it.
+
+     This used to be nothing at all, on the argument that a 40-character screen
+     could not spare a character a side. That was true about *text* and wrong
+     about everything else: a card's border ran hard against the bezel, a rounded
+     display clipped it, and on a phone held in landscape the notch took a bite
+     out of whichever side was up. Content flush to a glass edge does not read as
+     full-bleed, it reads as cut off.
+
+     `max()` with the inset means the gutter is the larger of the two, so a
+     square-cornered phone pays three quarters of a character and a notched one
+     pays whatever it actually needs. The inset resolves to zero where it is not
+     supported, which leaves the plain number — no fallback rule required. */
+  :root { --gutter: max(.75ch, env(safe-area-inset-left)); }
+
+  /* The chrome, the content and the status line all take the same edge, so the
+     column they make reads as one thing rather than three that nearly line up. */
+  #chrome { padding: .75rem var(--gutter, .75ch) 0; }
+  main { padding: .75rem var(--gutter, .75ch) 1.5rem; }
 
   /* The box-drawn rules are decoration, and decoration that forces a sideways
      scroll costs more than it gives. */
   .frame { display: none; }
+
+  /* A card stops being a box and becomes a band.
+
+     Its left and right borders were two hairlines running the full height of the
+     screen a few pixels from the glass — the thing a full-width layout does worst
+     — and they were carrying nothing a horizontal rule does not carry better.
+     What a card has to say on a phone is "a new thing starts here", and one line
+     across the top says exactly that.
+
+     The bottom goes too: with a rule above every card, a rule below each one as
+     well is a double line between any two of them. */
+  .card {
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    margin-top: 1.25rem;
+  }
+  /* Nothing above the first one. A rule at the very top of the content reads as
+     the bottom edge of the navigation, which is not what it means. */
+  main > .card:first-child { border-top: none; margin-top: .25rem; }
 
   /* Tap targets. A link with no vertical padding is a 20px-high target, which is
      half what a thumb needs and the reason a phone user hits the wrong tab.
@@ -935,7 +963,7 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
      satisfies both; it is set as a height rather than guessed at with padding,
      because padding that happens to add up is padding that stops adding up the
      next time the font changes. */
-  #nav { padding: 0; }
+  #nav { padding: 0 var(--gutter, .75ch); }
   #nav .majors, #nav .subs { gap: 0 1.5ch; }
   #nav .subs { padding-left: 1ch; }
   #nav a {
@@ -966,6 +994,13 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
   }
   #nav .hamburger .twist { color: var(--muted); }
   #nav .hamburger .where { color: var(--title); font-weight: 600; }
+  /* A rule under it, so the closed menu reads as the top bar of the page rather
+     than as the first line of the content. It is the only horizontal rule above
+     the fold, which is what makes it read as chrome. */
+  #nav .hamburger { border-bottom: 1px solid var(--frame); }
+  /* Open, the rule would sit between the control and the rows it just revealed,
+     cutting the menu in half exactly where it needs to read as one thing. */
+  #nav .hamburger[aria-expanded="true"] { border-bottom-color: transparent; }
 
   /* The rows appear only while it is open. `:has` is not needed: the button's own
      state is a sibling attribute away, and every browser that runs this app has
@@ -993,7 +1028,14 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
     border-left: 2px solid transparent;
     padding-left: 1.5ch;
   }
-  #nav .majors > a.open { border-left-color: var(--primary); }
+  /* The open area is the anchor of the whole menu, so it is named twice over: the
+     rule down its side, and its own colour. Two signals rather than one, because
+     a 2px bar is the first thing lost to a dim screen in sunlight. */
+  #nav .majors > a.open {
+    border-left-color: var(--primary);
+    color: var(--title);
+    font-weight: 600;
+  }
   #nav .subs {
     flex-direction: column;
     align-items: stretch;
@@ -1001,6 +1043,16 @@ button.danger:hover { background: var(--danger); color: var(--canvas); }
     border-left: 2px solid var(--frame);
     margin-left: .5ch;
   }
+  /* The page you are on, inside the area you are in. It had the colour already;
+     what it did not have was anything to find it by at a glance down a column of
+     six. The marker hangs in the padding, so the labels stay aligned. */
+  #nav .subs a[aria-current="page"]::before {
+    content: "▸ ";
+    margin-left: -2ch;
+  }
+  /* Room to breathe between areas. Nine 44px rows with no separation is a wall of
+     evenly spaced text where the grouping is the whole point of the shape. */
+  #nav .subs { padding-top: .1rem; padding-bottom: .35rem; }
 
   /* A row's controls are compact on a desk and not on a phone: the reason they
      are small is that a mouse is precise, and a thumb is not.
