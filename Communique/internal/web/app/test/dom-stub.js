@@ -25,11 +25,20 @@ class Node {
   get textContent() {
     return this.childNodes.map((c) => c.textContent).join("");
   }
+  // Settable, because the application sets it: the compose form clears its error
+  // and warning lines that way, and a getter-only stub made those writes throw
+  // where a browser accepts them. Assigning replaces every child with one text
+  // node, which is what the DOM does.
+  set textContent(value) {
+    this.childNodes = [];
+    if (value !== "" && value != null) this.append(String(value));
+  }
 }
 
 class Text extends Node {
   constructor(data) { super(); this.data = String(data); this.nodeType = 3; }
   get textContent() { return this.data; }
+  set textContent(value) { this.data = String(value); }
 }
 
 class Element extends Node {

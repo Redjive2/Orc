@@ -731,3 +731,61 @@ test("a message that is already archived is known to be", () => {
   assert.equal(views.inArchive(state, m), true);
   assert.equal(views.inArchive(state, state.inbox[0]), false);
 });
+
+// --- addressee checking ---------------------------------------------------
+
+// A name this fleet has never heard of is almost always a typo, and the moment
+// to say so is while the cursor is still in the field — not after a sync, as a
+// refusal worded for a terminal.
+
+const rostered = {
+  ...state,
+  machines: [{ machine: "studio", user: "redjive" }],
+  admin: { machines: [{ machine: "studio", state: { users: [{ name: "bob" }], messages: [], receipts: [] } }] },
+  fleet: [{ machine: "studio", operator: "redjive", identities: [{ name: "ember" }, { name: "atlas" }] }],
+};
+
+test("the roster is drawn from the panel, the fleet, and who is mirrored", () => {
+  const got = views.known(rostered);
+  for (const name of ["bob", "redjive", "ember", "atlas"]) {
+    assert.ok(got.has(name), `${name} should be a known mailbox`);
+  }
+  assert.equal(got.has("nobody"), false);
+});
+
+test("a recipient nobody has heard of is named", () => {
+  assert.deepEqual(views.unknownTo(rostered, ["ember", "embr"]), ["embr"]);
+  assert.deepEqual(views.unknownTo(rostered, ["bob", "redjive"]), []);
+});
+
+// The rule that keeps this a warning rather than a wrong answer. Most fleets run
+// with the admin panel off, and a browser with no roster knows nothing about who
+// exists — saying so for every name would read as "this fleet has no accounts",
+// which is a claim about the fleet made from a fact about what was fetched.
+test("with no roster at all, nothing is unknown", () => {
+  const bare = { ...state, machines: [], admin: null, fleet: [] };
+  assert.equal(views.known(bare).size, 0);
+  assert.deepEqual(views.unknownTo(bare, ["anyone", "at", "all"]), []);
+});
+
+test("the check is case-insensitive, as mailbox names are", () => {
+  assert.deepEqual(views.unknownTo(rostered, ["EMBER", "Bob"]), []);
+});
+
+// It warns; it does not refuse. The roster is as old as the last sync, and
+// Mailman decides on the machine.
+test("compose warns about a stranger without blocking the send", () => {
+  const drawn = views.compose({ ...rostered, drafts: { compose: { to: "embr" } } }, null);
+  const out = text(drawn);
+  assert.match(out, /embr/);
+  assert.match(out, /not a mailbox/);
+  assert.match(out, /still send/);
+  // The send control is still on the form: this warns, it does not take the
+  // action away.
+  assert.match(out, /queue message/);
+});
+
+test("compose says nothing when every recipient is known", () => {
+  const out = text(views.compose({ ...rostered, drafts: { compose: { to: "ember, bob" } } }, null));
+  assert.doesNotMatch(out, /not a mailbox/);
+});

@@ -412,6 +412,55 @@ export function recipients(text) {
   return { names: [...new Set(names)], error: "" };
 }
 
+// known is every mailbox this browser has grounds to believe exists.
+//
+// Three sources, because no one of them is complete. The admin panel's account
+// list is the authoritative roster and is the one most fleets will not have — it
+// needs the mirrored account to own the Mailman store. The fleet's identities
+// cover the agents, which is who most mail is to. And whoever this machine
+// mirrors is a mailbox by definition.
+//
+// An empty set means "no grounds", not "nobody exists", and every caller has to
+// treat those differently — see `unknownTo`.
+export function known(state) {
+  const out = new Set();
+  for (const block of (state.admin && state.admin.machines) || []) {
+    for (const u of (block.state && block.state.users) || []) {
+      if (u && u.name) out.add(String(u.name).toLowerCase());
+    }
+  }
+  for (const f of state.fleet || []) {
+    if (f.operator) out.add(String(f.operator).toLowerCase());
+    for (const id of f.identities || []) {
+      if (id && id.name) out.add(String(id.name).toLowerCase());
+    }
+  }
+  for (const m of state.machines || []) {
+    if (m && m.user) out.add(String(m.user).toLowerCase());
+  }
+  return out;
+}
+
+// unknownTo is the recipients this browser has never heard of.
+//
+// A **warning**, never a refusal, and the distinction is the whole point. The
+// roster can be legitimately incomplete in three ordinary ways: the admin panel
+// is off on most fleets, the mirror is minutes old so a mailbox made since is
+// unknown, and a fleet may have accounts that are neither agents nor the
+// operator. Blocking on any of those would stop mail that is perfectly good, to
+// answer a question this end cannot actually settle — Mailman decides, on the
+// machine, after the sync.
+//
+// With no roster at all it says nothing. A warning that fires on every name
+// because the browser knows none of them is one nobody reads, and it would read
+// as "this fleet has no accounts" — a claim about the fleet made from a fact
+// about what was fetched.
+export function unknownTo(state, names) {
+  const roster = known(state);
+  if (roster.size === 0) return [];
+  return names.filter((n) => !roster.has(String(n).toLowerCase()));
+}
+
 export function compose(state, actions) {
   const machines = state.machines || [];
   if (machines.length === 0) {
@@ -429,7 +478,7 @@ export function compose(state, actions) {
   const to = h("input", {
     name: "to", placeholder: "name, name", autocomplete: "off",
     value: draft.to ?? "",
-    oninput: (e) => actions.draft(key, "to", e.target.value),
+    oninput: (e) => { actions.draft(key, "to", e.target.value); vet(e.target.value); },
   });
   const subject = h("input", {
     name: "subject", autocomplete: "off",
@@ -443,6 +492,26 @@ export function compose(state, actions) {
   body.value = draft.body ?? "";
   const button = h("button", { type: "submit" }, "queue message");
   const problem = h("p", { class: "error" });
+  // Its own line, and not the error line: one stops the send and the other does
+  // not, and a reader who cannot tell them apart learns to ignore both.
+  const caution = h("p", { class: "warn caution" });
+
+  // Checked as it is typed rather than on submit. A name this fleet has never
+  // heard of is almost always a typo, and the moment to say so is while the
+  // cursor is still in the field — after a submit it is a round trip and a
+  // refusal that arrives on the next sync.
+  // Given the text rather than reading it back off the field: `vet` is called
+  // once at build time, before anything has been typed, and an input's `.value`
+  // is only reflected from its attribute by a real browser. Taking the argument
+  // makes it independent of that reflection and of the DOM entirely.
+  const vet = (text) => {
+    const who = recipients(text);
+    const strangers = who.error ? [] : unknownTo(state, who.names);
+    caution.textContent = strangers.length === 0 ? "" :
+      `${strangers.map((n) => `“${n}”`).join(", ")} ` +
+      `${strangers.length === 1 ? "is not a mailbox" : "are not mailboxes"} this machine has seen. ` +
+      `it will still send — the list here is as old as the last sync.`;
+  };
 
   // Only asked when there is a real choice. One machine is the ordinary case,
   // and a select with one option is a question with one answer.
@@ -481,6 +550,7 @@ export function compose(state, actions) {
           to.value = subject.value = body.value = "";
           actions.forget(key);
           problem.textContent = "";
+          caution.textContent = "";
         })
         .finally(() => { button.disabled = false; });
     },
@@ -492,9 +562,14 @@ export function compose(state, actions) {
     subject,
     h("label", { for: "body" }, "message"),
     body,
+    caution,
     problem,
     button,
   );
+
+  // A draft restored on a redraw is vetted too, so a warning survives the sync
+  // that put the writer's text back.
+  vet(draft.to ?? "");
 
   const waiting = (state.queue || []).filter(
     (e) => e.action && e.action.op === "send" && (e.state === "queued" || e.state === "sent"));
