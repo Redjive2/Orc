@@ -37,6 +37,18 @@ type Options struct {
 	// the agent machine may hold several checkouts, and the one worth reading
 	// from a browser is a choice the operator makes once.
 	Library string
+	// Watch names one agent, and asks for a *narrow* snapshot: that agent's
+	// session, and nothing else.
+	//
+	// It exists because a full snapshot is expensive — the mail, the tasks, the
+	// repository, and one `orc view` per employed agent — and somebody reading a
+	// session in a browser wants an answer every few seconds. A narrow one is a
+	// single subprocess, which is what makes a three-second cadence affordable at
+	// all.
+	//
+	// What comes back is deliberately not a whole snapshot and must never be stored
+	// as one: see store.PutSession, which merges it.
+	Watch string
 }
 
 // Validate checks the options are usable.

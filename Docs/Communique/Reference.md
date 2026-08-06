@@ -127,6 +127,8 @@ The API lives under `/api/v1` and mirrors Mailman's verbs:
 | `POST fleet/identities/<n>/fire`       | `orc fire --yes`                         |
 | `POST fleet/identities/<n>/poke`       | `orc poke [message]`                     |
 | `POST fleet/identities/<n>/refresh`    | `orc refresh`                            |
+| `POST fleet/identities/<n>/watch`      | server-side; takes or renews a lease§    |
+| `POST fleet/identities/<n>/unwatch`    | server-side; drops it                    |
 | `POST fleet/identities/<n>/workspace`  | `orc workspace <path> [--adopt]`†        |
 | `POST fleet/identities/<n>/grant`      | `orc grant permission [--until]`         |
 | `POST fleet/identities/<n>/revoke`     | `orc revoke permission`                  |
@@ -202,6 +204,37 @@ a one-shot `cq sync` read it off the response and dropped it, and a watcher
 restarted by a service manager went back to the number on its command line — set
 when the service was installed and unchanged since. A watcher now opens at what
 the server last asked for, and the flag decides only when the server never has.
+
+§ `watch` and `unwatch` are the two writes that reach **no agent machine at all**.
+Everything else in the table is queued and carried out on the next sync; these
+record, at the server, that somebody has a session open in a browser. A watched
+machine learns it from the next response it happens to get, and starts sending
+that one agent's transcript every three seconds beside its ordinary mirroring.
+
+A **narrow round** is what it sends: the same sync exchange, with a snapshot
+carrying one session and nothing else. That is the whole reason the cadence is
+affordable — a full round mirrors the mail, the tasks, the repository and runs
+`orc view` once per employed agent, so speeding *that* up to three seconds would
+multiply the cost of everything to make one pane feel live. It still drains the
+queue, which is what makes answering an agent from the browser take seconds
+rather than a whole sync interval.
+
+Two consequences worth stating, because both are about not lying:
+
+- **A narrow snapshot is merged, never stored.** It has no mail and no tasks, so
+  storing it the ordinary way would erase a machine's mirror every three seconds.
+  Only the session moves, and an agent that has stopped has its transcript taken
+  down rather than left where it was — the alternative is a live-looking
+  conversation with a process that is not there.
+- **The mirror's clock does not move.** `last_sync` means "how old everything you
+  are looking at is", and a narrow round refreshed one transcript. The session
+  carries its own timestamp instead, and the screen shows the two ages separately
+  because they are two different facts.
+
+It is a **lease**, not a switch: it expires unless the browser renews it, and a
+hidden tab stops renewing. A closed tab, a sleeping phone, a killed browser and a
+laptop carried out of range are all the same event from the server's side —
+nothing arrives — and a switch would leave a machine spinning after any of them.
 
 † `toolkit` installs the permissions every fleet is made with, on a fleet that
 does not have all of them — `orc bootstrap` is safe to run again and creates only

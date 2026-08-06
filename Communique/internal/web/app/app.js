@@ -208,6 +208,10 @@ function current() {
 function draw() {
   const place = focus.remember(typeof document !== "undefined" ? document.activeElement : null);
   const route = current();
+  // Before the mount rather than after: the lease is about which screen is open,
+  // and taking it a frame early costs nothing while taking it late means the first
+  // sync of a freshly opened pane is the slow one.
+  hold(route);
   mount(nav, views.nav(state, route));
   mount(statusBar, views.status(state));
 
@@ -1487,6 +1491,78 @@ async function refresh() {
     if (err instanceof ApiError && err.code === "unauthenticated") return;
     set({ error: err });
   }
+}
+
+// --- watching a session -------------------------------------------------
+//
+// An open session pane makes its machine send that agent's transcript every few
+// seconds instead of every few minutes. What is held here is one lease, renewed
+// while the pane is on screen and dropped when it is not.
+//
+// **Renewal is the safety, not the drop.** Leaving the route says so, and that is
+// the common case — but a closed tab, a phone that slept, a browser killed and a
+// laptop carried out of range all end with nothing being said at all. A lease that
+// has to be asked for again decays back to the ordinary cadence on its own, so the
+// worst any of those can cost is one lease's worth of fast rounds.
+//
+// A hidden tab stops renewing. Somebody who switched away is not reading it, and a
+// phone with a session pane in a background tab would otherwise keep a machine
+// working for a screen that is off.
+
+// RENEW is comfortably inside the server's lease so a slow request or a paused
+// timer does not let it lapse under somebody who is still looking.
+const RENEW = 15000;
+
+let held = null;
+let renewal = null;
+
+function watched(route) {
+  if (!route.startsWith("/session/")) return null;
+  return session.where(route.slice("/session/".length));
+}
+
+// hold takes, keeps or drops the lease so that it matches what is on screen.
+//
+// Every failure is swallowed. A watch that could not be taken means the pane
+// updates at the ordinary pace, which is what it did before any of this existed —
+// and an error banner over a working transcript would be the wrong trade. The
+// screen says how old what it shows is, so a pane that has gone slow is visible
+// without being announced.
+function hold(route) {
+  const want = watched(route);
+  const same = want && held && want.machine === held.machine && want.name === held.name;
+  if (same) return;
+
+  if (held) {
+    api.unwatch(held.machine, held.name).catch(() => {});
+    clearInterval(renewal);
+    renewal = null;
+    held = null;
+  }
+  if (!want) return;
+
+  held = want;
+  api.watch(want.machine, want.name).catch(() => {});
+  renewal = setInterval(() => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (held) api.watch(held.machine, held.name).catch(() => {});
+  }, RENEW);
+}
+
+if (typeof document !== "undefined") {
+  // Coming back to a tab that was away long enough for the lease to lapse. Without
+  // this the pane would sit at the ordinary pace until the next renewal came round,
+  // which is up to fifteen seconds of a screen somebody is already looking at.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && held) {
+      api.watch(held.machine, held.name).catch(() => {});
+    }
+  });
+  // Best effort, and deliberately not relied on: a closing page may not get its
+  // request away. The lease is what actually ends this.
+  window.addEventListener("pagehide", () => {
+    if (held) api.unwatch(held.machine, held.name).catch(() => {});
+  });
 }
 
 // --- live updates -------------------------------------------------------

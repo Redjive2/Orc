@@ -87,13 +87,30 @@ function head(state, f, id, now) {
     h("div", { class: "meta" }, facts.join(" · ")),
     h("div", { class: "body" },
       h("p", {}, got ? sessionSummary(got) : "no session — nothing to watch until it is employed"),
-      staleness(machine, now)));
+      staleness(got, machine, now)));
 }
 
-// staleness says how old this is, in the same words and at the same thresholds as
-// the status bar — one clock, so the two never disagree about whether a mirror is
-// current.
-function staleness(machine, now) {
+// staleness says how old this is.
+//
+// **Two clocks, because there are two facts.** While this pane is open the machine
+// sends *this session* every few seconds and mirrors everything else at its
+// ordinary pace, so the transcript and the mailbox are genuinely different ages.
+// One number would have to lie about one of them: the session's age claimed for
+// the whole mirror, or the mirror's age claimed for a transcript that is seconds
+// old. The status bar keeps saying how old the mirror is; this says how old the
+// conversation is.
+//
+// An agent from before narrow rounds existed carries no session timestamp, which
+// reads as "the mirror's age is all there is to go on" — the honest answer, and
+// the one that was true for everybody until now.
+function staleness(got, machine, now) {
+  if (got && got.at) {
+    const age = now - new Date(got.at).getTime();
+    const cls = age > 60 * 1000 ? "warn" : age > 20 * 1000 ? "muted stale" : "muted";
+    return h("p", { class: cls },
+      `this conversation is ${since(got.at, now)} old, and refreshes while you are reading it. `,
+      "what you send still leaves on the next sync, so an answer takes a few seconds to come back.");
+  }
   if (!machine || !machine.last_sync) {
     return h("p", { class: "warn" }, "this machine has never synced, so nothing here is current");
   }

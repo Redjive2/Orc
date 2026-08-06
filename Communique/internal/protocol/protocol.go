@@ -1207,6 +1207,20 @@ type SyncRequest struct {
 	SentAt   time.Time `json:"sent_at"`
 	Results  []Result  `json:"results,omitempty"`
 	Snapshot Snapshot  `json:"snapshot"`
+	// Watch names the identity this round is about, and says the round is a narrow
+	// one: the snapshot carries that agent's session and nothing else worth
+	// keeping.
+	//
+	// It exists because a full sync is expensive — the fleet collector runs
+	// `orc view` once per employed agent, on top of mirroring the mail, the tasks
+	// and the repository — and somebody watching one session wants an answer every
+	// few seconds. Speeding the whole mirror up to that would multiply the cost of
+	// everything to make one pane feel live.
+	//
+	// So a narrow round is the same exchange with a smaller snapshot, and the
+	// server merges it rather than storing it: see store.PutSession. Empty is an
+	// ordinary full round, which is what every agent built before this sends.
+	Watch string `json:"watch,omitempty"`
 }
 
 // Validate checks the version first, so a mismatch is reported as a mismatch
@@ -1223,6 +1237,15 @@ func (r SyncRequest) Validate() error {
 	}
 	if err := validateEach("SyncRequest", "results", r.Results); err != nil {
 		return err
+	}
+	// A narrow round names one agent. Checked here rather than trusted, because
+	// the server uses it to decide *not* to replace the stored snapshot — a
+	// malformed one taking the full path would overwrite a whole machine's mirror
+	// with a snapshot carrying no mail.
+	if r.Watch != "" {
+		if err := checkName("SyncRequest", "watch", r.Watch); err != nil {
+			return err
+		}
 	}
 	if err := r.Snapshot.Validate(); err != nil {
 		return err
@@ -1267,6 +1290,35 @@ type SyncResponse struct {
 	// Absent means the server has no opinion, which is different from an opinion
 	// that everything should be cleared.
 	FleetPace *DesiredPace `json:"fleet_pace,omitempty"`
+	// Watching is the agent somebody has open in a browser, and how often to send
+	// its session back.
+	//
+	// It rides here for the reason Pace does: a watcher on the agent machine is
+	// something the server can never call, and a response is the only moment the
+	// two are in contact. Absent means nobody is watching, which a watcher reads
+	// as "stop the fast rounds" rather than as "no opinion" — unlike Pace, because
+	// a lease that has lapsed and a server with nothing to say are the same fact
+	// here, and both mean the same thing: go back to mirroring at the ordinary
+	// rate.
+	Watching *Watching `json:"watching,omitempty"`
+}
+
+// Watching is one agent being read from a browser.
+//
+// It carries the interval rather than letting the agent pick, so the floor is
+// enforced at the end that pays for it — and so a machine already syncing faster
+// than the watch asks for does not slow down to meet it.
+type Watching struct {
+	Identity string `json:"identity"`
+	Every    string `json:"every"`
+}
+
+// Validate checks the watch names an agent and an interval that parses.
+func (w Watching) Validate() error {
+	if err := checkName("Watching", "identity", w.Identity); err != nil {
+		return err
+	}
+	return checkDuration("Watching", "every", w.Every)
 }
 
 // DesiredPace is a fleet's pacing as the server intends it.

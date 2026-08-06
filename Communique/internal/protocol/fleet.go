@@ -54,6 +54,16 @@ type FleetSession struct {
 	Waiting bool   `json:"waiting"`
 	Turn    int    `json:"turn"`
 	Started string `json:"started,omitempty"`
+	// At is when this session was collected, which on a watched agent is not when
+	// the rest of the mirror was.
+	//
+	// The two ages have to be told apart or the screen lies in one direction or the
+	// other: a narrow round refreshes this and nothing else, so a status bar that
+	// moved would claim the mail was three seconds old, and a session panel that
+	// did not would claim a live transcript was five minutes stale. Each says its
+	// own age. Empty from an older agent, which reads as "the mirror's age is all
+	// there is to go on".
+	At string `json:"at,omitempty"`
 
 	Prose          []SessionLine `json:"prose,omitempty"`
 	ProseAvailable bool          `json:"prose_available"`

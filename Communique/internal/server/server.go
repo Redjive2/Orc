@@ -297,6 +297,10 @@ func (s *Server) routes() {
 	s.route("POST /api/v1/fleet/identities/{name}/fire", needSession, s.fireIdentity)
 	s.route("POST /api/v1/fleet/identities/{name}/poke", needSession, s.pokeIdentity)
 	s.route("POST /api/v1/fleet/identities/{name}/refresh", needSession, s.refreshIdentity)
+	// Watching is not a queued action — it changes nothing on the agent machine —
+	// so it sits beside them rather than among them. See internal/server/watch.go.
+	s.route("POST /api/v1/fleet/identities/{name}/watch", needSession, s.takeWatch)
+	s.route("POST /api/v1/fleet/identities/{name}/unwatch", needSession, s.dropWatch)
 	s.route("POST /api/v1/fleet/identities/{name}/workspace", needSession, s.setWorkspace)
 	s.route("POST /api/v1/fleet/identities/{name}/grant", needSession, s.grantPermission)
 	s.route("POST /api/v1/fleet/identities/{name}/revoke", needSession, s.revokePermission)

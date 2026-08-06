@@ -927,7 +927,16 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, agentSide(err))
 		return
 	}
-	if err := s.state.PutSnapshot(req.Snapshot, req.Agent, now); err != nil {
+	// A narrow round carries one agent's session and nothing else worth keeping,
+	// so it merges rather than replaces. Storing it the ordinary way would wipe a
+	// machine's mail, tasks and repository every three seconds to keep one
+	// transcript current — see store.PutSession.
+	if req.Watch != "" {
+		if err := s.mergeSession(req, now); err != nil {
+			s.fail(w, r, agentSide(err))
+			return
+		}
+	} else if err := s.state.PutSnapshot(req.Snapshot, req.Agent, now); err != nil {
 		s.fail(w, r, agentSide(err))
 		return
 	}
@@ -959,7 +968,30 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 		// setting — a failed action, a cleared queue, a checkout rebuilt from
 		// scratch — is put back rather than left quietly wrong.
 		FleetPace: intended(s.state.FleetPace(req.Snapshot.Machine)),
+		// Who is being read from a browser, and how often to send them back. On
+		// every response, narrow and full alike: a lease taken while a machine was
+		// mid-round has to be picked up by the round after, and a lease that lapsed
+		// has to stop the fast ones just as promptly.
+		Watching: s.state.Watching(req.Snapshot.Machine, now),
 	})
+}
+
+// mergeSession stores what a narrow round carried.
+//
+// The absent case is the one that matters. `orc view` reports nothing for an agent
+// that is not running, so a narrow round for one that has died carries no session
+// — and the stored transcript has to *go*, not merely stop advancing. Left in
+// place it would be a live-looking conversation with a process that is not there,
+// on the one screen built to never make that mistake.
+func (s *Server) mergeSession(req protocol.SyncRequest, now time.Time) error {
+	if req.Snapshot.Fleet != nil {
+		for _, got := range req.Snapshot.Fleet.Sessions {
+			if got.Identity == req.Watch {
+				return s.state.PutSession(req.Snapshot.Machine, got, now)
+			}
+		}
+	}
+	return s.state.DropSession(req.Snapshot.Machine, req.Watch)
 }
 
 // intended is a desired pace as the response carries it: absent when the server has

@@ -591,6 +591,20 @@ func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
+	// The narrow rounds, for a session somebody has open in a browser.
+	//
+	// A second ticker rather than a faster first one. The full round mirrors the
+	// mail, the tasks, the repository and every agent's session; running *that*
+	// every three seconds to keep one transcript current would multiply the cost of
+	// everything to make one pane feel live. This one carries a single session and
+	// drains the queue, so answering an agent takes seconds while the mirror keeps
+	// its own pace.
+	//
+	// Stopped whenever nobody is watching, which is almost always. A stopped
+	// ticker's channel never fires, so the ordinary case pays nothing at all.
+	watching := watchLoop{}
+	defer watching.stop()
+
 	// The lifetime is a timer rather than a comparison at the top of each round,
 	// so `--for` means what it says. Checked only between rounds, a watch given an
 	// hour and a seven-minute period would run sixty-three minutes — right for the
@@ -623,6 +637,10 @@ func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
 		// failed says nothing about the pace, so the interval stands — a mirror
 		// that sped up or slowed down because it could not reach the server would
 		// be reacting to the wrong fact.
+		// Who is being read, and how often to send them. A lease that has lapsed
+		// arrives as nothing, which stops the narrow rounds — see store.Watching.
+		watching.follow(report.Watching, a)
+
 		a.rememberPace(home, report.Pace)
 		if next := syncPace(report.Pace, every); next != every {
 			_ = a.say("cq: syncing every %s from now on", round(next))
@@ -669,10 +687,83 @@ func (a App) watchSync(ag *agent.Agent, src *source.CLI, home string,
 
 		select {
 		case <-ticker.C:
+		case <-watching.tick():
+			// A narrow round. Its failures are complained about and nothing more:
+			// the pane goes stale, which the screen says out loud, and the mirror
+			// is untouched either way.
+			report, err := ag.Watch(context.Background(), watching.who)
+			if err != nil {
+				a.complain(err)
+				continue
+			}
+			watching.follow(report.Watching, a)
+			continue
 		case <-expired:
 			return a.say("cq: the watch has run its %s and is stopping", round(ttl))
 		}
 	}
+}
+
+// watchLoop is the narrow cadence: who is being read, and how often.
+//
+// It holds a ticker rather than a deadline because the decision is not this
+// machine's to make. The server owns the lease — a browser renews it, and it
+// lapses on its own when nothing does — and every response says whether it is
+// still live. So there is nothing to expire here, only something to follow.
+type watchLoop struct {
+	who    string
+	every  time.Duration
+	ticker *time.Ticker
+}
+
+// tick fires when the next narrow round is due, and never when nobody is
+// watching: a nil channel blocks for ever, which is exactly right for a select
+// arm that should not exist yet.
+func (w *watchLoop) tick() <-chan time.Time {
+	if w.ticker == nil {
+		return nil
+	}
+	return w.ticker.C
+}
+
+func (w *watchLoop) stop() {
+	if w.ticker != nil {
+		w.ticker.Stop()
+		w.ticker = nil
+	}
+	w.who, w.every = "", 0
+}
+
+// follow takes up what the last response said, and says so once per change.
+//
+// Once per change rather than once per round: a watched machine syncs every three
+// seconds, and a line each time would bury everything else the watcher prints
+// under a log of somebody reading a screen.
+func (w *watchLoop) follow(want *protocol.Watching, a App) {
+	if want == nil {
+		if w.who != "" {
+			_ = a.say("cq: nobody is reading %s now; back to the ordinary pace", w.who)
+			w.stop()
+		}
+		return
+	}
+	every, err := time.ParseDuration(want.Every)
+	if err != nil || every <= 0 {
+		// A server asking for something unreadable is not a reason to spin. The
+		// pane goes as stale as the ordinary mirror, which is what it looked like
+		// before any of this existed.
+		a.complain(fmt.Errorf("cq: the server asked to send %s every %q, which is not a duration",
+			want.Identity, want.Every))
+		w.stop()
+		return
+	}
+	if w.who == want.Identity && w.every == every {
+		return
+	}
+	w.stop()
+	w.who, w.every = want.Identity, every
+	w.ticker = time.NewTicker(every)
+	_ = a.say("cq: sending %s every %s while it is being read", want.Identity, round(every))
 }
 
 // reLibrary picks up a library root the website has moved.

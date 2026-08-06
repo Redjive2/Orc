@@ -174,6 +174,10 @@ type Report struct {
 	// Paced is what the fleet's own cycles were put back to, when they had drifted
 	// from what the server intends. Empty on the ordinary sync where they agreed.
 	Paced []string
+	// Watching is the agent somebody has open in a browser, and how often to send
+	// its session back. Nil means nobody is, which a watcher reads as "stop the
+	// narrow rounds" — see protocol.SyncResponse.
+	Watching *protocol.Watching
 }
 
 // String renders the report in one line.
@@ -182,13 +186,28 @@ func (r Report) String() string {
 		r.Machine, r.Sent, r.Received, r.Applied, r.Failed, r.Skipped)
 }
 
-// Sync performs one round trip.
-func (a *Agent) Sync(ctx context.Context) (Report, error) {
+// Sync performs one round trip: the whole machine up, actions down.
+func (a *Agent) Sync(ctx context.Context) (Report, error) { return a.round(ctx, "") }
+
+// Watch performs a narrow round trip, for one agent somebody is reading.
+//
+// The same exchange as Sync, with a snapshot that carries one session instead of
+// a machine. It still reports results and still applies whatever is queued, and
+// that second part is not incidental — it is what makes answering an agent from
+// the browser take seconds rather than a full sync interval. A narrow round that
+// only *read* would have made the pane current and left the send as slow as it
+// ever was.
+func (a *Agent) Watch(ctx context.Context, identity string) (Report, error) {
+	return a.round(ctx, identity)
+}
+
+func (a *Agent) round(ctx context.Context, watch string) (Report, error) {
 	report := Report{Machine: a.machine}
 
 	// 1. Collect.
 	snap, err := a.source.Snapshot(ctx, source.Options{
 		Machine: a.machine, Admin: a.admin, AdminBodies: a.bodies, Library: a.library,
+		Watch: watch,
 	})
 	if err != nil {
 		a.note(err)
@@ -221,6 +240,7 @@ func (a *Agent) Sync(ctx context.Context) (Report, error) {
 		SentAt:   a.now(),
 		Results:  results,
 		Snapshot: snap,
+		Watch:    watch,
 	})
 	if err != nil {
 		a.note(err)
@@ -228,6 +248,7 @@ func (a *Agent) Sync(ctx context.Context) (Report, error) {
 	}
 	report.Received = len(resp.Actions)
 	report.Pace = resp.Pace
+	report.Watching = resp.Watching
 
 	// 5 before 4, deliberately: the server has already taken the results, so
 	// marking them reported now means a crash before the next step re-sends
@@ -263,7 +284,13 @@ func (a *Agent) Sync(ctx context.Context) (Report, error) {
 	//
 	// After the actions, so a pace queued this round is not immediately argued with
 	// by a snapshot taken before it ran.
-	report.Paced = a.reconcilePace(ctx, snap, resp.FleetPace)
+	//
+	// Not on a narrow round. The snapshot it carries has one session and no
+	// identities, so reconciling against it would be arguing with a fleet nobody
+	// collected — and the full round that did collect one is minutes away at most.
+	if watch == "" {
+		report.Paced = a.reconcilePace(ctx, snap, resp.FleetPace)
+	}
 
 	if err := a.journal.writeCursor(cursor{
 		LastSync: a.now(), Machine: a.machine, Server: a.server,

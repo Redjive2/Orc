@@ -157,6 +157,11 @@ export const api = {
   poke: (machine, name, message) =>
     fleetCall("identities", name, "poke", machine, { message: message || undefined }),
   refreshAgent: (machine, name) => fleetCall("identities", name, "refresh", machine, {}),
+  // Watching is not a queued action: it changes nothing on the agent machine, so
+  // it takes effect at the server the moment it is called rather than on the next
+  // sync. Taking and renewing are the same call — see store.Watch.
+  watch: (machine, name) => fleetCall("identities", name, "watch", machine, {}),
+  unwatch: (machine, name) => fleetCall("identities", name, "unwatch", machine, {}),
   // `from` is where the browser saw it working. The server requires it: a snapshot
   // is minutes old by the time somebody clicks, and without it a move made here
   // would silently overturn one made on the machine in between.

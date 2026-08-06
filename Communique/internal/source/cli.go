@@ -105,6 +105,30 @@ func NewCLI(user string) *CLI {
 // operator turned it off. A partial snapshot is never returned: the server
 // replaces its copy wholesale, so half a mailbox would read as a mailbox that
 // had lost half its mail.
+// watched is the snapshot a narrow round carries: one agent's session.
+//
+// Everything else is left empty on purpose, and the server is told this is a
+// narrow round so it merges rather than stores — a snapshot with no mail taking
+// the ordinary path would erase a machine's mirror. The empty lists still
+// validate, so nothing here needs a special case on the wire.
+//
+// A session that could not be read leaves the fleet's list empty rather than
+// carrying a placeholder. The server reads an absent session as "nothing is
+// running" and takes the stored transcript down, which is the honest outcome: the
+// agent this pane is about is not there.
+func (c *CLI) watched(ctx context.Context, opts Options) protocol.Snapshot {
+	snap := protocol.Snapshot{
+		Machine: opts.Machine,
+		User:    c.User,
+		TakenAt: time.Now().UTC(),
+		Fleet:   &protocol.Fleet{},
+	}
+	if got, ok := c.orc().Session(ctx, opts.Watch); ok {
+		snap.Fleet.Sessions = []protocol.FleetSession{got}
+	}
+	return snap
+}
+
 func (c *CLI) Snapshot(ctx context.Context, opts Options) (protocol.Snapshot, error) {
 	if err := opts.Validate(); err != nil {
 		return protocol.Snapshot{}, err
@@ -118,6 +142,13 @@ func (c *CLI) Snapshot(ctx context.Context, opts Options) (protocol.Snapshot, er
 	}
 	if err := c.checkIdentity(); err != nil {
 		return protocol.Snapshot{}, err
+	}
+
+	// A narrow round, for a session somebody has open. One subprocess rather than
+	// the mail, the tasks, the repository and an `orc view` per agent — which is
+	// the whole reason a three-second cadence is affordable.
+	if opts.Watch != "" {
+		return c.watched(ctx, opts), nil
 	}
 
 	inboxWire, archiveWire, sentWire, err := c.mailbox(ctx)

@@ -177,6 +177,37 @@ func (o *Orc) Fleet(ctx context.Context) protocol.Fleet {
 // is consulted for.
 const SessionLines = 12
 
+// WatchLines is how much of a *watched* session travels.
+//
+// Larger than SessionLines, and the trade runs the other way. That one is paid on
+// every agent, every full sync, to fill a fold somebody glances at; this one is
+// paid on one agent, for a screen somebody is reading, and a pane that shows a
+// dozen lines of a conversation is a pane that has to be left and re-entered to
+// follow it. One session at sixty lines is a smaller round than twelve agents at
+// twelve.
+const WatchLines = 60
+
+// Session asks `orc view` about one agent, in the depth a reader wants.
+//
+// Absent rather than empty when there is nothing running: `orc view` reports no
+// session for an agent that has stopped, and the caller has to be able to tell
+// that from a session it merely could not read — one ends with the transcript
+// coming off the screen, the other with it left where it was.
+func (o *Orc) Session(ctx context.Context, name string) (protocol.FleetSession, bool) {
+	body, err := o.run(ctx, "view", name, "--json", "--lines", strconv.Itoa(WatchLines))
+	if err != nil {
+		return protocol.FleetSession{}, false
+	}
+	var got protocol.FleetSession
+	if err := decodeJSON(body, &got, o.command()+" view"); err != nil {
+		return protocol.FleetSession{}, false
+	}
+	if got.Validate() != nil {
+		return protocol.FleetSession{}, false
+	}
+	return got, true
+}
+
 // sessions asks `orc view` about each employed identity.
 //
 // One call per agent rather than one for the fleet, because that is the command
