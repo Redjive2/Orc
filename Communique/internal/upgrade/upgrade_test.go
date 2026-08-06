@@ -36,6 +36,10 @@ type recorder struct {
 	calls  [][]string
 	out    map[string]string
 	failAt string
+	// onBuild runs when the build step does, so a test can make the build write
+	// the files a real one would. The report measures the disk now, so a fake that
+	// wrote nothing would be a fake of a build that installed nothing.
+	onBuild func()
 }
 
 func (r *recorder) run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -44,6 +48,9 @@ func (r *recorder) run(_ context.Context, dir, name string, args ...string) ([]b
 	joined := strings.Join(call, " ")
 	if r.failAt != "" && strings.Contains(joined, r.failAt) {
 		return []byte("it went wrong"), errors.New("exit status 1")
+	}
+	if r.onBuild != nil && strings.Contains(joined, "sh/build") {
+		r.onBuild()
 	}
 	for key, out := range r.out {
 		if strings.Contains(joined, key) {

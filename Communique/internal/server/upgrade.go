@@ -2,6 +2,8 @@ package server
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"context"
@@ -255,6 +257,29 @@ func (s *Server) upgradeSelf() {
 		})
 		return
 	}
+	// Did the build replace the binary this server will restart into?
+	//
+	// The supervisor resolves its executable once, when it starts, and execs that
+	// exact path. If `$CQ_BIN` names a directory other than the one the running
+	// binary is in, the build installs somewhere else and the restart brings the
+	// **old** build back up — an upgrade that pulls, builds, restarts, reports
+	// success, and changes nothing. There is no way to notice that from the outside,
+	// which is why it could go on happening.
+	//
+	// Restarting anyway would cost the outage and buy nothing, so it is refused and
+	// the reason names both paths.
+	if exe, err := os.Executable(); err == nil && report.Untouched(exe) {
+		why := fmt.Errorf("the build did not replace %s, so restarting would come back on the "+
+			"same build; it installed into %s — set $CQ_BIN to %s, or run the server from there",
+			exe, report.Target, filepath.Dir(exe))
+		s.log.Error("upgrade installed somewhere this server does not run from", "error", why)
+		s.recordUpgrade(selfUpgrade{
+			State: "failed", Started: started, Ended: s.now().UTC().Format(time.RFC3339),
+			Error: why.Error(), Report: &report,
+		})
+		return
+	}
+
 	s.log.Info("upgraded", "before", report.Before, "after", report.After,
 		"built", report.Built, "changed", report.Changed)
 	s.recordUpgrade(selfUpgrade{

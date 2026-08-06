@@ -19,8 +19,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
+
+	"orc/common/watch"
 
 	"orc/cq/internal/fault"
 )
@@ -62,6 +65,29 @@ type Report struct {
 	// working tree can be dirty, or a previous build can have failed halfway — but
 	// a caller that restarts only on a change has the fact it needs.
 	Changed bool `json:"changed"`
+	// Replaced names the files in Target whose contents actually moved, measured
+	// rather than inferred.
+	//
+	// `Built` says what the build script *reported* building. This says what is on
+	// the disk now that was not there before, which is a different question and the
+	// one that matters: a build can report nine tools and install them somewhere
+	// nobody runs from, and every layer above this then reports a successful
+	// upgrade that changed nothing.
+	Replaced []string `json:"replaced,omitempty"`
+}
+
+// Untouched reports whether a path in the install directory came through the build
+// unchanged.
+//
+// The question a caller asks before restarting: is the binary I am about to exec
+// the new one? Answering it needed a fact nobody was collecting.
+func (r Report) Untouched(path string) bool {
+	for _, got := range r.Replaced {
+		if got == path {
+			return false
+		}
+	}
+	return true
 }
 
 // Step is one command and what it came to.
@@ -173,11 +199,20 @@ func (o Options) Upgrade(ctx context.Context) (Report, error) {
 		report.Steps = append(report.Steps, Step{What: "build", Error: trim(err.Error())})
 		return report, err
 	}
+	// What is in the install directory before the build, so the report can say what
+	// the build actually moved rather than what it said it would.
+	before := stampAll(target)
+
 	out, err := step("build", source, name, args...)
 	if err != nil {
 		return report, fault.IO{Op: "build", Subject: source, Err: fmt.Errorf("%s", trim(string(out)))}
 	}
 	report.Built = built(string(out))
+	report.Replaced = movedSince(target, before)
+	if len(report.Replaced) == 0 {
+		report.Steps = append(report.Steps, Step{What: "install",
+			Error: "the build reported success and no file in " + target + " changed"})
+	}
 	return report, nil
 }
 
@@ -467,4 +502,46 @@ func findBash() (string, error) {
 	return "", fault.Usage{Reason: "the build script needs bash, and none was found on PATH or " +
 		"in the usual Git for Windows places; install Git for Windows, or run `sh/build` by hand " +
 		"from a shell that has one"}
+}
+
+// stampAll records every file in a directory, so a later look can say what moved.
+//
+// Size and modification time, which is what watch.Look measures and what the
+// watchers already restart on. A hash would be surer and is not worth reading every
+// binary in the tree twice for — a `go build` that writes a file always moves its
+// mtime, and the failure this catches is a file that was **not written at all**.
+//
+// An unreadable directory stamps as empty, which reports every file as new. That is
+// the direction to fail in: an upgrade wrongly reported as having changed something
+// costs a restart, and one wrongly reported as having changed nothing costs the
+// upgrade.
+func stampAll(dir string) map[string]watch.Stamp {
+	out := map[string]watch.Stamp{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if got, err := watch.Look(path); err == nil {
+			out[path] = got
+		}
+	}
+	return out
+}
+
+// movedSince names the files that are new or changed, in a stable order.
+func movedSince(dir string, before map[string]watch.Stamp) []string {
+	var moved []string
+	for path, now := range stampAll(dir) {
+		was, seen := before[path]
+		if !seen || now.Size != was.Size || !now.Mod.Equal(was.Mod) {
+			moved = append(moved, path)
+		}
+	}
+	sort.Strings(moved)
+	return moved
 }

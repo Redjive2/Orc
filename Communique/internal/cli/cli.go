@@ -271,6 +271,16 @@ func (a App) serve(args []string) error {
 		}
 	}
 
+	// Said at start, not discovered at upgrade time.
+	//
+	// The supervisor execs the path this binary is at. A `--bin` pointing anywhere
+	// else means an upgrade installs where nothing runs from, restarts into the old
+	// build, and reports success — and the moment to hear about that is now, while
+	// somebody is reading the startup lines, rather than in a log after a rebuild
+	// that appeared to work. The server still starts: the setting may be deliberate
+	// on a machine that installs for others.
+	a.warnInstallElsewhere(*binDir)
+
 	srv, err := server.New(server.Options{
 		State: state, Creds: creds, Admin: !*noAdmin,
 		Logger: a.logger(), Flavour: flavour,
@@ -1113,4 +1123,26 @@ func (a App) startingPace(home string, flag time.Duration) time.Duration {
 		return flag
 	}
 	return syncPace(got.Pace, flag)
+}
+
+// warnInstallElsewhere says when an upgrade would install where this server does
+// not run from. Empty means "beside the running binary", which is always right.
+func (a App) warnInstallElsewhere(binDir string) {
+	if strings.TrimSpace(binDir) == "" {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	here, there := filepath.Dir(exe), binDir
+	if got, err := filepath.Abs(there); err == nil {
+		there = got
+	}
+	if here == there {
+		return
+	}
+	a.tell("%s %s", a.ink("warning", style.Warn), a.ink(fmt.Sprintf(
+		"upgrades install into %s, and this server runs from %s — a rebuild would restart "+
+			"on the same build", there, here), style.Quiet))
 }
