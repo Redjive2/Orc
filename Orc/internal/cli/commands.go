@@ -440,7 +440,26 @@ func (a App) removeIdentity(args []string) error {
 
 // removeRole deletes a role, refusing while anybody holds it.
 func (a App) removeRole(args []string) error {
-	if err := exactly(args, 1, "remove role takes one name"); err != nil {
+	// `--yes` is accepted and not required.
+	//
+	// Not required, because nothing here is lost: the command already refuses while
+	// anybody holds the role, so the destructive case it would guard cannot be
+	// reached. `remove identity` asks because a workspace may hold work nobody has
+	// another copy of, and `revoke` does not ask because taking a permission away is
+	// never the dangerous direction. This is the second kind.
+	//
+	// Accepted, because everything else spelled `remove … --yes` takes it, and the
+	// callers had learned that. cq builds `orc remove role <name> --yes` for the
+	// button in its web interface — so every role deleted from a browser failed on
+	// the agent machine, minutes later, in a queue, with "takes one name, got 2
+	// arguments". A flag that means "I am sure" should never be the thing that
+	// refuses a command that did not need asking.
+	var yes bool
+	rest, err := flagged(args, options{switches: map[string]*bool{"--yes": &yes}})
+	if err != nil {
+		return err
+	}
+	if err := exactly(rest, 1, "remove role takes one name"); err != nil {
 		return err
 	}
 	s, err := a.begin()
@@ -451,7 +470,7 @@ func (a App) removeRole(args []string) error {
 		return err
 	}
 
-	name, err := model.ParseName(args[0])
+	name, err := model.ParseName(rest[0])
 	if err != nil {
 		return err
 	}
