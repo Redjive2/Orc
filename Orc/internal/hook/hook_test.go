@@ -180,11 +180,17 @@ func TestLiveRung(t *testing.T) {
 		path  string
 		block bool
 	}{
-		{"a write inside the clause", "Edit", ws + "/Anno/internal/tree.go", false},
-		{"a write outside the clause", "Edit", ws + "/Common/user/user.go", true},
-		{"a write the read clause covers but write does not", "Write", ws + "/Anno/main.go", true},
-		{"a read inside the clause", "Read", ws + "/Anno/main.go", false},
-		{"a read outside the clause", "Read", ws + "/Docs/Vision.md", true},
+		// The workspace is the agent's, entirely: no clause narrows it. What used to
+		// be three refusals here — a write the clauses did not name, a write where
+		// only a read clause reached, a read of another subtree — were all the same
+		// mistake, refusing an agent the ordinary acts of working in the directory
+		// it was given to work in.
+		{"a write in the workspace", "Edit", ws + "/Anno/internal/tree.go", false},
+		{"a write elsewhere in the workspace", "Edit", ws + "/Common/user/user.go", false},
+		{"a write no clause names", "Write", ws + "/Anno/main.go", false},
+		{"a file the agent made up", "Write", ws + "/scratch/notes.md", false},
+		{"a read in the workspace", "Read", ws + "/Anno/main.go", false},
+		{"a read elsewhere in the workspace", "Read", ws + "/Docs/Vision.md", false},
 		{"a read outside the workspace", "Read", "/etc/hosts", true},
 		{"a tool orc does not govern", "WebFetch", "", false},
 		{"a relative path, resolved against cwd", "Edit", "internal/tree.go", false},
@@ -234,9 +240,12 @@ func TestSnapshotRung(t *testing.T) {
 		t.Errorf("a write the snapshot permits was blocked:\n%s", out.Stderr)
 	}
 
-	out := r.call(opts, tool("Edit", ws+"/Common/user.go", ws))
+	// Outside the workspace, which is the boundary that remains once a clause no
+	// longer narrows the inside of one. The rung is what is being tested: the
+	// refusal has to say the decision came from the snapshot.
+	out := r.call(opts, tool("Edit", "/etc/hosts", ws))
 	if out.Code != hook.CodeBlock {
-		t.Fatalf("a write the snapshot does not permit was allowed")
+		t.Fatalf("a write outside the workspace was allowed")
 	}
 	if !strings.Contains(out.Stderr, "this session started with") {
 		t.Errorf("the refusal does not say the decision is the one from populate:\n%s", out.Stderr)
@@ -388,17 +397,18 @@ func TestTheShellIsShutByDefault(t *testing.T) {
 		}
 	}
 
-	// And what the file-reading tools are pointed at is still decided by the
-	// clauses, which is what keeps them off the `cat` objection: ember may write
-	// Anno/internal/** and nothing else.
+	// And what the file-reading tools are pointed at is still decided by where they
+	// point, which is what keeps them off the `cat` objection. The boundary is the
+	// workspace rather than a clause inside it: anywhere in ember's own directory
+	// is ember's, and anywhere else is not.
 	if out := bash("anno write Anno/internal/tree.go"); out.Code != hook.CodeOK {
-		t.Errorf("anno write inside the write clause was blocked:\n%s", out.Stderr)
+		t.Errorf("anno write in its own workspace was blocked:\n%s", out.Stderr)
 	}
-	if out := bash("anno write Communique/internal/web/app.js"); out.Code != hook.CodeBlock {
-		t.Errorf("anno write outside every write clause ran:\n%s", out.Stderr)
+	if out := bash("anno write Communique/internal/web/app.js"); out.Code != hook.CodeOK {
+		t.Errorf("anno write elsewhere in its own workspace was blocked:\n%s", out.Stderr)
 	}
-	if out := bash("anno read " + ws + "/Common/user/user.go"); out.Code != hook.CodeBlock {
-		t.Errorf("anno read outside every read clause ran:\n%s", out.Stderr)
+	if out := bash("anno read /etc/hosts"); out.Code != hook.CodeBlock {
+		t.Errorf("anno read outside the workspace ran:\n%s", out.Stderr)
 	}
 
 	// The refusal names the command rather than the line, and says what to ask for.
@@ -436,10 +446,13 @@ func TestAShellClauseOpensWhatItNames(t *testing.T) {
 	}
 
 	// The shell gate says which commands may run; it does not decide what they
-	// touch. `anno write` is still checked against the write clauses, and that is
-	// what stops this one.
-	if out := bash("cd " + ws + " && anno write Common/user/user.go"); out.Code != hook.CodeBlock {
-		t.Error("an out-of-scope anno write was allowed")
+	// touch. Where they point is still checked, and the boundary is the workspace:
+	// anywhere inside it is ember's, and anywhere else is not.
+	if out := bash("cd " + ws + " && anno write Common/user/user.go"); out.Code != hook.CodeOK {
+		t.Errorf("an anno write inside the workspace was blocked:\n%s", out.Stderr)
+	}
+	if out := bash("cd " + ws + " && anno write /etc/hosts"); out.Code != hook.CodeBlock {
+		t.Error("an anno write outside the workspace was allowed")
 	}
 
 	// Every command in a line is checked, not only the first.
@@ -643,7 +656,8 @@ func TestFeedRecordsTheDecision(t *testing.T) {
 		"transcript_path": "/tmp/transcript.jsonl",
 	})
 	r.call(opts, tool("Edit", ws+"/Anno/internal/tree.go", ws))
-	r.call(opts, tool("Edit", ws+"/Common/user.go", ws))
+	// Outside the workspace, so there is still a refusal for the feed to record.
+	r.call(opts, tool("Edit", "/etc/hosts", ws))
 
 	events, skipped, err := event.Read(r.store.EventsPath(r.who))
 	if err != nil {
@@ -741,7 +755,7 @@ func TestMainWiring(t *testing.T) {
 	ws := r.workspace()
 
 	var stderr bytes.Buffer
-	in := strings.NewReader(mustJSON(t, tool("Edit", ws+"/Common/user.go", ws)))
+	in := strings.NewReader(mustJSON(t, tool("Edit", "/etc/hosts", ws)))
 	code := hook.Main(in, &stderr, r.as("ember", nil))
 
 	if code != hook.CodeBlock {

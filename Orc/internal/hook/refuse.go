@@ -116,53 +116,12 @@ func refuseOutside(target, workspace string, kind model.Kind, source string) str
 	return join(
 		fmt.Sprintf("orc: %s is outside your workspace, so you may not %s it.", target, act),
 		"",
-		fmt.Sprintf("  your workspace is %s, and every permission you hold is relative to it.", workspace),
+		fmt.Sprintf("  your workspace is %s, and everything in it is yours — this is not.", workspace),
 		fmt.Sprintf("  (%s)", source),
 		"",
 		"  work inside it, or ask your boss for a permission that covers where you are:",
 		fmt.Sprintf("    orc grant permission %s <permission>", "<you>"),
 	)
-}
-
-// refuseClause explains a path inside the workspace that no clause covers.
-//
-// It lists what *is* allowed, because that is the difference between a refusal an
-// agent can act on and one it can only retry. The list is the same shape `orc status`
-// prints, so the two screens agree.
-func refuseClause(target, rel string, kind model.Kind, patterns []model.Pattern, source string) string {
-	act := "write"
-	if kind == model.KindRead {
-		act = "read"
-	}
-
-	allowed := make([]string, 0, len(patterns))
-	for _, p := range patterns {
-		if p.Kind() == kind {
-			allowed = append(allowed, p.Arg())
-		}
-	}
-	sort.Strings(allowed)
-
-	lines := []string{
-		fmt.Sprintf("orc: you may not %s %s.", act, target),
-		"",
-	}
-	if len(allowed) == 0 {
-		lines = append(lines,
-			fmt.Sprintf("  you hold no %s permission at all.", act),
-		)
-	} else {
-		lines = append(lines,
-			fmt.Sprintf("  you may %s:  %s", act, strings.Join(allowed, "  ")),
-			fmt.Sprintf("  you asked for:  %s", rel),
-		)
-	}
-	return join(append(lines,
-		fmt.Sprintf("  (%s)", source),
-		"",
-		"  `orc introspect` shows your whole standing. a wider permission has to come from",
-		"  your boss, and it is capped by what they hold.",
-	)...)
 }
 
 func join(lines ...string) string { return strings.Join(lines, "\n") }

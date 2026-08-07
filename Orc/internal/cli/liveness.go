@@ -481,9 +481,9 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 			//
 			// `orc refresh` and `orc fire` forget the ending, so a conversation
 			// somebody deliberately ended is never resurrected by a backstop.
-			id, resume := "", false
+			id, resume, midTurn := "", false, false
 			if ended, ok := s.store.LastEnded(name); ok {
-				id, resume = ended.Session, true
+				id, resume, midTurn = ended.Session, true, ended.MidTurn
 			} else {
 				fresh, err := session.NewID()
 				if err != nil {
@@ -541,20 +541,14 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 			// The session answers it instead. A conversation that was resumed carries
 			// on, and is nudged only where it stopped mid-turn. One that is new has
 			// never heard anything and is told to begin, every time, whoever asked.
-			if resume {
-				if err := a.nudgeIfInterrupted(s, name); err != nil {
-					a.note("%s was resumed but could not be nudged on: %v", name, err)
-				}
-			} else {
-				if err := a.openWith(s, name); err != nil {
-					a.note("%s was started but could not be told to begin: %v", name, err)
-				}
-				// The interruption record belongs to the session that ended, and this
-				// is a new one that has now been spoken to. Left behind it would nudge
-				// the next start for a turn nobody is in.
-				if err := s.store.ForgetEnded(name); err != nil {
-					a.note("%s: the ending could not be cleared: %v", name, err)
-				}
+			if err := a.openWith(s, name, resume, midTurn); err != nil {
+				a.note("%s was started but could not be told to begin: %v", name, err)
+			}
+			// The interruption record belongs to the session that ended, and this is
+			// a new one that has now been spoken to. Left behind it would nudge the
+			// next start for a turn nobody is in.
+			if err := s.store.ForgetEnded(name); err != nil {
+				a.note("%s: the ending could not be cleared: %v", name, err)
 			}
 
 		case !who.Employed() && live:
@@ -602,7 +596,7 @@ func (a App) reconcile(s caller, names []user.Name, verbose bool) (acted int, er
 // which is what was asked for; the wake cycle is the backstop behind this one, and a
 // fleet that refused to employ an agent because it could not immediately say hello
 // would be worse in every case than one that says so.
-func (a App) openWith(s caller, name user.Name) error {
+func (a App) openWith(s caller, name user.Name, resumed, midTurn bool) error {
 	message, _, err := s.store.WakeMessage(name, roleOf(s, name))
 	if err != nil || strings.TrimSpace(message) == "" {
 		message = WakeMessage
@@ -619,49 +613,19 @@ func (a App) openWith(s caller, name user.Name) error {
 	if _, err := keepTrying(func() error { return client.Poke(message) }); err != nil {
 		return err
 	}
-	return a.say("  " + a.out.Muted(fmt.Sprintf("and told to begin: %s", quoteShort(message))))
+	return a.say("  " + a.out.Muted(said(resumed, midTurn)+": "+quoteShort(message)))
 }
 
-// nudgeIfInterrupted tells a recovered session to carry on, when the one it
-// continues had stopped part-way through a turn.
-//
-// Only for that case. A session that ended *waiting* had finished what it was doing,
-// and poking it would be Orc inventing work; one that ended mid-call was interrupted,
-// and the nudge is the difference between an agent that comes back and one that comes
-// back and sits there.
-//
-// The record is cleared either way, so the nudge happens once rather than on every
-// pass of a watch loop.
-func (a App) nudgeIfInterrupted(s caller, name user.Name) error {
-	ended, ok := s.store.LastEnded(name)
-	if !ok {
-		return nil
+// said is how a start is described, which depends on what it followed.
+func said(resumed, midTurn bool) string {
+	switch {
+	case midTurn:
+		return "it had stopped part-way through a turn, so it was told to carry on"
+	case resumed:
+		return "its conversation was resumed, and it was told to carry on"
+	default:
+		return "and told to begin"
 	}
-	if err := s.store.ForgetEnded(name); err != nil {
-		return err
-	}
-	if !ended.MidTurn {
-		return nil
-	}
-
-	// The session has only just been asked to start, so its socket is very likely
-	// not there yet — this is the widest instance of that window in the tool, since
-	// the poke follows the populate by milliseconds. Retried rather than abandoned,
-	// and a failure is still worth saying and not worth failing the tend for: the
-	// wake cycle is the backstop behind this one.
-	client, _, err := a.reach(s, name)
-	if err != nil {
-		return err
-	}
-	message, _, err := s.store.WakeMessage(name, roleOf(s, name))
-	if err != nil || strings.TrimSpace(message) == "" {
-		message = WakeMessage
-	}
-	if _, err := keepTrying(func() error { return client.Poke(message) }); err != nil {
-		return err
-	}
-	return a.say("  " + a.out.Muted(fmt.Sprintf(
-		"it had stopped part-way through a turn, so it was told to carry on: %s", quoteShort(message))))
 }
 
 // roleOf is an identity's role, or the zero name when it cannot be read. The wake
@@ -756,7 +720,8 @@ func (a App) refresh(args []string) error {
 	// conversation with nothing in it is one where the agent has had no turn in
 	// which to read them — so a refresh that only started a session would have
 	// swapped a working agent for an idle one.
-	if err := a.openWith(s, who); err != nil {
+	// A refresh is always a fresh conversation, so it is always the opening form.
+	if err := a.openWith(s, who, false, false); err != nil {
 		a.note("%s was refreshed but could not be told to begin: %v", who, err)
 	}
 	// Session-scoped grants were tied to the session that just ended. Saying so is

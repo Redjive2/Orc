@@ -341,6 +341,29 @@ named capability in another Orc tool. `Auth_Perm_Role.md` names the first three;
 `orc`, `shell` and `tool` are this build's reading of "any number of specific
 commands or command patterns".
 
+**An agent's workspace is its own.** `read` and `write` clauses do not narrow the
+inside of it. That used to be the rule, and it was the wrong boundary in the way
+that costs most: an agent is given a directory to work in, told to work, and then
+refused the ordinary acts of working in it — a scratch file, a build output, a new
+package, a `go.mod`. Every one of them needed a clause somebody had to have
+thought of in advance, and the failure arrived as a refusal mid-task rather than
+as anything an operator could see coming. An identity with no path clause at all
+could not write a single file anywhere.
+
+What partitions agents is the thing that actually partitions them: **give them
+different workspaces**, with `orc workspace <identity> <path>`. Two agents in two
+directories cannot reach each other's work whatever either of them holds. Two
+agents in one directory could always have reached each other's work in a dozen
+ways a path glob does not see — a shell, a symlink, a build that writes where it
+likes — so the clause was buying tidiness rather than the isolation it resembled.
+
+Everything that is not the workspace is unchanged and still refused: anything
+outside it, the fleet's own store, the shell (shut by default), and subagents.
+
+Path clauses remain in the grammar and in `orc status`, where they say what a role
+was scoped to. They are no longer what the hook consults for a path inside a
+workspace.
+
 The argument is a list, and it may take things back out:
 
 | Written                            | Means                                          |
@@ -411,9 +434,9 @@ match on an undecidable thing, and it is eager on purpose: a false positive cost
 a rephrase, and a false negative costs the gate.
 
 **It gates which commands run, not what they touch.** `shell(rm)` lets `rm` run;
-the `write(…)` clauses still decide which files it may be pointed at, as far as
-the hook can tell — which for an arbitrary command is not far. The two are
-different questions and both are asked.
+where it may be pointed is still checked, as far as the hook can tell — which for
+an arbitrary command is not far. The boundary there is the workspace, not a path
+clause: see *An agent's workspace is its own* below.
 
 **An interpreter runs when a clause names it.** `python3 -c …` and `sh -c …` take
 a program as data, so the name says nothing about what will *happen* — but it says
@@ -495,7 +518,7 @@ which leaves a trail without scrolling a terminal. Recovery is always said. A
 panic in a pass is caught, reported as the defect it is, and the cycle carries on
 — a nil map somewhere below must not take a whole fleet down with it.
 
-### Every new session is told to begin
+### Every start is told to begin — including a resumed one
 
 A Claude session with no user turn does nothing. It holds the fleet's, the role's,
 and the identity's instructions in its system prompt and has no occasion to act on
@@ -506,9 +529,24 @@ said "opening" and a backstop said nothing. So a session `tend` rebuilt was neve
 spoken to, and it sat at its prompt until the wake cycle noticed it a whole
 interval later. `orc refresh` left one that looked started and never moved.
 
-It follows from the session now. A conversation that was **resumed** carries on,
-and is nudged only where it stopped mid-turn. One that is **new** has heard
-nothing and is told to begin, every time, whoever made it.
+Every start speaks, and what differs is only the wording.
+
+The resumed path used to speak only where the last turn had been *interrupted*,
+on the reasoning that a session which finished its turn is waiting and waking it
+is the wake cycle's job. That reasoning missed what a resume is. `--resume`
+restores the conversation and leaves the agent at its prompt: it has history and
+no occasion to act on it, exactly like a new session. So an agent that came back
+from a clean stop sat there until the quiet threshold elapsed.
+
+This is the case a fleet lives in. `recordEnding` writes an Ended record whenever
+a supervisor exits, and only a refresh or a fire forgets it — so after the first
+`orc employ`, nearly every start is a resume: a crash, a reboot, a machine that
+slept, an upgrade. The opening message went out once, on the first employ, and
+after that the only prompts that ever arrived were the wake cycle's.
+
+A start that follows an interrupted turn still says so, because the two are
+different situations and the wording is how somebody reading a log tells them
+apart.
 
 ### Delivery is confirmed, not assumed
 

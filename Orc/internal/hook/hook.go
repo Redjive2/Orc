@@ -344,39 +344,49 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 		return pass
 	}
 
-	patterns, source, ok := permissions(s, who)
+	// The rung is still consulted, and what it decides is no longer *which* paths
+	// but whether this identity can be established at all. A store nobody can read
+	// cannot say whose workspace this is, and a write into an unknown directory on
+	// that footing is the one case worth refusing blind.
+	_, source, ok := permissions(s, who)
 	if !ok {
-		// Third rung: nothing readable. Reads pass, writes block.
+		// Nothing readable. Reads pass, writes block.
 		if kind == model.KindRead {
 			return pass
 		}
 		return Outcome{Code: CodeBlock, Stderr: refuseBlind(targets)}
 	}
 
-	// Reads narrow only when there is something to narrow them with. An identity
-	// with no read clause at all is unrestricted — the same rule `orc`'s own verb
-	// gating uses, and for the same reason: a rule that has to be bootstrapped
-	// before anything can be read is not a rule, it is a deadlock.
-	if kind == model.KindRead && !holdsKind(patterns, model.KindRead) {
-		return pass
-	}
-
+	// **The workspace is the agent's, entirely.**
+	//
+	// A path clause used to narrow *within* it, and that was the wrong boundary in
+	// the way that costs most: an agent is given a directory to work in, told to
+	// work, and then refused the ordinary acts of working in it. A scratch file, a
+	// build output, a new package, a `go.mod` — every one needed a clause somebody
+	// had to have thought of in advance, and the failure arrived as a refusal
+	// mid-task rather than as anything an operator could see coming. An identity
+	// with no path clause at all could not write a single file anywhere.
+	//
+	// What partitions agents is now the thing that actually partitions them: give
+	// them different workspaces. `orc workspace <identity> <path>` exists for
+	// exactly that, and two agents in two directories cannot reach each other's
+	// work whatever either of them holds. Two agents in one directory could always
+	// have reached each other's work in a dozen ways a path glob does not see — a
+	// shell, a symlink, a build that writes where it likes — so the clause was
+	// buying tidiness rather than the isolation it resembled.
+	//
+	// Everything that is *not* the workspace is untouched and still refused: the
+	// fleet's own store, anything outside the workspace, the shell gate, and the
+	// subagent denial. Each is checked elsewhere in this function and none of them
+	// consults a path clause.
 	workspace := ""
 	if s != nil {
 		workspace = s.WorkspaceDir(who)
 	}
 	for _, t := range targets {
-		full := resolve(p.CWD, t)
-		rel, inside := relativeTo(workspace, full)
-		if !inside {
-			// Outside the workspace. A write there cannot be permitted by a
-			// workspace-relative clause, so it is refused; a read there is refused
-			// too, because the identity holds read clauses and this is not one of
-			// them.
+		if _, inside := relativeTo(workspace, resolve(p.CWD, t)); !inside {
+			// Outside the workspace, which is the boundary that remains for paths.
 			return Outcome{Code: CodeBlock, Stderr: refuseOutside(t, workspace, kind, source)}
-		}
-		if !allows(patterns, kind, rel) {
-			return Outcome{Code: CodeBlock, Stderr: refuseClause(t, rel, kind, patterns, source)}
 		}
 	}
 	return pass
@@ -671,15 +681,6 @@ func known(name string, against []string) bool {
 func allows(patterns []model.Pattern, kind model.Kind, rel string) bool {
 	for _, p := range patterns {
 		if p.Kind() == kind && p.Matches(rel) {
-			return true
-		}
-	}
-	return false
-}
-
-func holdsKind(patterns []model.Pattern, kind model.Kind) bool {
-	for _, p := range patterns {
-		if p.Kind() == kind {
 			return true
 		}
 	}

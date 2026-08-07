@@ -11,6 +11,7 @@ import (
 
 	"orc/common/user"
 	"orc/orc/internal/session"
+	orcstore "orc/orc/internal/store"
 )
 
 // What a session is told when it starts.
@@ -204,5 +205,64 @@ func TestTendTellsAFreshSessionToBegin(t *testing.T) {
 	if len(said) <= before {
 		t.Fatalf("a session tend started fresh was never spoken to: %q (%s%s)",
 			said, got.stdout, got.stderr)
+	}
+}
+
+// A session that is *resumed* has no turn either, and used to be told nothing.
+//
+// This is the one the fleet actually lives in. `recordEnding` writes an Ended
+// record whenever a supervisor exits, and it is only forgotten by a refresh or a
+// fire — so after the very first employ, almost every start is a resume: a crash,
+// a reboot, a machine that slept, an upgrade. The resumed path spoke only when the
+// last turn had been interrupted, and said nothing at all otherwise.
+//
+// `--resume` restores the conversation and leaves the agent at its prompt. It has
+// history and no occasion to act on it, exactly like a new one — so an agent that
+// came back from a clean stop sat there until the wake cycle noticed, which is why
+// the only prompts anybody ever saw arrive were the wake cycle's.
+func TestAResumedSessionIsToldToCarryOn(t *testing.T) {
+	r := fullFleet(t)
+	heard := poking(t, r, "ember")
+	r.ok("boss", "employ", "ember")
+
+	store := mustStore(t, r)
+	who := mustName(t, "ember")
+	if err := store.RemoveSession(who); err != nil {
+		t.Fatal(err)
+	}
+	// Ended cleanly: not mid-turn. This is the ordinary way a session stops.
+	if err := store.RecordEnded(who, orcstore.Ended{Session: "s-1", Why: "exit 0"}); err != nil {
+		t.Fatal(err)
+	}
+	before := len(heard.said())
+
+	got := r.ok("boss", "tend")
+	if len(heard.said()) <= before {
+		t.Fatalf("a session resumed after a clean stop was told nothing (%s%s)", got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "resumed") {
+		t.Errorf("it did not say the conversation was resumed:\n%s", got.stdout)
+	}
+}
+
+// And one that stopped mid-turn still says so, because the two are different
+// situations and the wording is how somebody reading a log tells them apart.
+func TestAnInterruptedSessionStillSaysSo(t *testing.T) {
+	r := fullFleet(t)
+	poking(t, r, "ember")
+	r.ok("boss", "employ", "ember")
+
+	store := mustStore(t, r)
+	who := mustName(t, "ember")
+	if err := store.RemoveSession(who); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordEnded(who, orcstore.Ended{Session: "s-1", MidTurn: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := r.ok("boss", "tend")
+	if !strings.Contains(got.stdout, "part-way through a turn") {
+		t.Errorf("an interrupted session was described as an ordinary resume:\n%s", got.stdout)
 	}
 }
