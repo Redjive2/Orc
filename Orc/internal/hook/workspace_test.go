@@ -94,3 +94,35 @@ func TestARefusalStillNamesTheWayForward(t *testing.T) {
 		t.Errorf("the refusal does not say what the boundary is:\n%s", out.Stderr)
 	}
 }
+
+// A refusal that dead-ends.
+//
+// Reported from a live fleet: an agent asked to architect the Orc repository, with
+// a freshly provisioned workspace, was told "nothing outside the project is
+// grantable" — and it was right to read that as being stuck. Its workspace was in
+// no repository, so its project *was* its workspace, so no clause could reach
+// anything. It had captured what it needed before the guard tightened and could
+// not verify a word of it afterwards.
+//
+// The message was true and useless. What it left out is that the remedy is not a
+// permission at all: the agent is in the wrong place, and a workspace is a thing
+// an operator moves.
+func TestARefusalWithNoProjectSaysTheWorkspaceMustMove(t *testing.T) {
+	r := newRig(t)
+	// The provisioned workspace, which is under the identity directory and inside
+	// no repository — exactly the reported case.
+	out := r.call(r.as("ember", nil), tool("Read", "/etc/hosts", r.workspace()))
+	if out.Code != hook.CodeBlock {
+		t.Fatalf("a read outside the workspace was allowed")
+	}
+	if !strings.Contains(out.Stderr, "orc workspace") {
+		t.Errorf("the refusal does not name the way forward:\n%s", out.Stderr)
+	}
+	if !strings.Contains(out.Stderr, "no repository") {
+		t.Errorf("the refusal does not say why no permission would help:\n%s", out.Stderr)
+	}
+	// And it must not send somebody to ask for a clause that cannot be parsed.
+	if strings.Contains(out.Stderr, "ask for a permission") {
+		t.Errorf("the refusal still points at a permission:\n%s", out.Stderr)
+	}
+}

@@ -114,15 +114,43 @@ func refuseOutside(target, workspace, project string, kind model.Kind, source st
 	if kind == model.KindRead {
 		act = "read"
 	}
-	return join(
+	lines := []string{
 		fmt.Sprintf("orc: %s is outside the project, so you may not %s it.", target, act),
 		"",
 		fmt.Sprintf("  your workspace is %s, and everything in it is yours.", workspace),
-		fmt.Sprintf("  the project is %s, and a permission can reach inside it.", project),
-		fmt.Sprintf("  (%s)", source),
-		"",
-		"  nothing outside the project is grantable, so this is not a permission to ask for.",
-	)
+	}
+	// The two cases read the same and are not the same, and the difference is the
+	// whole of what somebody does next.
+	//
+	// A workspace inside a repository has a project, and a clause can reach into
+	// it — so the answer is a permission. A workspace that is in no repository is
+	// its own project, which means *no clause can grant anything at all*: a pattern
+	// is refused at parse time if it is absolute or climbs out (see cleanGlob, and
+	// the reason, which is that such a pattern means a different directory on every
+	// machine). An agent there is not one permission short. It is in the wrong
+	// place, and it was being told to ask for something that cannot exist.
+	if project == workspace {
+		lines = append(lines,
+			"  your workspace is in no repository, so it is its own project and nothing",
+			"  reaches past it. no permission can fix that — a pattern may not be absolute",
+			"  or climb out, because it would name a different directory on every machine.",
+			fmt.Sprintf("  (%s)", source),
+			"",
+			"  the way forward is to be put where the work is:",
+			"      orc workspace <you> <the repository> --adopt",
+			"  ask whoever employs you. `orc introspect` names them.",
+		)
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("  the project is %s, and a permission can reach inside it.", project),
+			fmt.Sprintf("  (%s)", source),
+			"",
+			"  this path is outside it, so no permission over the project covers it.",
+			"  if the work really is there, the workspace is what has to move:",
+			"      orc workspace <you> <the repository> --adopt",
+		)
+	}
+	return join(lines...)
 }
 
 // refuseUngranted is a path inside the project that no clause covers.
