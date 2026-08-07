@@ -357,12 +357,24 @@ agents in one directory could always have reached each other's work in a dozen
 ways a path glob does not see — a shell, a symlink, a build that writes where it
 likes — so the clause was buying tidiness rather than the isolation it resembled.
 
-Everything that is not the workspace is unchanged and still refused: anything
-outside it, the fleet's own store, the shell (shut by default), and subagents.
+**A path clause is measured from the project.** Outside its workspace, an agent
+may reach what a clause names and nothing else — and the clause is resolved
+against the repository the workspace sits in, found by walking up to the nearest
+`.git`. So `read(Docs/**)` is the repository's `Docs`, which is the same directory
+whichever agent reads it and whatever its own workspace is called. One permission
+means one thing across a fleet, which a workspace-relative clause never managed.
 
-Path clauses remain in the grammar and in `orc status`, where they say what a role
-was scoped to. They are no longer what the hook consults for a path inside a
-workspace.
+A workspace in no repository is its own project. That is the narrow direction on
+purpose: rooting a clause at a parent nobody chose would widen what a permission
+reaches by accident.
+
+The two refusals outside a workspace are different, and say so. A path **inside**
+the project that no clause covers names the clause that would cover it, because
+that is a permission away. A path **outside** the project says no clause reaches
+there, because asking for one would not help.
+
+Everything else is unchanged and still refused: the fleet's own store, the shell
+(shut by default), and subagents. None of them consults a path clause.
 
 The argument is a list, and it may take things back out:
 

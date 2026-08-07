@@ -108,19 +108,42 @@ func refuseSlow(targets []string, within time.Duration) string {
 }
 
 // refuseOutside explains a path that is not in the workspace at all.
-func refuseOutside(target, workspace string, kind model.Kind, source string) string {
+// refuseOutside is a path outside the project altogether, which no clause reaches.
+func refuseOutside(target, workspace, project string, kind model.Kind, source string) string {
 	act := "write"
 	if kind == model.KindRead {
 		act = "read"
 	}
 	return join(
-		fmt.Sprintf("orc: %s is outside your workspace, so you may not %s it.", target, act),
+		fmt.Sprintf("orc: %s is outside the project, so you may not %s it.", target, act),
 		"",
-		fmt.Sprintf("  your workspace is %s, and everything in it is yours — this is not.", workspace),
+		fmt.Sprintf("  your workspace is %s, and everything in it is yours.", workspace),
+		fmt.Sprintf("  the project is %s, and a permission can reach inside it.", project),
 		fmt.Sprintf("  (%s)", source),
 		"",
-		"  work inside it, or ask your boss for a permission that covers where you are:",
-		fmt.Sprintf("    orc grant permission %s <permission>", "<you>"),
+		"  nothing outside the project is grantable, so this is not a permission to ask for.",
+	)
+}
+
+// refuseUngranted is a path inside the project that no clause covers.
+//
+// Different from being outside it, and the difference is what somebody does next:
+// this one is a permission away, and the message says which shape of clause would
+// cover it so the ask is exact rather than a guess.
+func refuseUngranted(target, rel, project string, kind model.Kind, source string) string {
+	act, verb := "write", "write"
+	if kind == model.KindRead {
+		act, verb = "read", "read"
+	}
+	return join(
+		fmt.Sprintf("orc: no permission of yours covers %s, so you may not %s it.", target, act),
+		"",
+		fmt.Sprintf("  it is %s inside the project at %s, and a clause is measured from there.", rel, project),
+		fmt.Sprintf("  (%s)", source),
+		"",
+		"  ask your boss for a permission holding a clause that reaches it:",
+		fmt.Sprintf("    %s(%s)", verb, rel),
+		"    orc grant permission <you> <permission>",
 	)
 }
 

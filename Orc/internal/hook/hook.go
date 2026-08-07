@@ -348,7 +348,7 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 	// but whether this identity can be established at all. A store nobody can read
 	// cannot say whose workspace this is, and a write into an unknown directory on
 	// that footing is the one case worth refusing blind.
-	_, source, ok := permissions(s, who)
+	patterns, source, ok := permissions(s, who)
 	if !ok {
 		// Nothing readable. Reads pass, writes block.
 		if kind == model.KindRead {
@@ -383,13 +383,61 @@ func decide(opts Options, s *store.Store, who user.Name, p payload) Outcome {
 	if s != nil {
 		workspace = s.WorkspaceDir(who)
 	}
+	// **A path clause is relative to the project, not to the workspace.**
+	//
+	// It used to be workspace-relative, which made it two things at once: the fence
+	// around what an agent could touch *and* the ruler those touches were measured
+	// with. Taking the fence away left the ruler measuring nothing — every clause
+	// was dead, and an agent outside its workspace was refused and told to ask for a
+	// permission that could not exist.
+	//
+	// The project is what a clause was always trying to describe. `read(Docs/**)`
+	// means the repository's `Docs`, which is the same directory whichever agent
+	// reads it and whatever its own workspace is called — so one permission means
+	// one thing across a fleet, which a workspace-relative clause never managed.
+	project := projectOf(workspace)
 	for _, t := range targets {
-		if _, inside := relativeTo(workspace, resolve(p.CWD, t)); !inside {
-			// Outside the workspace, which is the boundary that remains for paths.
-			return Outcome{Code: CodeBlock, Stderr: refuseOutside(t, workspace, kind, source)}
+		at := resolve(p.CWD, t)
+		if _, inside := relativeTo(workspace, at); inside {
+			continue // the workspace is the agent's, entirely
+		}
+		rel, inProject := relativeTo(project, at)
+		if !inProject {
+			return Outcome{Code: CodeBlock, Stderr: refuseOutside(t, workspace, project, kind, source)}
+		}
+		if !allows(patterns, kind, rel) {
+			return Outcome{Code: CodeBlock, Stderr: refuseUngranted(t, rel, project, kind, source)}
 		}
 	}
 	return pass
+}
+
+// projectOf is the repository a workspace sits in, or the workspace itself.
+//
+// The nearest `.git` walking up, because that is what anybody means by "the
+// project" and it needs no configuration: an agent working in `Orc/agents/ember`
+// gets clauses rooted at the repository, and the same clause means the same
+// directory for every agent in it.
+//
+// A workspace outside any repository falls back to the workspace. That is the
+// narrow direction on purpose — the alternative is rooting a clause at a parent
+// nobody chose, which would widen what a permission reaches by accident. It also
+// makes the fallback identical to the boundary that was there before.
+func projectOf(workspace string) string {
+	if workspace == "" {
+		return ""
+	}
+	at := filepath.Clean(workspace)
+	for {
+		if _, err := os.Stat(filepath.Join(at, ".git")); err == nil {
+			return at
+		}
+		parent := filepath.Dir(at)
+		if parent == at {
+			return filepath.Clean(workspace)
+		}
+		at = parent
+	}
 }
 
 // decideShell gates a command line on the identity's `shell` clauses.
