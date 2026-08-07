@@ -263,6 +263,17 @@ func (a App) scope(args []string) error {
 	// directory, and making them remember the slash is a papercut with no
 	// safety value.
 	entries := s.app.directoriesAsPrefixes(set.Entries())
+	// A scope is a set of paths, and nothing here can know which tree they will be
+	// measured against: the person who runs the task may be working somewhere else
+	// entirely. So an entry that is not there is a caution and not a refusal.
+	//
+	// Refusing would be wrong for the case that produced this. An architect with a
+	// freshly provisioned workspace wrote three tasks scoped to a repository it was
+	// not standing in — every path correct, none of them present — and a refusal
+	// would have stopped the tasks being written at all. Saying nothing was also
+	// wrong: the scopes only mean something once the owner has a workspace at that
+	// repository, and nobody was told.
+	a.cautionAbsent(entries)
 
 	got, err := s.store.Apply(name, func(current task.Task) (task.Event, error) {
 		if err := s.permit(current, policy.Scope); err != nil {
@@ -283,6 +294,60 @@ func (a App) scope(args []string) error {
 		}
 	}
 	return nil
+}
+
+// cautionAbsent says which scope entries are not in the caller's own tree.
+//
+// On stderr, so a script reading the scope back off stdout is unaffected, and
+// worded as a fact about *here* rather than a verdict about the paths: they may
+// be exactly right for the machine the work will be done on.
+func (a App) cautionAbsent(entries []string) {
+	var missing []string
+	for _, entry := range entries {
+		if !a.exists(strings.TrimSuffix(entry, "/")) {
+			missing = append(missing, entry)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	is := "is"
+	if len(missing) > 1 {
+		is = "are"
+	}
+	a.note("%s %s not in %s.", a.err.Path(strings.Join(missing, " ")), is, a.here())
+	a.note("  a scope is measured from whoever runs the task, so this may be right —")
+	a.note("  but it means nothing until its owner has a workspace where these exist.")
+}
+
+// exists reports whether a path is in the caller's tree at all, directory or not.
+//
+// isDirectory answers a narrower question — it decides whether to add a trailing
+// slash — and reading a false from it as "absent" would report every ordinary
+// file in a scope as missing.
+func (a App) exists(rel string) bool {
+	root := a.Cwd
+	if root == "" {
+		got, err := os.Getwd()
+		if err != nil {
+			return true // nothing to compare against; say nothing rather than guess
+		}
+		root = got
+	}
+	_, err := os.Stat(filepath.Join(root, rel))
+	return err == nil
+}
+
+// here names the directory the caution was measured in, because "not found" with
+// no root is a sentence somebody has to go and work out.
+func (a App) here() string {
+	if a.Cwd != "" {
+		return a.Cwd
+	}
+	if got, err := os.Getwd(); err == nil {
+		return got
+	}
+	return "this directory"
 }
 
 // directoriesAsPrefixes turns an entry that names an existing directory into a
