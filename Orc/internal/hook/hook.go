@@ -563,23 +563,7 @@ func (p payload) targets() ([]string, model.Kind) {
 // annoWrites finds `anno write <target>` in a shell command, including after a
 // leading `cd … &&`.
 func annoWrites(command string) []string {
-	var out []string
-	for _, segment := range splitCommands(command) {
-		fields := strings.Fields(segment)
-		for len(fields) > 1 && (fields[0] == "cd" || fields[0] == "sudo" || fields[0] == "env") {
-			fields = fields[2:]
-		}
-		if len(fields) < 3 {
-			continue
-		}
-		if filepath.Base(fields[0]) != "anno" || fields[1] != "write" {
-			continue
-		}
-		if target := unquote(fields[2]); !strings.HasPrefix(target, "-") {
-			out = append(out, target)
-		}
-	}
-	return out
+	return toolTargets(command, model.KindWrite)
 }
 
 // toolReads finds the files an Orc tool has been asked to read.
@@ -594,6 +578,66 @@ func annoWrites(command string) []string {
 // same place every other shell command does — which Plan.md §7.5 already says is a
 // hole rather than a guarantee.
 func toolReads(command string) []string {
+	return toolTargets(command, model.KindRead)
+}
+
+// verb is one form of an Orc tool that names a path on its command line.
+//
+// The operand is which word after the verb carries it, because they are not all
+// the first: nothing here may assume a position. And every verb of every tool
+// listed here is named, because the failure this replaces was a *default*.
+//
+// `dock` used to be read as "`dock <path>`, and `dock read <path>`", which meant
+// the second word was taken as a path whenever it was not the word `read`. So
+// `dock index Docs/Vision.md` checked a file called `index` — resolved against the
+// workspace, where it passed — and never looked at the document at all. An agent
+// holding no read clause mapped a whole documentation tree with `index`,
+// `overview` and `check`, learning section names, line counts and, from `check`,
+// parser errors quoting the text. `dock write` went the same way, which was worse:
+// an unguarded *write*.
+//
+// A table cannot do that. A verb that is not in it names no path, so a form this
+// build has never heard of falls through to where every unrecognised command goes
+// rather than to a confident check of the wrong thing.
+type verb struct {
+	operand int
+	kind    model.Kind
+}
+
+// tools is every form of anno and dock that takes a path.
+//
+// Taken from each tool's own command table — Dock/internal/cli/help.go and Anno's
+// — rather than from memory. The previous list named `blocks` and `show`, which
+// anno does not have, and omitted `overview` and `find`, which it does.
+var tools = map[string]map[string]verb{
+	"anno": {
+		"index":    {1, model.KindRead},
+		"overview": {1, model.KindRead},
+		"read":     {1, model.KindRead},
+		"find":     {1, model.KindRead},
+		"write":    {1, model.KindWrite},
+	},
+	"dock": {
+		"index":    {1, model.KindRead},
+		"overview": {1, model.KindRead},
+		"read":     {1, model.KindRead},
+		"find":     {1, model.KindRead},
+		"links":    {1, model.KindRead},
+		// `check` takes an optional directory and reads the tree at the cwd without
+		// one. That is still a read of something an agent chose, so an absent
+		// operand means the working directory rather than nothing — see below.
+		"check": {1, model.KindRead},
+		"write": {1, model.KindWrite},
+	},
+}
+
+// toolTargets finds the paths an Orc tool has been asked to read or write.
+//
+// A target may carry a section address after the path — `app.go@types`,
+// `Vision.md` and a sigil — and only the path part is a path. It is cut here
+// rather than left for the resolver, because a file called `Vision.md@1` is not
+// what the agent asked for and refusing it would name a file that does not exist.
+func toolTargets(command string, want model.Kind) []string {
 	var out []string
 	for _, segment := range splitCommands(command) {
 		fields := strings.Fields(segment)
@@ -603,31 +647,44 @@ func toolReads(command string) []string {
 		if len(fields) < 2 {
 			continue
 		}
-
-		var target string
-		switch filepath.Base(fields[0]) {
-		case "anno":
-			// `anno <verb> <path>`, for the verbs that take one.
-			if len(fields) < 3 {
-				continue
-			}
-			switch fields[1] {
-			case "read", "index", "blocks", "show":
-				target = unquote(fields[2])
-			}
-		case "dock":
-			// `dock <path>`, and `dock read <path>`.
-			target = unquote(fields[1])
-			if target == "read" && len(fields) > 2 {
-				target = unquote(fields[2])
-			}
+		forms, ok := tools[filepath.Base(fields[0])]
+		if !ok {
+			continue
 		}
+		form, ok := forms[fields[1]]
+		if !ok || form.kind != want {
+			continue
+		}
+
+		// No operand. `dock check` reads the tree it is standing in, which is a
+		// read of something the agent chose by standing there, so it is checked as
+		// the working directory rather than waved through.
+		if len(fields) <= form.operand+1 {
+			if want == model.KindRead {
+				out = append(out, ".")
+			}
+			continue
+		}
+		target := unquote(fields[form.operand+1])
+		// A flag where a path should be. `dock read --tree` names no file.
 		if target == "" || strings.HasPrefix(target, "-") {
 			continue
 		}
-		out = append(out, target)
+		out = append(out, pathOf(target))
 	}
 	return out
+}
+
+// pathOf drops a section address from a target.
+//
+// Both tools address a section after the path, and the separators are theirs:
+// anno's `@` and `^`, dock's sigil and `#`. What is left is the file, which is
+// what a clause and a workspace are about.
+func pathOf(target string) string {
+	if i := strings.IndexAny(target, "@^#§"); i > 0 {
+		return target[:i]
+	}
+	return target
 }
 
 // storeMentions finds an argument that looks like a path inside an Orc store.

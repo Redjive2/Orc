@@ -438,6 +438,17 @@ where it may be pointed is still checked, as far as the hook can tell — which 
 an arbitrary command is not far. The boundary there is the workspace, not a path
 clause: see *An agent's workspace is its own* below.
 
+**`anno` and `dock` are read by a table, not by a shape.** Every form of both
+tools that names a path is listed, with which operand carries it and whether it
+reads or writes; a verb not in the table names no path and falls through with
+every other unrecognised command. It used to be a shape — "`dock <path>`, and
+`dock read <path>`" — which took the second word as a path whenever it was not
+the word `read`. `dock index Docs/Vision.md` therefore checked a file called
+`index`, found it inside the workspace, and never looked at the document: an
+agent holding read on nothing could map a tree with `index`, `overview` and
+`check`, and `dock write` was an unguarded write. A section address (`§`, `#`,
+`@`, `^`) is cut before the path is resolved.
+
 **An interpreter runs when a clause names it.** `python3 -c …` and `sh -c …` take
 a program as data, so the name says nothing about what will *happen* — but it says
 exactly what will *run*, and that is the question a clause answers. So `shell(sh)`
