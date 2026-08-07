@@ -250,6 +250,10 @@ func (a App) route(command string, rest []string) error {
 		return a.scope(rest)
 	case "worktree":
 		return a.worktree(rest)
+	case "block":
+		return a.block(rest)
+	case "unblock":
+		return a.unblock(rest)
 	case "describe":
 		return a.describe(rest)
 	case "rebind":

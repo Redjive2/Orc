@@ -21,9 +21,12 @@ import (
 // So the operator ranks as owner on an unowned task, and on nothing else. Two
 // limits keep that narrow, and both are load-bearing:
 //
-//   - **Only where nobody owns it.** A task with an owner is that owner's, and an
-//     operator who wants it takes it the way anybody does, in the open, with the
-//     journal saying so. This is not a master key.
+//   - **Only where nobody owns it**, with one exception. A task with an owner is
+//     that owner's, and an operator who wants it takes it the way anybody does, in
+//     the open, with the journal saying so. This is not a master key. The exception
+//     is ordering — `block` and `unblock` — which is marked in the rules table and
+//     argued there: an order between two owners is a thing neither of them can
+//     state, so if the operator cannot state it, nobody can.
 //   - **Only what is visible.** A draft is private to its author (§1.3), and the
 //     operator does not see other people's drafts — so an unowned draft is still
 //     not found rather than open. Privacy that the person at the top can read
@@ -46,7 +49,7 @@ func OperatorMay(actor user.Name, t task.Task, action Action) bool {
 	if !t.Visible(actor) {
 		return false
 	}
-	if _, owned := t.Owner(); owned {
+	if _, owned := t.Owner(); owned && !rules[action].operatorAnyOwner {
 		return false
 	}
 	// `leave` is the one action an owner may not take, and standing in for the

@@ -191,6 +191,16 @@ func Card(t task.Task, palette style.Palette, width int) (string, error) {
 	if wt, bound := t.Worktree(); bound {
 		fields = append(fields, [2]string{"worktree", wt})
 	}
+	// What the task waits for, on the card rather than only in the refusal. A
+	// reader deciding whether to pick something up should see that it is held
+	// before they try to claim it, not after.
+	if t.Blocked() {
+		names := make([]string, 0, len(t.BlockedOn()))
+		for _, n := range t.BlockedOn() {
+			names = append(names, n.String())
+		}
+		fields = append(fields, [2]string{"waits for", strings.Join(names, ", ")})
+	}
 	// The description is a field rather than a section: the card is a summary, and
 	// the prose can be pages. What belongs here is that there *is* one and how to
 	// read it — a card that quietly omitted a task's specification would be a card
@@ -360,6 +370,8 @@ func paintField(name string) func(style.Palette, string) string {
 		return style.Palette.Agent
 	case "worktree":
 		return style.Palette.Path
+	case "waits for":
+		return style.Palette.Task
 	case "with":
 		return style.Palette.Muted
 	default:

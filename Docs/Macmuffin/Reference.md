@@ -25,6 +25,8 @@ muff <command> <args...>
 | `worktree <task> <worktree>`            | Match this task to a git worktree in the main git repo    |
 | `describe <task> [--set <f>\|--edit\|--clear]` | What the work is, in markdown             |
 | `rebind [--dry-run] <old> <new>`        | Follow every binding at or under `<old>` to `<new>`       |
+| `block <task> <task...>`                | Hold `<task>` until the others are done                   |
+| `unblock <task> <task...>`              | Drop a prerequisite                                       |
 | `check-scope <paths...>`†               | Exit `0` if every path is in scope, `9` if any is not     |
 | `verify`†                               | Walk the store and report damage, changing nothing        |
 | `help`                                  | The command list, scores, status values, and environment  |
@@ -211,6 +213,63 @@ agent needs Orc's agent-control contract, which does not exist yet, and
 inventing one now would mean rewriting it when the real one lands. Until then
 `claim` (take it yourself) and `invite` (add a collaborator) cover the ground
 that does not need it.
+
+## §1.9a Ordering
+
+`block <task> <task…>` holds a task until the tasks it names finish. `unblock`
+drops one.
+
+This is the only relation that crosses two tasks. A checklist orders steps
+inside one task under one owner. Collaborators share one task. A scope names one
+task's files.
+
+None of them says that one task waits for another. Before this, the only way to
+sequence two teams was to ask both owners and hope.
+
+**What it holds.** Nobody may claim, assign, or complete a held task. Macmuffin
+refuses with exit `6` and names every task still outstanding, with its owner and
+its status. The agent that was held then knows who to ask.
+
+**What it does not hold.** `status` and the subtask commands stay open. Status
+reports how work is going. A tool that stopped an agent from stating the truth
+about a task would teach agents that the record is fiction.
+
+**What clears it.** Either completion or a status of `4`.
+
+The two are separate everywhere else — a task can report done and still be
+incomplete. A gate is the one place to read them together. Both are an owner
+saying the work is finished, which is the fact the waiting task needs.
+
+Completion alone would hold a task behind a bookkeeping step its owner has no
+reason to hurry. People work around a gate they wait on for a reason they do not
+believe.
+
+A prerequisite that no longer exists clears on its own. Nobody could ever
+release a task held behind something deleted.
+
+**Who may set it.** The task's owner, its author, and the fleet's operator.
+
+The operator is the point. Everywhere else the operator stands in only for an
+owner that does not exist, and a task somebody holds stays that owner's alone.
+
+Ordering is the single exception, and what ordering *is* explains why. An order
+between two tasks under two owners is a thing neither owner can state. Each
+speaks only for their own task. If the operator cannot say it, nobody can.
+
+It stays an exception. The standing grants the order and nothing else. The
+operator still cannot complete, rescope, take, or give away a task somebody
+holds.
+
+It says when the work may run, never what it is or whose it is. The journal
+records who set the order, and the command says so on the way past.
+
+**Cycles.** Macmuffin refuses a ring where somebody declares it, not where it
+holds something. Caught at the gate instead, the board would accept the
+statement and then refuse every task in the ring. Nothing would say which
+declaration caused it.
+
+A task cannot wait for itself. Macmuffin reports a chain deeper than 64 rather
+than walking it.
 
 ## §1.10 Exit codes
 

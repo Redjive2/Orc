@@ -13,6 +13,10 @@ var changesThePool = map[string]bool{
 	"claim":    true,
 	"scope":    true,
 	"worktree": true,
+	// Ordering decides whether a task can be started at all, which the board
+	// shows and which changes what a reader may pick up.
+	"block":   true,
+	"unblock": true,
 	// A description is a field the board shows.
 	"describe": true,
 	// A rebind rewrites the worktree every affected task is bound to, which is a

@@ -26,8 +26,42 @@ func TestTheOperatorStandsInOnlyWhereNobodyOwnsIt(t *testing.T) {
 		if !policy.OperatorMay(agent(t, "boss"), pooled, action) {
 			t.Errorf("the operator may not %s a task nobody owns", action)
 		}
+		if action == policy.Block || action == policy.Unblock {
+			continue // ordering crosses owners; the next test says why
+		}
 		if policy.OperatorMay(agent(t, "boss"), owned, action) {
 			t.Errorf("the operator may %s a task bob owns", action)
+		}
+	}
+}
+
+// Ordering is the one thing the operator may state over an owner's head, and it
+// has to be: an order between two tasks under two owners is a thing neither
+// owner can state. Each speaks only for their own task, so without this the
+// most anybody can do is ask and hope — which holds exactly as long as nobody is
+// in a hurry, and the first time it matters is the time it fails.
+func TestTheOperatorMayOrderATaskSomebodyElseHolds(t *testing.T) {
+	owned := build(t, scoped(t), pushed(t), claimedBy(t, "bob"))
+
+	for _, action := range []policy.Action{policy.Block, policy.Unblock} {
+		if !policy.OperatorMay(agent(t, "boss"), owned, action) {
+			t.Errorf("the operator may not %s a task bob owns, so nobody can sequence two teams", action)
+		}
+	}
+}
+
+// And it stays an exception. Being able to say *when* a task runs must not leak
+// into saying what it is, whose it is, or whether it is finished — that is the
+// difference between sequencing a fleet and holding a master key.
+func TestOrderingDoesNotWidenIntoTheRest(t *testing.T) {
+	owned := build(t, scoped(t), pushed(t), claimedBy(t, "bob"))
+
+	for _, action := range []policy.Action{
+		policy.Complete, policy.Scope, policy.Delete, policy.Assign,
+		policy.Invite, policy.Kick, policy.Push, policy.Worktree, policy.Describe,
+	} {
+		if policy.OperatorMay(agent(t, "boss"), owned, action) {
+			t.Errorf("the operator may %s a task bob owns; ordering has widened into a master key", action)
 		}
 	}
 }

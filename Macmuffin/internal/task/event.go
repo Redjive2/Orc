@@ -45,6 +45,19 @@ const (
 	OpComplete Op = "complete"
 	// OpWorktree binds the task to a git worktree.
 	OpWorktree Op = "worktree"
+	// OpBlock holds this task until other tasks are done.
+	//
+	// It is the one operation that names *other* tasks, and it exists because
+	// nothing else here could express an order between two of them. A checklist
+	// orders steps inside one task under one owner; two tasks under two owners
+	// had no relation at all, so the only way to sequence them was to ask their
+	// owners nicely and hope.
+	OpBlock Op = "block"
+	// OpUnblock drops a prerequisite. Ordering that cannot be lifted is a
+	// deadlock waiting for the first prerequisite that gets cancelled, so the
+	// release is a first-class event with a name against it rather than a
+	// hand-edit of the journal.
+	OpUnblock Op = "unblock"
 	// OpDescribe records that the task's description was written.
 	//
 	// The prose itself is a file beside the task — `description.md` — and not in
@@ -66,7 +79,7 @@ func Ops() []Op {
 	return []Op{
 		OpScope, OpPush, OpClaim, OpAssign, OpStatus, OpInvite, OpKick, OpLeave,
 		OpSubAdd, OpSubDone, OpSubDelete, OpComplete, OpWorktree,
-		OpDescribe, OpUndescribe,
+		OpDescribe, OpUndescribe, OpBlock, OpUnblock,
 	}
 }
 
@@ -92,6 +105,7 @@ type Event struct {
 	path    string
 	forced  bool
 	skipped []Name
+	until   []Name
 }
 
 // NewEvent builds an event. Callers use the helpers below rather than this
@@ -125,6 +139,16 @@ func Claim(by user.Name, at time.Time) (Event, error) {
 // Assign gives the task to another agent.
 func Assign(by user.Name, at time.Time, who user.Name) (Event, error) {
 	return build(Event{op: OpAssign, by: by, at: at, agent: who})
+}
+
+// Block holds the task until every named task is done.
+func Block(by user.Name, at time.Time, until []Name) (Event, error) {
+	return build(Event{op: OpBlock, by: by, at: at, until: slices.Clone(until)})
+}
+
+// Unblock drops the named prerequisites.
+func Unblock(by user.Name, at time.Time, until []Name) (Event, error) {
+	return build(Event{op: OpUnblock, by: by, at: at, until: slices.Clone(until)})
 }
 
 // SetStatus reports how the work is going.
@@ -213,6 +237,7 @@ func (e Event) validate() error {
 	wantPaths := e.op == OpScope
 	wantStatus := e.op == OpStatus
 	wantPath := e.op == OpWorktree
+	wantUntil := e.op == OpBlock || e.op == OpUnblock
 
 	if got := !e.subtask.Zero(); got != wantSub {
 		return shapeError(where, e.op, "a subtask name", wantSub)
@@ -228,6 +253,9 @@ func (e Event) validate() error {
 	}
 	if got := e.path != ""; got != wantPath {
 		return shapeError(where, e.op, "a worktree path", wantPath)
+	}
+	if got := len(e.until) > 0; got != wantUntil {
+		return shapeError(where, e.op, "the tasks to wait for", wantUntil)
 	}
 	if (e.forced || len(e.skipped) > 0) && e.op != OpComplete {
 		return shapeError(where, e.op, "a forced flag", false)
@@ -251,6 +279,19 @@ func (e Event) validate() error {
 	case OpComplete:
 		if len(e.skipped) > 0 && !e.forced {
 			return fault.Internal{Where: where, Detail: "unforced completion lists skipped subtasks"}
+		}
+	case OpBlock, OpUnblock:
+		if len(e.until) > MaxBlockers {
+			return fault.Internal{Where: where, Detail: fmt.Sprintf(
+				"%d prerequisites, over the %d limit", len(e.until), MaxBlockers)}
+		}
+		for _, n := range e.until {
+			if n.Zero() {
+				return fault.Internal{Where: where, Detail: string(e.op) + " names an empty task"}
+			}
+			if err := n.validate(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -288,6 +329,9 @@ func (e Event) Status() Status { return e.status }
 
 // Path returns the worktree bound, if any.
 func (e Event) Path() string { return e.path }
+
+// Until returns a copy of the tasks named as prerequisites, if any.
+func (e Event) Until() []Name { return slices.Clone(e.until) }
 
 // Forced reports whether a completion overrode unfinished subtasks.
 func (e Event) Forced() bool { return e.forced }
@@ -375,6 +419,35 @@ func (t Task) With(e Event) (Task, error) {
 		}
 		out.owner = e.agent
 		out.collaborators = without(out.collaborators, e.agent)
+
+	case OpBlock:
+		// Waiting for yourself is a deadlock stated in one task, and it is the
+		// one cycle a task can see without loading the board. The rest are
+		// caught where the store is.
+		for _, n := range e.until {
+			if n.String() == t.name.String() {
+				return conflict("a task cannot wait for itself")
+			}
+		}
+		out.blockedOn = slices.Clone(t.blockedOn)
+		for _, n := range e.until {
+			if containsName(out.blockedOn, n) {
+				return conflict("already waiting for %s", n)
+			}
+			if len(out.blockedOn) >= MaxBlockers {
+				return conflict("already waits for %d tasks, the limit", MaxBlockers)
+			}
+			out.blockedOn = append(out.blockedOn, n)
+		}
+
+	case OpUnblock:
+		out.blockedOn = slices.Clone(t.blockedOn)
+		for _, n := range e.until {
+			if !containsName(out.blockedOn, n) {
+				return conflict("was not waiting for %s", n)
+			}
+			out.blockedOn = withoutName(out.blockedOn, n)
+		}
 
 	case OpStatus:
 		out.status = e.status
@@ -474,6 +547,25 @@ func without(names []user.Name, drop user.Name) []user.Name {
 	out := names[:0:0]
 	for _, n := range names {
 		if n.String() != drop.String() {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func containsName(names []Name, want Name) bool {
+	for _, n := range names {
+		if n.Equal(want) {
+			return true
+		}
+	}
+	return false
+}
+
+func withoutName(names []Name, drop Name) []Name {
+	out := names[:0:0]
+	for _, n := range names {
+		if !n.Equal(drop) {
 			out = append(out, n)
 		}
 	}

@@ -39,6 +39,8 @@ var commands = []entry{
 	{"info", "<task>", "one task in full"},
 	{"scope", "<task> <paths...>", "limit editing to these paths"},
 	{"worktree", "<task> <path>", "bind the task to a git worktree"},
+	{"block", "<task> <task...>", "hold a task until others are done"},
+	{"unblock", "<task> <task...>", "drop a prerequisite"},
 	{"describe", "<task> [--set <f>|--edit|--clear]", "what the work is, in markdown"},
 	{"rebind", "<old> <new>", "follow worktrees that moved"},
 	{"check-scope", "<paths...>", "exit 0 in scope, 9 outside"},
@@ -120,6 +122,32 @@ var topics = map[string]topic{
 			"muff scope fix-the-parser internal/tree internal/marker",
 			"muff scope fix-the-parser 'cmd/**/*.go'",
 		},
+	},
+	"block": {
+		detail: "Holds a task until other tasks are done. Until every task named here\n" +
+			"reports done or is completed, the held task cannot be claimed, assigned,\n" +
+			"or completed — the refusal names what is outstanding and who holds it.\n\n" +
+			"This is the only relation that crosses tasks. A checklist orders steps\n" +
+			"inside one task under one owner; this orders two tasks under two owners,\n" +
+			"which is a thing neither owner can state on their own.\n\n" +
+			"The task's owner and its author may set it. So may the fleet's operator,\n" +
+			"on a task somebody else holds — that is the only standing that reaches\n" +
+			"past an owner, and it exists because sequencing two teams is nobody\n" +
+			"else's to do. It grants the order and nothing else.\n\n" +
+			"A cycle is refused when it is declared rather than when it is enforced,\n" +
+			"so the board never accepts a ring and then blocks every task in it.",
+		examples: []string{
+			"muff block doc-tree-has-no-links orc-reference-unparseable",
+			"muff block doc-tree-has-no-links orc-reference-unparseable claude-docs-structure",
+		},
+	},
+	"unblock": {
+		detail: "Drops a prerequisite. Ordering that could not be lifted would deadlock\n" +
+			"the first time a prerequisite was cancelled, so the release is its own\n" +
+			"event with a name against it rather than a hand-edit of the journal.\n\n" +
+			"A prerequisite that no longer exists already clears on its own: a task\n" +
+			"held behind something deleted could never be released by anybody.",
+		examples: []string{"muff unblock doc-tree-has-no-links orc-reference-unparseable"},
 	},
 	"worktree": {
 		detail: "Binds the task to a git worktree, which is how the hook works out what\n" +
@@ -467,6 +495,10 @@ var groups = []struct {
 	{"making", []string{"create", "push", "scope", "describe", "worktree", "rebind"}},
 	{"the board", []string{"pool", "info", "status", "complete", "delete"}},
 	{"who has it", []string{"claim", "assign", "invite", "kick", "leave"}},
+	// Its own line rather than folded into "making". Ordering is the only
+	// relation that crosses two tasks, and a reader looking for it is looking
+	// for exactly that.
+	{"what waits", []string{"block", "unblock"}},
 	{"checking", []string{"check-scope", "verify"}},
 }
 

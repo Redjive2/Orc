@@ -23,6 +23,11 @@ const (
 	// MaxScopeEntries bounds a declared editable surface. A scope this wide is
 	// not a scope.
 	MaxScopeEntries = 512
+
+	// MaxBlockers bounds how many tasks one task may wait for. A task with more
+	// prerequisites than this is not sequenced, it is stuck, and the board
+	// cannot show a reader why.
+	MaxBlockers = 32
 )
 
 // Subtask is one step of a task: a name and whether it is done.
@@ -127,6 +132,13 @@ type Task struct {
 	status        Status
 	scope         []string
 	subtasks      []Subtask
+	// blockedOn names tasks that must finish before this one starts or ends.
+	//
+	// It holds names rather than tasks. A task folds its own journal and knows
+	// nothing about any other, and a field holding real tasks would make loading
+	// one task load the transitive closure of everything it waits for. Whether a
+	// prerequisite is actually finished is asked where the store is, by Open.
+	blockedOn     []Name
 	completed     bool
 	completedAt   time.Time
 	worktree      string
@@ -197,6 +209,15 @@ func (t Task) validate() error {
 	if err := fault.Check(len(t.subtasks) <= MaxSubtasks, where,
 		"task %s has %d subtasks, over the %d limit", t.name, len(t.subtasks), MaxSubtasks); err != nil {
 		return err
+	}
+	if err := fault.Check(len(t.blockedOn) <= MaxBlockers, where,
+		"task %s waits for %d tasks, over the %d limit", t.name, len(t.blockedOn), MaxBlockers); err != nil {
+		return err
+	}
+	for _, n := range t.blockedOn {
+		if n.String() == t.name.String() {
+			return fault.Internal{Where: where, Detail: "task " + t.name.String() + " waits for itself"}
+		}
 	}
 	if err := fault.Check(len(t.collaborators) <= MaxCollaborators, where,
 		"task %s has %d collaborators, over the %d limit", t.name, len(t.collaborators), MaxCollaborators); err != nil {
@@ -287,6 +308,28 @@ func (t Task) Collaborators() []user.Name { return slices.Clone(t.collaborators)
 
 // Status returns the health signal.
 func (t Task) Status() Status { return t.status }
+
+// BlockedOn returns a copy of the tasks this one waits for, in the order they
+// were declared. It says what was *asked* for, not what is still outstanding:
+// only a caller holding the store can answer that, and Open does.
+func (t Task) BlockedOn() []Name { return slices.Clone(t.blockedOn) }
+
+// Blocked reports whether any ordering has been declared on this task at all.
+func (t Task) Blocked() bool { return len(t.blockedOn) > 0 }
+
+// Clears reports whether this task, as a prerequisite, lets a waiting task run.
+//
+// Either completion or a status of done will do, and the two are kept separate
+// everywhere else in this package for good reason — a task can be StatusDone and
+// still incomplete, which is the state the scale exists to report. A gate is the
+// one place they should be read together.
+//
+// Requiring `complete` alone would hold a waiting task behind a bookkeeping step
+// its owner has no reason to hurry, and a gate people wait on for a reason
+// nobody believes is a gate people route around. Requiring only the status
+// would ignore the stronger record when it exists. Either is an owner saying
+// the work is finished, which is the fact the waiting task needs.
+func (t Task) Clears() bool { return t.completed || t.status == StatusDone }
 
 // Scope returns a copy of the declared editable surface.
 func (t Task) Scope() []string { return slices.Clone(t.scope) }

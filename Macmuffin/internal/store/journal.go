@@ -41,6 +41,7 @@ type event struct {
 	Path    string   `json:"path,omitempty"`
 	Forced  bool     `json:"forced,omitempty"`
 	Skipped []string `json:"skipped,omitempty"`
+	Until   []string `json:"until,omitempty"`
 }
 
 // encodeEvent renders an event for storage.
@@ -64,6 +65,9 @@ func encodeEvent(e task.Event) ([]byte, error) {
 	}
 	for _, s := range e.Skipped() {
 		stored.Skipped = append(stored.Skipped, s.String())
+	}
+	for _, n := range e.Until() {
+		stored.Until = append(stored.Until, n.String())
 	}
 
 	line, err := json.Marshal(stored)
@@ -124,6 +128,19 @@ func decodeEvent(path string, line int, raw []byte) (task.Event, error) {
 		return wrap(task.Claim(by, at))
 	case task.OpStatus:
 		return wrap(task.SetStatus(by, at, task.Status(stored.Status)))
+	case task.OpBlock, task.OpUnblock:
+		var until []task.Name
+		for _, raw := range stored.Until {
+			name, err := task.ParseName(raw)
+			if err != nil {
+				return bad("journal event names a bad prerequisite: %s", err)
+			}
+			until = append(until, name)
+		}
+		if op == task.OpBlock {
+			return wrap(task.Block(by, at, until))
+		}
+		return wrap(task.Unblock(by, at, until))
 	case task.OpInvite, task.OpKick, task.OpAssign:
 		agent, err := user.Parse(stored.Agent)
 		if err != nil {
@@ -447,6 +464,16 @@ func (s *Store) Apply(name task.Name, decide Decide) (task.Task, error) {
 			// already reported on — `claim` on a task you own, say.
 			out = current
 			return nil
+		}
+
+		// Ordering, asked here so no command can omit it. Both questions need
+		// the store and neither belongs to the task: whether its prerequisites
+		// are finished, and whether a new one would close a ring.
+		if err := s.holds(current, ev.Op()); err != nil {
+			return err
+		}
+		if err := s.wouldCycle(current, ev); err != nil {
+			return err
 		}
 
 		next, err := current.With(ev)

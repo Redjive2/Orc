@@ -84,6 +84,14 @@ func (s session) permit(t task.Task, action policy.Action) error {
 		}
 		return err
 	}
+	if owner, owned := t.Owner(); owned {
+		// Ordering is the one standing that reaches a task somebody holds, so
+		// this is the one note that must name them. An operator sequencing two
+		// teams should see whose task they just held, and the owner should find
+		// it in the journal under a name rather than as an unexplained gate.
+		s.app.note("%s owns %s; acting as the operator to %s it", owner, t.Name(), action)
+		return nil
+	}
 	s.app.note("nobody owns %s; acting as the operator", t.Name())
 	return nil
 }
