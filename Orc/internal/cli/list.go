@@ -109,7 +109,22 @@ func normaliseListKind(word string) string {
 // when a name in a task or a mailbox is one you do not recognise — and a tree is
 // the worst shape for looking a name up in.
 func (a App) listIdentities(s caller, asJSON bool) error {
-	visible := s.fleet.Subtree(s.who)
+	// Every identity, which is what the paragraph above says and what the code did
+	// not do. It listed the caller's *subtree* — so an agent with nobody under it
+	// saw one row, itself, and the roster answered "who is there" with "you are".
+	//
+	// The subtree is the right scope for the questions about authority: `orc status`
+	// draws the tree somebody commands, and `orc list grants` says what they granted.
+	// It is the wrong scope for a roster. The reason this command exists is a name in
+	// a task or a mailbox that nobody recognises, and such a name is almost never
+	// below the person reading it — an agent looks *up* and *sideways* far more often
+	// than down.
+	//
+	// It discloses nothing new. A row is a name, a role, a boss and a date; mail and
+	// tasks already carry those names to everybody who works with them, and none of
+	// the columns is a capability. What an identity may *do* is `orc list grants`,
+	// which is still the caller's branch.
+	visible := s.fleet.Names()
 
 	if asJSON {
 		out := make([]jsonIdentity, 0, len(visible))

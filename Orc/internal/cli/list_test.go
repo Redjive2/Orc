@@ -56,29 +56,46 @@ func TestListTakesSingularAndPlural(t *testing.T) {
 	}
 }
 
-// TestListShowsOnlyYourBranch is the half that matters. A roster is a disclosure,
-// and the rule it follows is the one `status` already follows: what is not below
-// you is not yours to read.
-func TestListShowsOnlyYourBranch(t *testing.T) {
+// The roster is the whole fleet, and the other three listings are not.
+//
+// This asserted the opposite, under a rule worth stating because it was a
+// deliberate one: a roster is a disclosure, and what is not below you is not yours
+// to read. It was overturned on purpose. The reason the command exists is a name
+// in a task or a mailbox that nobody recognises, and such a name is almost never
+// *below* the reader — an agent looks up and sideways far more often than down, so
+// the scope that made the answer safe also made it useless. Every agent saw one
+// row: itself.
+//
+// What it discloses is a name, a role, a boss and a date. Mail and tasks already
+// carry those names to everybody who works with them, and none of the columns is a
+// capability. What an identity may *do* stays scoped, which the rest of this test
+// holds to.
+func TestTheRosterIsTheWholeFleet(t *testing.T) {
 	r := fullFleet(t)
 	// quill works for atlas; ember still works for boss.
 	r.ok("boss", "move", "quill", "atlas")
 
 	got := r.ok("atlas", "list", "identities")
-	for _, want := range []string{"atlas", "quill"} {
+	for _, want := range []string{"atlas", "quill", "ember", "boss"} {
 		if !strings.Contains(got.stdout, want) {
-			t.Errorf("atlas cannot see %q in its own branch:\n%s", want, got.stdout)
+			t.Errorf("atlas cannot see %q, and a roster that hides names answers nothing:\n%s",
+				want, got.stdout)
 		}
 	}
-	// Two rows, and neither is ember's. `boss` still appears — as atlas's *boss*
-	// column, which is a fact atlas already knows and `orc status` already shows;
-	// what must not appear is a row for somebody outside the branch.
-	if !strings.Contains(got.stdout, "2 identities") {
-		t.Errorf("atlas sees more than its own branch:\n%s", got.stdout)
+	// An agent with nobody under it is the case this was written for.
+	alone := r.ok("ember", "list", "identities")
+	for _, want := range []string{"ember", "atlas", "quill"} {
+		if !strings.Contains(alone.stdout, want) {
+			t.Errorf("a leaf agent cannot see %q:\n%s", want, alone.stdout)
+		}
 	}
-	if strings.Contains(got.stdout, "ember") {
-		t.Errorf("atlas can see ember, who is not below it:\n%s", got.stdout)
-	}
+}
+
+// And the listings that are about *capability* keep the branch rule. Widening the
+// roster and quietly widening these with it is the failure worth writing down.
+func TestWhatAnIdentityMayDoIsStillYourBranch(t *testing.T) {
+	r := fullFleet(t)
+	r.ok("boss", "move", "quill", "atlas")
 
 	// Roles follow their holders. `architect` is atlas's own, so it stays; a role
 	// only somebody above holds does not appear.

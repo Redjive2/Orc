@@ -21,7 +21,7 @@ Orc exposes the following commands:
 | `activity [<identity>] [--since <dur>]`†     | What each agent is doing, and what it has cost and touched                 |
 | `pace [wake\|tend] [<who>] [--after\|--every\|--watch]`† | How often the fleet is woken and tended, per agent, role, or fleet |
 | `tariff [<setting> <n>] [--calibrate] [--clear]`† | What thinking costs: the model and effort weights, and the crowd multiplier |
-| `list identities\|roles\|permissions\|grants`†| The flat rosters: one line per thing, filtered to your own branch          |
+| `list identities\|roles\|permissions\|grants`†| The flat rosters: one line per thing; identities is the fleet, the rest your branch |
 | `budget`†                                   | What each identity may keep employed, and what it is spending              |
 | `budget <role> <load>`†                     | Set the load a role may keep on the work list                              |
 | `attach <identity>`                         | Join a session: the composed pane. Type, `^S` sends, `^Q` leaves, `^]` hands over the terminal |
@@ -62,9 +62,24 @@ before `muff assign` (see **Control**); `bootstrap`, `revoke`, `env`, `tend`,
 `doctor`, `verify`, `list`, and `budget` are additive — nothing else depends on
 them, and every other command runs `tend` on its own anyway.
 
-`list` takes the singular too (`orc list role`), and `perms`. Every roster is
-filtered the way `status` is: what is not below you is not yours to read, so a role
-nobody in your branch holds is a role you are not shown.
+`list` takes the singular too (`orc list role`), and `perms`.
+
+**`identities` is the whole fleet. The other three are your branch.**
+
+That split replaces one rule for all four — filtered the way `status` is, what is
+not below you is not yours to read — and it was overturned on purpose. The reason
+the roster exists is a name in a task or a mailbox that nobody recognises, and such
+a name is almost never *below* the reader: an agent looks up and sideways far more
+often than down. So the scope that made the answer safe also made it useless. An
+agent with nobody under it saw one row, itself.
+
+It discloses a name, a role, a boss and a date. Mail and tasks already carry those
+names to everybody who works with them, and none of the columns is a capability.
+
+What an identity may **do** is still the branch rule: a role nobody in your branch
+holds is a role you are not shown, a permission likewise, and `grants` is the
+caller's branch. `orc status` is unchanged — it draws the tree you command, which
+is a question about authority rather than about who is there.
 
 Terms:
 | Term           | Means                                                   |
