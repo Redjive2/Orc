@@ -34,11 +34,17 @@ export function checkout(got) {
       h("span", { class: "where muted" }, got.unreachable))];
   }
 
-  const light = LIGHTS[got.verdict] || {
+  // A check that was cut short is not a judgement. `caution` reads as "you
+  // probably should not", which is a claim about the checkout — and the panel was
+  // making it because a probe ran out of time, over a build that then worked.
+  // Saying so is the difference between advice and a guess wearing its clothes.
+  const light = (got.unknown && got.verdict === "caution")
+    ? { dot: "◌", word: "cannot tell for certain", look: "caution" }
+    : LIGHTS[got.verdict] || {
     // A verdict from a newer server reads as unfamiliar rather than as absent. The
     // one thing that must not happen is an unknown word drawing as green.
-    dot: "◌", word: got.verdict || "unknown", look: "caution",
-  };
+      dot: "◌", word: got.verdict || "unknown", look: "caution",
+    };
 
   return [
     h("div", { class: `tree-state ${light.look}` },
