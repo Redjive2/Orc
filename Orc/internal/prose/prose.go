@@ -14,9 +14,9 @@
 // What this package can measure, and what it cannot, must be clear to anybody who
 // reads a score it prints.
 //
-// It measures the mechanical rules: sentence length, passive voice, and strings of
-// subordinate clauses. These need no dictionary and no parser, and they are the
-// rules that carry most of STE's benefit. It does **not** check the approved
+// It measures the mechanical rules: sentence length, passive voice, strings of
+// subordinate clauses, and paragraph length. These need no dictionary and no parser,
+// and they are the rules that carry most of STE's benefit. It does **not** check the approved
 // vocabulary, which is the other half of the standard and needs the dictionary; nor
 // noun clusters, which need to know which words are nouns.
 //
@@ -51,6 +51,19 @@ const Threshold = 0.90
 // looser of the two, because this measures prose about software rather than steps to
 // carry out, and the tighter number would fail writing the standard permits.
 const MaxWords = 25
+
+// MaxSentences is how many sentences a paragraph may hold.
+//
+// Six, as STE100 gives for descriptive writing. It is the one rule here that
+// looks above the sentence, and it is the reason it exists: every other rule
+// makes sentences shorter, and a writer following only those produces a wall of
+// short sentences with nothing to break it up. That reads worse than the long
+// sentences the rules were meant to prevent.
+//
+// A paragraph ends at a blank line, at any markdown structure, or at a list
+// item. So a list of eight points is eight paragraphs and passes, which is the
+// intent: the writer already broke the thought up.
+const MaxSentences = 6
 
 // MaxClauses is how many subordinate clauses a sentence may carry.
 //
@@ -108,6 +121,7 @@ const (
 	RuleLength  Rule = "long sentence"
 	RulePassive Rule = "passive voice"
 	RuleClauses Rule = "stacked clauses"
+	RuleWall    Rule = "long paragraph"
 )
 
 // Finding is one rule broken in one place.
@@ -186,6 +200,9 @@ func bannedPattern(word string) *regexp.Regexp {
 type sentence struct {
 	text string
 	line int
+	// place is its 1-indexed position in its paragraph, which is what the
+	// paragraph rule counts.
+	place int
 }
 
 // check returns everything wrong with one sentence.
@@ -203,6 +220,14 @@ func (s sentence) check() []Finding {
 	}
 	if n := clausesIn(s.text); n > MaxClauses {
 		at(RuleClauses, fmt.Sprintf("%d subordinate clauses; %d is the limit", n, MaxClauses))
+	}
+	if s.place > MaxSentences {
+		// Reported on each sentence past the sixth rather than once on the
+		// paragraph, so the score falls further the longer the wall runs. A
+		// paragraph of thirty sentences should not cost what a paragraph of
+		// seven costs.
+		at(RuleWall, fmt.Sprintf("sentence %d of this paragraph; %d is the limit — break it up",
+			s.place, MaxSentences))
 	}
 	return found
 }
@@ -247,18 +272,30 @@ func clausesIn(text string) int {
 func sentences(text string) []sentence {
 	var out []sentence
 	fenced := false
+	// place counts within the current paragraph. Everything that is skipped
+	// below also ends a paragraph: a blank line, a heading, a table, a fence.
+	// Each is a break in the prose, and a rule about how long a run of prose may
+	// be has to treat it as one.
+	place := 0
 
 	for i, raw := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(raw)
 		switch {
 		case strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~"):
 			fenced = !fenced
+			place = 0
 			continue
 		case fenced, line == "":
+			place = 0
 			continue
 		case strings.HasPrefix(line, "#"), strings.HasPrefix(line, "|"),
 			strings.HasPrefix(line, ">"), strings.HasPrefix(line, "    "):
+			place = 0
 			continue
+		case listItem.MatchString(line):
+			// Each item stands on its own. A list is already broken up, which is
+			// the thing the paragraph rule asks for.
+			place = 0
 		}
 		// A list marker is dropped and what follows it is measured: the item is
 		// prose even when the bullet is not.
@@ -272,7 +309,8 @@ func sentences(text string) []sentence {
 				// heading — and every rule here is about sentences.
 				continue
 			}
-			out = append(out, sentence{text: part, line: i + 1})
+			place++
+			out = append(out, sentence{text: part, line: i + 1, place: place})
 		}
 	}
 	return out

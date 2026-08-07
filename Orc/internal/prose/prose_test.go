@@ -96,7 +96,11 @@ The cycle says what it did.`
 // At nine in ten there is room for one such sentence in a paragraph of ten, and no
 // room for a second.
 func TestTheScoreIsAProportionRatherThanAVerdictOnEachSentence(t *testing.T) {
-	good := strings.Repeat("Orc reads the store. ", 9)
+	// The break is there so this measures the proportion and nothing else: ten
+	// sentences in one block is a paragraph rule break as well, and the two
+	// failures together would not say which one the threshold caught.
+	good := strings.Repeat("Orc reads the store. ", 5) + "\n\n" +
+		strings.Repeat("Orc reads the store. ", 4)
 	bad := strings.Repeat("word ", 30) + "."
 
 	if got := prose.Check(good + bad); !got.OK() {
@@ -104,6 +108,32 @@ func TestTheScoreIsAProportionRatherThanAVerdictOnEachSentence(t *testing.T) {
 	}
 	if got := prose.Check(good + bad + " " + bad); got.OK() {
 		t.Errorf("nine good sentences and two long ones scored %.2f, which should fail", got.Score())
+	}
+}
+
+// Every other rule here makes sentences shorter. Followed alone they produce a wall
+// of short sentences, which is the thing readers complain about — so the paragraph
+// rule is the counterweight, and without it the checker scores a blob full marks.
+func TestAWallOfShortSentencesFails(t *testing.T) {
+	wall := strings.Repeat("Orc reads the store. ", 12)
+	if got := prose.Check(wall); got.OK() {
+		t.Errorf("twelve short sentences in one paragraph scored %.2f; a wall must not pass", got.Score())
+	}
+
+	// The same twelve sentences, broken up, are fine. The rule asks for the break
+	// and not for fewer words.
+	broken := strings.Repeat(strings.Repeat("Orc reads the store. ", 3)+"\n\n", 4)
+	if got := prose.Check(broken); !got.OK() {
+		t.Errorf("the same twelve sentences in paragraphs of three scored %.2f, which should pass", got.Score())
+	}
+}
+
+// A list is already broken up. Counting a run of items as one paragraph would fail
+// the documents that are easiest to read, which teaches writers to avoid lists.
+func TestEachListItemStandsOnItsOwn(t *testing.T) {
+	list := strings.Repeat("- Orc reads the store on every pass.\n", 12)
+	if got := prose.Check(list); !got.OK() {
+		t.Errorf("a list of twelve items scored %.2f, which should pass", got.Score())
 	}
 }
 

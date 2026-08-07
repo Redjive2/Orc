@@ -1009,12 +1009,22 @@ directory is walked for `.md`, `.txt`, and `.markdown` and nothing else — an a
 that had to rewrite every comment in a package to land a change would stop running
 it. Exit 6 means the writing and the rule disagree.
 
-**What the score measures.** Sentence length, passive voice, and stacked
-subordinate clauses. These need no dictionary and no parser, and they carry most of
+**What the score measures.** Sentence length, passive voice, stacked subordinate
+clauses, and paragraph length. These need no dictionary and no parser, and they carry most of
 what STE is for. The score does **not** cover the approved vocabulary, which is the
 other half of the standard, nor noun clusters, which need to know which words are
 nouns. A score is a measure of the checkable rules and not a certificate of
 conformance.
+
+**The paragraph rule is the counterweight.** Six sentences, as STE100 gives for
+descriptive writing. Every other rule here makes sentences shorter, and a writer
+who follows only those produces a wall of short sentences with nothing to break
+it up. That reads worse than the long sentences the other rules prevent.
+
+A paragraph ends at a blank line, at any markdown structure, and at a list item.
+So a list of twelve points is twelve paragraphs and passes. The rule asks for the
+break, not for fewer words. Each sentence past the sixth counts against the score
+on its own, so a paragraph of thirty costs more than a paragraph of seven.
 
 Inline code spans are quoted rather than written, so they are not measured. A
 document that explains the rule has to show what breaks it, and scoring those

@@ -289,6 +289,13 @@ const House = "Write in Simplified Technical English (ASD-STE100), at 90% or bet
 	"- One thought per sentence. Split it rather than chaining clauses with\n" +
 	"  `which`, `although`, `whereas`, `because`.\n" +
 	"- Simple, consistent words. Use the same word for the same thing every time.\n" +
+	"- Short paragraphs. Six sentences is the limit. Break at every change of\n" +
+	"  subject, and let the white space do some of the work.\n" +
+	"- Structure, not a wall. Headings, lists and tables carry a long answer.\n" +
+	"  A reader looks for one thing; make it findable without reading the rest.\n" +
+	"- Say the thing and stop. Length is not thoroughness. Do not restate the\n" +
+	"  question, summarise what you just wrote, or explain what you are about to\n" +
+	"  say.\n" +
 	"\n" +
 	"Six spellings are never used, in any form: `honest`, `honestly`, `caveat`,\n" +
 	"`genuine`, `genuinely`, `load-bearing`. Say the thing itself instead.\n" +
