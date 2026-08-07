@@ -127,9 +127,13 @@ func TestThePermissionTableInFull(t *testing.T) {
 		{"unowned pooled", unownedPooled, "dave", policy.Status, no},
 		{"unowned pooled", unownedPooled, "dave", policy.SubAdd, no},
 		{"unowned pooled", unownedPooled, "dave", policy.Leave, no},
-		// Even the author has no special power once it is pooled.
-		{"unowned pooled", unownedPooled, "alice", policy.Scope, no},
+		// The author keeps what the task *is* — the scope and the description —
+		// whatever has happened to it since. Everything that decides who does the
+		// work, or whether it is finished, has left their hands.
+		{"unowned pooled", unownedPooled, "alice", policy.Scope, yes},
+		{"unowned pooled", unownedPooled, "alice", policy.Describe, yes},
 		{"unowned pooled", unownedPooled, "alice", policy.Delete, no},
+		{"unowned pooled", unownedPooled, "alice", policy.Push, no},
 
 		// A task bob owns.
 		{"owned", ownedByBob, "bob", policy.Info, yes},
@@ -154,9 +158,20 @@ func TestThePermissionTableInFull(t *testing.T) {
 		{"owned", ownedByBob, "dave", policy.Invite, no},
 		{"owned", ownedByBob, "dave", policy.Delete, no},
 		{"owned", ownedByBob, "dave", policy.Leave, no},
-		// Including the author, once someone else holds it.
-		{"owned", ownedByBob, "alice", policy.Scope, no},
+		// The author is the exception, and only for the specification. Whoever
+		// wrote a task knows what it was for, and that does not transfer with the
+		// claim: an author who spots a wrong line number in their own description
+		// could otherwise only watch the work be done from it.
+		{"owned", ownedByBob, "alice", policy.Scope, yes},
+		{"owned", ownedByBob, "alice", policy.Describe, yes},
+		// And nothing beyond it. Everything that decides who does the work, or
+		// whether it is done, is bob's now.
 		{"owned", ownedByBob, "alice", policy.Delete, no},
+		{"owned", ownedByBob, "alice", policy.Push, no},
+		{"owned", ownedByBob, "alice", policy.Complete, no},
+		{"owned", ownedByBob, "alice", policy.Invite, no},
+		{"owned", ownedByBob, "alice", policy.Kick, no},
+		{"owned", ownedByBob, "alice", policy.Worktree, no},
 
 		// A collaborator does the work but does not shape the task.
 		{"with collaborator", withCarol, "carol", policy.Info, yes},

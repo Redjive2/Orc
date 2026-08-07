@@ -58,6 +58,10 @@ const (
 	Worktree
 	// Describe writes the prose that says what the work is.
 	Describe
+	// Block holds a task until other tasks are done.
+	Block
+	// Unblock releases one.
+	Unblock
 	actionCount
 )
 
@@ -68,7 +72,7 @@ var verbs = [actionCount]string{
 	SubDone: "complete a subtask of", SubDelete: "delete a subtask of",
 	Invite: "invite to", Kick: "kick from", Leave: "leave",
 	Complete: "complete", Delete: "delete", Worktree: "bind a worktree to",
-	Describe: "describe",
+	Describe: "describe", Block: "set the order of", Unblock: "release",
 }
 
 // String implements fmt.Stringer.
@@ -114,6 +118,36 @@ type rule struct {
 	notOwner bool
 	// authorMayOnDraft lets a task's author act on an unowned draft they made.
 	authorMayOnDraft bool
+	// operatorAnyOwner lets the fleet's operator act on a task somebody holds.
+	//
+	// Everywhere else the operator stands in for a *missing* owner and nothing
+	// more; a task with an owner is that owner's, and that limit is what keeps
+	// the standing from being a master key. Ordering is the one exception, and
+	// it is an exception because of what it is rather than who wants it.
+	//
+	// An order between two tasks under two owners is by definition a thing
+	// neither owner can state. Each may only speak for their own task, so the
+	// most either can do is ask the other and hope — which is not an order, it
+	// is a suggestion, and it holds exactly as long as nobody is in a hurry. The
+	// only party who can sequence two teams is the one above both of them.
+	//
+	// It stays narrow. This grants the ordering and nothing else: the operator
+	// still cannot complete somebody's task, rescope it, take it, or give it
+	// away. It says when the work may run, never what it is or whose it is.
+	operatorAnyOwner bool
+	// authorMayAlways lets a task's author act whoever holds it.
+	//
+	// For the two actions that say what the work *is*. Whoever wrote a task knows
+	// what it was for, and that knowledge does not transfer with the claim — an
+	// author who spots a wrong line number, a missing dependency or a scope that
+	// names the wrong tree can only watch somebody work from it otherwise, or
+	// re-describe it by hand in mail.
+	//
+	// It is not co-ownership. Everything about *running* the task — completing it,
+	// inviting, kicking, pushing it back to the pool, deleting it — stays the
+	// owner's alone, because those decide who does the work and whether it is done.
+	// This is only the specification, and the specification is the author's.
+	authorMayAlways bool
 }
 
 // rules is the permission table from the plan, stated once.
@@ -130,13 +164,29 @@ var rules = [actionCount]rule{
 
 	// The owner's call alone: these change what the task is or who can work on
 	// it, and a collaborator inheriting that would make ownership meaningless.
-	Push:  {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
-	Scope: {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
-	// The same rule as scope, and for the same reason: both say what the task *is*,
-	// as against how it is going. A collaborator reports status and does the work;
-	// changing the specification under the people doing it is the owner's call, and
-	// the author's while it is still a draft nobody has picked up.
-	Describe: {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
+	// Push moves a task back to the pool, which takes it off whoever holds it. That
+	// is a decision about who does the work rather than about what the work is, so
+	// it stays the owner's once there is one.
+	Push: {minimum: owner, ownerOnly: true, authorMayOnDraft: true},
+	// Scope and Describe say what the task *is*, as against how it is going — and
+	// they stay with the author for as long as the task exists.
+	//
+	// They used to lapse the moment somebody claimed it, which put the person who
+	// knows what the work is on the outside of it. An author who spotted a wrong
+	// line number in their own description could not fix it; the choice was to mail
+	// the owner and hope, or watch the task be done from a specification known to
+	// be wrong. Nobody is served by that, least of all the owner.
+	//
+	// The owner keeps it too. Two people may amend, and the last word is whoever
+	// wrote last — which is what the journal is for, and a great deal better than
+	// one of them being unable to write at all.
+	Scope:    {minimum: owner, ownerOnly: true, authorMayOnDraft: true, authorMayAlways: true},
+	Describe: {minimum: owner, ownerOnly: true, authorMayOnDraft: true, authorMayAlways: true},
+	// Ordering is the author's for the same reason the scope is — when the work
+	// may run is part of what the task is — and the operator's on top of that,
+	// because two owners cannot sequence each other.
+	Block:    {minimum: owner, ownerOnly: true, authorMayOnDraft: true, authorMayAlways: true, operatorAnyOwner: true},
+	Unblock:  {minimum: owner, ownerOnly: true, authorMayOnDraft: true, authorMayAlways: true, operatorAnyOwner: true},
 	Invite:   {minimum: owner, ownerOnly: true},
 	Kick:     {minimum: owner, ownerOnly: true},
 	Complete: {minimum: owner, ownerOnly: true},
@@ -189,6 +239,13 @@ func Allows(actor user.Name, t task.Task, action Action) error {
 	}
 
 	if rank >= r.minimum {
+		return nil
+	}
+
+	// An author keeps the specification of what they wrote, whoever holds it. See
+	// authorMayAlways: this is the two actions that say what the work is, and not
+	// any of the ones that decide who does it.
+	if r.authorMayAlways && rank == author {
 		return nil
 	}
 
